@@ -7,6 +7,19 @@
 # Determine the operating system
 KERNEL_NAME := $(shell uname -s)
 
+# Create .env file if it doesn't exist
+ifeq (,$(wildcard .env))
+$(shell echo "SPLICE_VERSION=0.4.17" > .env)
+$(shell echo "DAML_RUNTIME_VERSION=3.3.0-snapshot.20250502.13767.0.v2fc6c7e2" >> .env)
+$(shell echo "DAML_SDK_VERSION=3.3.0-snapshot.20250502.13767.0.v2fc6c7e2" >> .env)
+$(shell echo "OTEL_AGENT_VERSION=1.30.0" >> .env)
+$(shell echo "MIGRATION_ID=0" >> .env)
+$(shell echo "JAVA_VERSION=17" >> .env)
+$(shell echo "BACKEND_PORT=8080" >> .env)
+$(shell echo "SCRIBE_VERSION=0.5.8" >> .env)
+$(shell echo "DOCKER_NETWORK=localnet" >> .env)
+endif
+
 ifneq (,$(wildcard .env))
     include .env
 endif
@@ -235,7 +248,7 @@ restart-service:
 # Run targets
 .PHONY: start
 ifeq ($(OBSERVABILITY_ENABLED),true)
-ifneq ($(SKIP_DOWNLOADS),true) # treat “true” (or any non‑empty value) as “enabled”
+ifneq ($(SKIP_DOWNLOADS),true) # treat "true" (or any non‑empty value) as "enabled"
 start: fetch-grafana-dashboards
 endif
 endif
@@ -312,7 +325,7 @@ capture-logs: docker-available ## Monitor docker events and capture logs
 	        done; \
 	        docker logs -f "$$cid" >> "./logs/$$service_name$$ext" 2>&1 & \
 	    fi; \
-done | tee -a "logs/compose.log" 2>&1
+	done | tee -a "logs/compose.log" 2>&1
 
 # Development environment
 .PHONY: setup
@@ -373,10 +386,41 @@ shell: docker-available ## Start Daml Shell
 clean-shell: docker-available ## Stop and remove the Daml Shell container
 	docker rm -f quickstart-daml-shell 2> /dev/null || true
 
+.PHONY: daml-shell
+daml-shell: docker-available ## Start DAML Shell (working alternative to make shell)
+	@echo "Starting DAML Shell..."
+	docker run -it --rm --network localnet \
+		-e _JAVA_OPTIONS="-XX:-UseCompressedOops -Xms256m -Xmx384m" \
+		-e DAML_SHELL_POSTGRES_HOST="postgres" \
+		-e DAML_SHELL_POSTGRES_USERNAME="cnadmin" \
+		-e DAML_SHELL_POSTGRES_PASSWORD="supersafe" \
+		-e DAML_SHELL_POSTGRES_DATABASE="pqs-app-provider" \
+		digitalasset-docker.jfrog.io/daml-shell:0.1.9 --connect
+
 # Clean targets
 .PHONY: clean
 clean: ## Clean the build artifacts
 	./gradlew clean
+
+.PHONY: clean-env
+clean-env: ## Clean and regenerate .env file with correct versions
+	rm -f .env
+	@echo "SPLICE_VERSION=0.4.17" > .env
+	@echo "DAML_RUNTIME_VERSION=3.3.0-snapshot.20250502.13767.0.v2fc6c7e2" >> .env
+	@echo "DAML_SDK_VERSION=3.3.0-snapshot.20250502.13767.0.v2fc6c7e2" >> .env
+	@echo "OTEL_AGENT_VERSION=1.30.0" >> .env
+	@echo "MIGRATION_ID=0" >> .env
+	@echo "JAVA_VERSION=17" >> .env
+	@echo "BACKEND_PORT=8080" >> .env
+	@echo "SCRIBE_VERSION=0.5.8" >> .env
+	@echo "DOCKER_NETWORK=localnet" >> .env
+	@echo "✓ Regenerated .env file with correct versions"
+
+.PHONY: clean-all-cache
+clean-all-cache: clean-env ## Clean all caches and regenerate environment
+	rm -rf .gradle
+	./gradlew clean
+	@echo "✓ Cleaned all caches"
 
 .PHONY: clean-docker
 clean-docker: clean-shell clean-canton-console ## Stop and remove application Docker containers and volumes
@@ -442,7 +486,7 @@ ifeq ($(CI),true)
 ci-create-env-local:
 	echo "OBSERVABILITY_ENABLED=true" > .env.local
 	echo "AUTH_MODE=oauth2" >> .env.local
-	echo "PARTY_HINT=quickstart-circleci-1" >> .env.local
+	echo "PARTY_HINT=quickstart-root-1" >> .env.local
 	echo "TEST_MODE=on" >> .env.local
 
 # Install playwright dependencies in CI/CD

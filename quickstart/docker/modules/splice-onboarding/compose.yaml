@@ -15,10 +15,12 @@ volumes:
 
 services:
   splice-onboarding:
-    build: ${MODULES_DIR}/splice-onboarding/docker
+    build: 
+      context: /root/cn-quickstart/quickstart/docker/modules/splice-onboarding/docker
+      dockerfile: Dockerfile
     container_name: splice-onboarding
     env_file:
-      - ${LOCALNET_ENV_DIR}/common.env
+      - /root/cn-quickstart/quickstart/docker/modules/localnet/env/common.env
       - *app-provider-auth-env
       - *app-user-auth-env
     environment:

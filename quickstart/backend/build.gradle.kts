@@ -5,11 +5,13 @@ import com.google.protobuf.gradle.*
 import org.openapitools.generator.gradle.plugin.tasks.GenerateTask
 
 plugins {
-    application
+    id("buildlogic.java-application-conventions")
     id("org.openapi.generator") version "7.7.0"
     id("org.springframework.boot") version "3.4.2"
     id("com.google.protobuf") version "0.9.4"
 }
+
+val otelVersion = System.getenv("OTEL_AGENT_VERSION") ?: "2.10.0"
 
 dependencies {
     implementation(Deps.springBoot.web)
@@ -45,10 +47,6 @@ dependencies {
     runtimeOnly(Deps.grpc.netty)
 
     testImplementation(Deps.springBoot.test)
-}
-
-repositories {
-    mavenCentral()
 }
 
 application {
@@ -94,7 +92,7 @@ openApiGenerate {
 tasks.register<GenerateTask>("openApiGenerateMetadata") {
     generatorName.set("java")
     inputSpec.set("$projectDir/src/main/resources/vendored/token-metadata-v1.yaml")
-    outputDir.set("$buildDir/generated-token-standard-openapi")
+    outputDir.set("$projectDir/build/generated-token-standard-openapi")
     apiPackage.set("com.digitalasset.quickstart.tokenstandard.openapi.metadata")
     modelPackage.set("com.digitalasset.quickstart.tokenstandard.openapi.metadata.model")
     configOptions.set(
@@ -118,7 +116,7 @@ tasks.register<GenerateTask>("openApiGenerateMetadata") {
 tasks.register<GenerateTask>("openApiGenerateAllocation") {
     generatorName.set("java")
     inputSpec.set("$projectDir/src/main/resources/vendored/allocation-v1.yaml")
-    outputDir.set("$buildDir/generated-token-standard-openapi")
+    outputDir.set("$projectDir/build/generated-token-standard-openapi")
     apiPackage.set("com.digitalasset.quickstart.tokenstandard.openapi.allocation")
     modelPackage.set("com.digitalasset.quickstart.tokenstandard.openapi.allocation.model")
     configOptions.set(

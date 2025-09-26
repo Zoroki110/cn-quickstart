@@ -13,6 +13,25 @@ plugins {
 repositories {
     // Use Maven Central for resolving dependencies.
     mavenCentral()
+    
+    // Add Digital Asset JFrog Artifactory repositories
+    maven {
+        name = "DigitalAssetJFrogAssembly"
+        url = uri("https://digitalasset.jfrog.io/artifactory/assembly")
+        credentials(Credentials.fromNetRc("digitalasset.jfrog.io"))
+    }
+    
+    maven {
+        name = "DigitalAssetJFrogMaven"
+        url = uri("https://digitalasset.jfrog.io/artifactory/maven")
+        credentials(Credentials.fromNetRc("digitalasset.jfrog.io"))
+    }
+    
+    maven {
+        name = "DigitalAssetJFrogLibs"
+        url = uri("https://digitalasset.jfrog.io/artifactory/libs-release")
+        credentials(Credentials.fromNetRc("digitalasset.jfrog.io"))
+    }
 }
 
 dependencies {

@@ -1,0 +1,96 @@
+module LocalInit where
+
+import Daml.Script
+import DA.Time
+
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+
+-- Initialise le DEX en local
+initLocal : Script ()
+initLocal = script do
+  -- Créer les parties
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  issuerETH <- allocateParty "IssuerETH"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  now <- getTime
+
+  debug "=== Minting initial tokens ==="
+
+  -- Tokens pour Alice (test trader)
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 50000.0
+
+  aliceETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = alice
+    symbol = "ETH"
+    amount = 10.0
+
+  -- Tokens pour Bob (test trader)
+  bobUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = bob
+    symbol = "USDC"
+    amount = 30000.0
+
+  debug "✅ Test users have tokens"
+
+  -- Créer le pool
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator
+    poolParty
+    lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC-LOCAL"
+    maxTTL = hours 2
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  debug "✅ Pool created"
+
+  -- Ajouter liquidité initiale
+  lpProviderETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolOperator
+    symbol = "ETH"
+    amount = 100.0
+
+  lpProviderUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolOperator
+    symbol = "USDC"
+    amount = 200000.0
+
+  (lpToken, poolWithLiquidity) <- submitMulti [poolOperator, poolParty, lpIssuer] [] $
+    exerciseCmd pool P.AddLiquidity with
+      provider = poolOperator
+      tokenACid = lpProviderETH
+      tokenBCid = lpProviderUSDC
+      amountA = 100.0
+      amountB = 200000.0
+      minLPTokens = 0.0
+      deadline = addRelTime now (hours 1)
+
+  debug "✅ Pool has liquidity: 100 ETH + 200,000 USDC"
+  debug $ "   Price: 1 ETH = 2,000 USDC"
+  debug ""
+  debug "🎉 LOCAL DEX READY!"
+  debug "   - Alice: 50,000 USDC + 10 ETH"
+  debug "   - Bob: 30,000 USDC"
+  debug "   - Pool: 100 ETH + 200,000 USDC"
+
+  return ()

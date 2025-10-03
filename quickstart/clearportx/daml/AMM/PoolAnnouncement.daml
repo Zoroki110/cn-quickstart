@@ -34,7 +34,8 @@ template PoolAnnouncement
     createdAt : Time        -- When pool was created
   where
     signatory poolOperator
-    -- No observers needed - announcements are public discovery records
+    -- Token issuers observe announcements for their tokens (enables discovery)
+    observer issuerA, issuerB
 
     -- No contract key - allows multiple announcements for same pair
     -- (different operators can create competing pools)

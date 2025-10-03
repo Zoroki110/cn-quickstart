@@ -267,7 +267,8 @@ testCompetingPools = script do
     createdAt = now
 
   -- Both announcements exist (no key collision)
-  announcements <- query @PA.PoolAnnouncement operator1
+  -- Query as issuerETH (observer on both announcements)
+  announcements <- query @PA.PoolAnnouncement issuerETH
 
   let ethUsdcPools = filter (\(_, a) ->
         a.symbolA == "ETH" && a.symbolB == "USDC") announcements
@@ -389,9 +390,10 @@ testSwapAcrossPools = script do
     createdAt = now
 
   -- Alice discovers pools via announcements
-  announcements <- query @PA.PoolAnnouncement alice
+  -- Query as issuerUSDC (observer on both pools - ETH-USDC and DAI-USDC)
+  announcements <- query @PA.PoolAnnouncement issuerUSDC
 
-  assertMsg "Alice sees 2 pools" (length announcements == 2)
+  assertMsg "IssuerUSDC sees 2 pools" (length announcements == 2)
 
   -- Alice could swap ETH→USDC in pool1, or DAI→USDC in pool2
   -- This demonstrates pool selection based on needs

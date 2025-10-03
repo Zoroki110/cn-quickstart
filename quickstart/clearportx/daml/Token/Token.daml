@@ -1,0 +1,82 @@
+module Token.Token where
+
+import DA.Action (void, when)
+
+{-
+  TOKEN DESIGN FOR AMM (Automated Market Maker)
+
+  CRITICAL DESIGN DECISIONS:
+
+  1. ISSUER AS SOLE SIGNATORY
+     - Only 'issuer' signs the contract, NOT 'owner'
+     - This allows transfers without recipient authorization
+     - Owner is just metadata - issuer controls all tokens
+
+  2. WHY THIS WORKS:
+     - When Transfer creates new tokens, issuer remains the signatory
+     - No signatory change = no authorization problem
+     - Enables atomic swaps in AMM without multi-party consent
+
+  3. NO CONTRACT KEY:
+     - Contract keys would cause collisions during transfers
+     - When transferring: old token not archived until END of choice
+     - Creating new token with same key = violation!
+     - Solution: Use ContractId directly, no key lookups
+
+  4. NONCONSUMING + MANUAL ARCHIVE:
+     - `nonconsuming choice` prevents automatic archiving at START
+     - We manually `archive self` at the END after creates
+     - Avoids DAML Script bug: "contract consumed twice"
+
+  ALTERNATIVES THAT FAILED:
+  - signatory owner: Can't create token for recipient (no auth)
+  - controller owner, recipient: "Contract consumed twice" with submitMulti
+  - Proposal-Accept pattern: Breaks AMM atomicity (4 transactions)
+-}
+
+template Token
+  with
+    issuer : Party
+    owner  : Party
+    symbol : Text
+    amount : Numeric 10
+  where
+    signatory issuer  -- ONLY issuer is signatory
+    observer owner     -- owner can see their tokens
+
+    -- NO KEY: Tokens are tracked by ContractId to avoid key collisions during transfers
+    -- Pool must pass token CIDs instead of using lookupByKey
+
+    ensure amount > 0.0
+
+    -- Transfer: nonconsuming to manually control archiving order
+    nonconsuming choice Transfer : ContractId Token
+      with
+        recipient : Party
+        qty       : Numeric 10
+      controller owner
+      do
+        assertMsg "Positive quantity" (qty > 0.0)
+        assertMsg "Sufficient balance" (qty <= amount)
+        assertMsg "Self-transfer forbidden" (recipient /= owner)
+
+        -- Create remainder FIRST (same key, will replace when we archive)
+        when (qty < amount) $
+          void $ create this with owner = owner, amount = amount - qty
+
+        -- Create token for recipient
+        newToken <- create this with owner = recipient, amount = qty
+
+        -- Archive LAST to avoid key collision
+        archive self
+
+        return newToken
+
+    -- Credit : pour ajouter des tokens (mint/faucet)
+    choice Credit : ContractId Token
+      with qty : Numeric 10
+      controller owner
+      do
+        assertMsg "Positive credit" (qty > 0.0)
+        archive self
+        create this with amount = amount + qty

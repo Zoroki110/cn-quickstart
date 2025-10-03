@@ -1,0 +1,19 @@
+module TestCreate where
+
+import Token.Token
+import Daml.Script
+
+setup : Script ()
+setup = script do
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  alice <- allocateParty "Alice"
+  
+  -- Create token for Alice
+  token <- submit issuerUSDC do
+    createCmd Token with
+      issuer = issuerUSDC
+      owner = alice
+      symbol = "USDC"
+      amount = 1000.0
+  
+  pure ()

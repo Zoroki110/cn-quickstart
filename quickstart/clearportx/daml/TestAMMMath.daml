@@ -1,0 +1,530 @@
+module TestAMMMath where
+
+import Daml.Script
+import DA.Time
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+import qualified AMM.SwapRequest as SR
+
+-- Test suite for AMM mathematical accuracy
+-- Validates constant product formula (x * y = k)
+
+-- Test 1: Constant product preservation (x * y = k)
+testConstantProduct : Script ()
+testConstantProduct = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  -- Initial reserves: 100 ETH, 200,000 USDC
+  let initialETH = 100.0
+  let initialUSDC = 200000.0
+  let k = initialETH * initialUSDC  -- k = 20,000,000
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = initialETH
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = initialUSDC
+
+  -- Alice swaps 1000 USDC
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 1000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 1000.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = initialETH
+    poolAmountB = initialUSDC
+
+  ethToken <- queryContractId alice ethReceived
+  case ethToken of
+    None -> assertFail "ETH token not found"
+    Some token -> do
+      -- Calculate expected:
+      -- feeMul = 0.997
+      -- ainFee = 1000 * 0.997 = 997
+      -- aout = (997 * 100) / (200000 + 997) = 99700 / 200997 = 0.4960...
+      let ethOut = token.amount
+
+      -- New reserves after swap
+      let newETH = initialETH - ethOut
+      let newUSDC = initialUSDC + 1000.0
+      let newK = newETH * newUSDC
+
+      -- K should INCREASE slightly due to fees (protocol always profitable)
+      assertMsg "K should not decrease" (newK >= k)
+
+      -- But should be close (within 1% due to fees)
+      let kRatio = newK / k
+      assertMsg "K should increase only slightly due to fees"
+        (kRatio >= 1.0 && kRatio <= 1.01)
+
+      debug $ "✅ Constant product preserved:"
+      debug $ "   Initial k = " <> show k
+      debug $ "   New k = " <> show newK
+      debug $ "   Ratio = " <> show kRatio
+      debug $ "   ETH out = " <> show ethOut
+
+  return ()
+
+
+-- Test 2: Price impact calculation
+testPriceImpact : Script ()
+testPriceImpact = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  poolOperator2 <- allocateParty "PoolOperator2"  -- For second pool
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  let reserveETH = 10.0
+  let reserveUSDC = 20000.0
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = reserveETH
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = reserveUSDC
+
+  -- Test different swap sizes and measure price impact
+  -- Small swap: 100 USDC (0.5% of reserve)
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 100.0
+
+  -- Large swap: 5000 USDC (25% of reserve)
+  bobUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = bob
+    symbol = "USDC"
+    amount = 5000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  -- Alice's small swap
+  swapRequestAlice <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 100.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  -- Calculate initial price BEFORE any swaps
+  let initialPrice = reserveUSDC / reserveETH  -- 2000 USDC per ETH
+
+  swapReadyAlice <- submit alice $ exerciseCmd swapRequestAlice SR.PrepareSwap
+  ethAlice <- submit poolParty $ exerciseCmd swapReadyAlice SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = reserveETH
+    poolAmountB = reserveUSDC
+
+  aliceETH <- queryContractId alice ethAlice
+  case aliceETH of
+    None -> assertFail "Alice ETH not found"
+    Some token -> do
+      -- Price before: 20000/10 = 2000 USDC per ETH
+      -- Alice got: ~0.0496 ETH for 100 USDC
+      -- Effective price: 100/0.0496 = 2016 USDC per ETH
+      -- Impact: (2016-2000)/2000 = 0.8%
+      let aliceEffectivePrice = 100.0 / token.amount
+      let alicePriceImpact = abs((aliceEffectivePrice - initialPrice) / initialPrice) * 100.0
+
+      assertMsg "Small swap should have <2% price impact" (alicePriceImpact < 2.0)
+
+      debug $ "✅ Small swap (100 USDC):"
+      debug $ "   ETH received: " <> show token.amount
+      debug $ "   Effective price: " <> show aliceEffectivePrice <> " USDC/ETH"
+      debug $ "   Price impact: " <> show alicePriceImpact <> "%"
+
+  -- Create fresh pool for Bob's test (can't reuse consumed tokens)
+  poolETH2 <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = reserveETH
+
+  poolUSDC2 <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = reserveUSDC
+
+  pool2 <- submit poolOperator2 $ createCmd P.Pool with
+    poolOperator = poolOperator2  -- Different operator to avoid key collision
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC-2"
+    maxTTL = seconds 120
+
+  -- Bob's large swap (on fresh pool2)
+  swapRequestBob <- submit bob $ createCmd SR.SwapRequest with
+    trader = bob
+    poolCid = pool2  -- Use fresh pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = bobUSDC
+    inputSymbol = "USDC"
+    inputAmount = 5000.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  swapReadyBob <- submit bob $ exerciseCmd swapRequestBob SR.PrepareSwap
+
+  -- Use fresh pool tokens
+  ethBob <- submit poolParty $ exerciseCmd swapReadyBob SR.ExecuteSwap with
+    poolTokenACid = poolETH2
+    poolTokenBCid = poolUSDC2
+    poolAmountA = reserveETH
+    poolAmountB = reserveUSDC
+
+  bobETH <- queryContractId bob ethBob
+  case bobETH of
+    None -> assertFail "Bob ETH not found"
+    Some token -> do
+      -- Large swap should have much higher price impact (>10%)
+      let bobEffectivePrice = 5000.0 / token.amount
+      let bobPriceImpact = abs((bobEffectivePrice - initialPrice) / initialPrice) * 100.0
+
+      assertMsg "Large swap should have >10% price impact" (bobPriceImpact > 10.0)
+
+      debug $ "✅ Large swap (5000 USDC):"
+      debug $ "   ETH received: " <> show token.amount
+      debug $ "   Effective price: " <> show bobEffectivePrice <> " USDC/ETH"
+      debug $ "   Price impact: " <> show bobPriceImpact <> "%"
+
+  return ()
+
+
+-- Test 3: Fee accumulation
+testFeeAccumulation : Script ()
+testFeeAccumulation = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30  -- 0.3% fee
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  let initialETH = 10.0
+  let initialUSDC = 20000.0
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = initialETH
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = initialUSDC
+
+  -- Alice swaps 1000 USDC
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 1000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 1000.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = initialETH
+    poolAmountB = initialUSDC
+
+  ethToken <- queryContractId alice ethReceived
+  case ethToken of
+    None -> assertFail "ETH token not found"
+    Some token -> do
+      -- Fee calculation:
+      -- Input: 1000 USDC
+      -- Fee: 1000 * 0.003 = 3 USDC
+      -- Amount after fee: 997 USDC
+
+      -- Without fee, output would be: (1000 * 10) / (20000 + 1000) = 0.4761 ETH
+      -- With fee, output is: (997 * 10) / (20000 + 997) = 0.4960 ETH
+
+      -- Fee benefit to pool: 0.4761 - 0.4960 = -0.0199 ETH saved
+      -- (Pool keeps more ETH due to fees)
+
+      let outputWithoutFee = (1000.0 * initialETH) / (initialUSDC + 1000.0)
+      let outputWithFee = token.amount
+
+      -- With fees, trader gets LESS than without fees
+      assertMsg "Trader should receive less due to fees" (outputWithFee < outputWithoutFee)
+
+      let feeDelta = outputWithoutFee - outputWithFee
+      let feePercentage = (feeDelta / outputWithoutFee) * 100.0
+
+      -- Fee impact should be approximately 0.3%
+      assertMsg "Fee impact should be around 0.3%" (abs(feePercentage - 0.3) < 0.1)
+
+      debug $ "✅ Fee accumulation correct:"
+      debug $ "   Without fee: " <> show outputWithoutFee <> " ETH"
+      debug $ "   With fee: " <> show outputWithFee <> " ETH"
+      debug $ "   Fee impact: " <> show feePercentage <> "%"
+      debug $ "   Pool benefits by: " <> show feeDelta <> " ETH"
+
+  return ()
+
+
+-- Test 4: Bidirectional swaps (A→B then B→A)
+testBidirectionalSwaps : Script ()
+testBidirectionalSwaps = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 10.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 20000.0
+
+  -- Alice starts with 100 USDC
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 100.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  -- SWAP 1: Alice swaps 100 USDC → ETH
+  swapRequest1 <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 100.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  swapReady1 <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap
+  ethReceived <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = 10.0
+    poolAmountB = 20000.0
+
+  -- Alice now has ~0.0496 ETH
+  ethToken <- queryContractId alice ethReceived
+  case ethToken of
+    None -> assertFail "ETH token not found"
+    Some token -> do
+      let ethAmount = token.amount
+
+      debug $ "Swap 1: 100 USDC → " <> show ethAmount <> " ETH"
+
+      -- SWAP 2: Alice swaps all ETH back → USDC
+      -- Pool now has: 9.9504 ETH, 20100 USDC (approximately)
+      swapRequest2 <- submit alice $ createCmd SR.SwapRequest with
+        trader = alice
+        poolCid = pool
+        poolParty = poolParty
+        poolOperator = poolOperator
+        issuerA = issuerETH
+        issuerB = issuerUSDC
+        symbolA = "ETH"
+        symbolB = "USDC"
+        feeBps = 30
+        maxTTL = seconds 120
+        inputTokenCid = ethReceived
+        inputSymbol = "ETH"
+        inputAmount = ethAmount
+        outputSymbol = "USDC"
+        minOutput = 0.0
+        deadline = deadline
+        maxPriceImpactBps = 10000
+
+      swapReady2 <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap
+      usdcReceived <- submit poolParty $ exerciseCmd swapReady2 SR.ExecuteSwap with
+        poolTokenACid = poolETH
+        poolTokenBCid = poolUSDC
+        poolAmountA = 9.9504  -- After first swap
+        poolAmountB = 20100.0  -- After first swap
+
+      usdcToken <- queryContractId alice usdcReceived
+      case usdcToken of
+        None -> assertFail "USDC token not found"
+        Some token2 -> do
+          -- Alice should get back LESS than 100 USDC due to 2x fees + slippage
+          assertMsg "Round trip should result in loss (fees + slippage)" (token2.amount < 100.0)
+
+          let loss = 100.0 - token2.amount
+          let lossPercentage = (loss / 100.0) * 100.0
+
+          -- Loss should be ~0.6% (2 * 0.3% fees)
+          assertMsg "Round trip loss should be around 0.6%" (lossPercentage >= 0.5 && lossPercentage <= 1.0)
+
+          debug $ "Swap 2: " <> show ethAmount <> " ETH → " <> show token2.amount <> " USDC"
+          debug $ "✅ Round trip loss: " <> show loss <> " USDC (" <> show lossPercentage <> "%)"
+          debug $ "   Expected: ~0.6% (2x 0.3% fees)"
+
+  return ()

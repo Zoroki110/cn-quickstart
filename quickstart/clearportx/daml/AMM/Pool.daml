@@ -1,0 +1,38 @@
+module AMM.Pool where
+
+import qualified Token.Token as T
+import DA.Time (RelTime, subTime)
+import DA.Action (void)
+
+template Pool
+  with
+    poolOperator : Party
+    poolParty : Party
+    lpIssuer : Party
+    issuerA : Party
+    issuerB : Party
+    symbolA : Text
+    symbolB : Text
+    feeBps : Int
+    poolId : Text
+    maxTTL : RelTime
+  where
+    signatory poolOperator
+    observer poolParty, lpIssuer, issuerA, issuerB
+    
+    key (poolOperator, ((symbolA, show issuerA), (symbolB, show issuerB))) : (Party, ((Text, Text), (Text, Text)))
+    maintainer key._1
+    
+    ensure (symbolA, show issuerA) < (symbolB, show issuerB)
+
+    nonconsuming choice GetReservesForPool : (Numeric 10, Numeric 10)
+      controller poolParty
+      do
+        -- Token no longer has key
+        -- For AMM, reserves passed directly as parameters to ExecuteSwap
+        return (0.0, 0.0)
+    
+    nonconsuming choice GetSupply : Numeric 10
+      controller lpIssuer
+      do
+        return 0.0

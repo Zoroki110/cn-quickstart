@@ -1,0 +1,16 @@
+module CLPAccount where
+
+template CLPAccount 
+  with
+    customer : Party
+    airline : Party
+    name : Text
+    address : Text
+    email : Text
+    phone : Optional Text
+    accountTimestamp : Time 
+    dob : Date
+    points : Int
+
+  where 
+    signatory customer, airline

@@ -1,0 +1,33 @@
+module Unit.TestPool where
+
+import AMM.Pool
+import Token.Token
+import AMM.LPSupply
+import DA.Time (seconds)
+
+testPoolSetup : Script ()
+testPoolSetup = do
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  issuerETH <- allocateParty "IssuerETH"
+  
+  pool <- submit poolOperator $ createCmd Pool with
+    poolOperator
+    poolParty
+    lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+  
+  (rA, rB) <- submit poolParty $ exerciseCmd pool GetReservesForPool
+  
+  debug $ "Reserves: " <> show rA <> ", " <> show rB
+  assert (rA == 0.0 && rB == 0.0)
+  
+  return ()

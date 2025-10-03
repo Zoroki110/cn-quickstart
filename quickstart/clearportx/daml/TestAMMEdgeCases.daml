@@ -1,0 +1,423 @@
+module TestAMMEdgeCases where
+
+import Daml.Script
+import DA.Time
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+import qualified AMM.SwapRequest as SR
+
+-- Test suite for AMM edge cases and robustness
+-- Tests boundary conditions, extreme values, and error handling
+
+-- Test 1: Minimum viable swap (smallest possible amount)
+testMinimalSwap : Script ()
+testMinimalSwap = script do
+  -- Setup parties
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  -- Create pool
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  -- Large liquidity pool: 1000 ETH, 2,000,000 USDC
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 1000.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 2000000.0
+
+  -- Alice has tiny amount: 0.01 USDC (1 cent)
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 0.01
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  -- Create swap request
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 0.01
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  -- Execute swap
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = 1000.0
+    poolAmountB = 2000000.0
+
+  -- Verify we got some ETH (even if tiny)
+  ethToken <- queryContractId alice ethReceived
+  case ethToken of
+    None -> assertFail "ETH token not found"
+    Some token -> do
+      assertMsg "Should receive positive ETH" (token.amount > 0.0)
+      debug $ "✅ Minimal swap successful: " <> show token.amount <> " ETH"
+
+  return ()
+
+
+-- Test 2: Large swap (significant pool impact)
+testLargeSwap : Script ()
+testLargeSwap = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  -- Small pool: 10 ETH, 20,000 USDC
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 10.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 20000.0
+
+  -- Alice wants to swap HUGE amount: 10,000 USDC (50% of pool!)
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 10000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 10000.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000  -- Accept high impact
+
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = 10.0
+    poolAmountB = 20000.0
+
+  ethToken <- queryContractId alice ethReceived
+  case ethToken of
+    None -> assertFail "ETH token not found"
+    Some token -> do
+      -- Calculate expected: (10000 * 0.997 * 10) / (20000 + 10000 * 0.997)
+      -- = 99700 / 29970 = 3.327 ETH
+      let expected = 3.327
+      let tolerance = 0.01  -- 1% tolerance
+      assertMsg "Amount should be close to expected"
+        (abs(token.amount - expected) < tolerance)
+      debug $ "✅ Large swap successful: " <> show token.amount <> " ETH (expected ~" <> show expected <> ")"
+
+  return ()
+
+
+-- Test 3: Exact balance swap (spend entire token)
+testExactBalanceSwap : Script ()
+testExactBalanceSwap = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 10.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 20000.0
+
+  -- Alice has exactly 100 USDC and swaps ALL of it
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 100.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 100.0  -- Exact balance!
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = 10.0
+    poolAmountB = 20000.0
+
+  -- Verify no USDC remainder for Alice
+  aliceTokens <- query @T.Token alice
+  let aliceUSDCTokens = filter (\(_cid, token) ->
+        token.owner == alice && token.symbol == "USDC") aliceTokens
+  assertMsg "Alice should have no USDC left" (length aliceUSDCTokens == 0)
+
+  -- Verify Alice got ETH
+  ethToken <- queryContractId alice ethReceived
+  case ethToken of
+    None -> assertFail "ETH token not found"
+    Some token -> do
+      assertMsg "Should receive ETH" (token.amount > 0.0)
+      debug $ "✅ Exact balance swap successful: " <> show token.amount <> " ETH"
+
+  return ()
+
+
+-- Test 4: Slippage protection (minOutput enforcement)
+testSlippageProtection : Script ()
+testSlippageProtection = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 10.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 20000.0
+
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 100.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  -- Expected output: ~0.0496 ETH
+  -- Set minOutput to UNREALISTIC 1.0 ETH (should fail!)
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 100.0
+    outputSymbol = "ETH"
+    minOutput = 1.0  -- Way too high!
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+
+  -- This should FAIL with "Min output not met"
+  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = 10.0
+    poolAmountB = 20000.0
+
+  debug "✅ Slippage protection working: swap correctly rejected"
+  return ()
+
+
+-- Test 5: Deadline enforcement
+testDeadlineExpired : Script ()
+testDeadlineExpired = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 10.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 20000.0
+
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 100.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 5)  -- Very short deadline!
+
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 100.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+
+  -- Wait 10 seconds (past deadline)
+  passTime (seconds 10)
+
+  -- This should FAIL with "Swap expired"
+  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = 10.0
+    poolAmountB = 20000.0
+
+  debug "✅ Deadline enforcement working: expired swap rejected"
+  return ()

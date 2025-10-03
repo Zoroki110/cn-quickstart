@@ -1,0 +1,47 @@
+module AMM.LPToken where
+
+import AMM.Types()
+import DA.Action (void, when)
+
+template LPToken
+  with
+    lpIssuer : Party
+    poolId : Text
+    owner : Party
+    shares : Numeric 10
+  where
+    signatory lpIssuer
+    observer owner
+    
+    key (lpIssuer, poolId, owner) : (Party, Text, Party)
+    maintainer key._1
+    
+    ensure shares > 0.0
+    
+    choice CreditLP : ContractId LPToken
+      with 
+        qty : Numeric 10
+      controller owner
+      do
+        assertMsg "Positive credit" (qty > 0.0)
+        archive self
+        create this with shares = shares + qty
+    
+    choice TransferLP : ContractId LPToken
+      with
+        to : Party
+        qty : Numeric 10
+      controller owner, to  -- BILATERAL comme Token
+      do
+        assertMsg "Valid transfer" (qty > 0.0 && qty <= shares)
+        assertMsg "Self-transfer forbidden" (to /= owner)
+        
+        archive self
+        
+        when (qty < shares) $ do
+          void $ create this with owner = owner, shares = shares - qty
+        
+        existingM <- lookupByKey @LPToken (lpIssuer, poolId, to)
+        case existingM of
+          None -> create this with owner = to, shares = qty
+          Some cid -> exercise cid CreditLP with qty = qty

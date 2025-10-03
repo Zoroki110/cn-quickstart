@@ -1,0 +1,23 @@
+module AMM.LPSupply where
+
+template LPSupply
+  with
+    lpIssuer : Party
+    poolId : Text
+    totalSupply : Numeric 10
+  where
+    signatory lpIssuer
+    
+    key (lpIssuer, poolId) : (Party, Text)
+    maintainer key._1
+    
+    ensure totalSupply >= 0.0
+    
+    choice UpdateSupply : ContractId LPSupply
+      with delta : Numeric 10
+      controller lpIssuer
+      do
+        let newSupply = totalSupply + delta
+        assertMsg "Negative supply" (newSupply >= 0.0)
+        archive self
+        create this with totalSupply = newSupply

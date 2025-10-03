@@ -1,0 +1,33 @@
+module Time where
+
+import Daml.Script
+import DA.Time
+import DA.Date
+import DA.List
+
+datetimeTest: Script()
+datetimeTest = script do
+
+    now1 <- getTime
+
+    debug $ "Time: " <> show now1
+
+    let 
+        dateofBirth: Date
+        dateofBirth = date 2000 Jan 02
+
+        timeOfBirth: Time
+        timeOfBirth = time dateofBirth 15 30 10
+
+        age1: RelTime
+        age1 = subTime timeOfBirth now1
+
+        intlist = [1,3,5]    
+    debug $ "Date of Birth: " <> show dateofBirth
+    debug $ "Time of Birth: " <> show timeOfBirth
+    debug $ "Age: " <> show age1
+    debug $ "List: " <> show (tail intlist)
+    debug $ "sum: " <> show (sum intlist)
+    debug $ "product: " <> show (product intlist)
+
+    return()

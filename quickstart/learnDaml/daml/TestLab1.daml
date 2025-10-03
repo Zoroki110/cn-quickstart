@@ -1,0 +1,46 @@
+module TestLab1 where 
+
+import Daml.Script
+import CLPApplication
+import CLPAccount
+import DA.Date (toDateUTC, date, Month(Jan), Month(Mar))
+import DA.Time (time)
+
+testSubmitAndRejectApplication: Script ()
+testSubmitAndRejectApplication = script do 
+    bob <- allocateParty "Bob"
+    airline <- allocateParty "Epic Airlines"
+    now <- getTime 
+
+    -- Bob creates a blank CLPApplication
+    bobCLPAppId <- submit bob do         
+        createCmd CLPApplication with  
+            customer = bob 
+            airline = airline 
+            name = ""
+            address = ""
+            email = ""
+            phone = Some ""
+            appTimestamp = now 
+            dob = toDateUTC now
+
+    -- Bob submits the application with details filled in
+    bobSubmittedAppId <- submit bob do 
+        exerciseCmd bobCLPAppId SubmitApplication 
+            with
+                appCustomer = bob 
+                appAirline = airline
+                customerName = "Bob"
+                customerAddress = "123 Spring St EFGH"
+                customerEmail = "bob@nomansland.io"
+                customerPhone = Some " 01-555-555-5678"
+                now = time (date 2023 Mar 01) 10 30 0
+                customerDob = date 2010 Jan 05   
+
+    -- airline rejects the application and returns a message
+    applicationResult <- submit airline do 
+        exerciseCmd bobSubmittedAppId RejectApplication 
+    
+    debug applicationResult
+
+    return ()

@@ -1,0 +1,32 @@
+module Main where
+
+import Daml.Script
+import Token.Token
+
+createInitialTokens : Script ()
+createInitialTokens = script do
+  -- Récupère les parties existantes
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  alice <- allocateParty "Alice"
+  
+  -- Créer un token pour IssuerUSDC
+  tokenCid <- submit issuerUSDC do
+    createCmd Token with
+      issuer = issuerUSDC
+      owner = issuerUSDC
+      symbol = "USDC"
+      amount = 10000.0
+  
+  debug "Created 10000 USDC for IssuerUSDC"
+  
+  -- Créer un autre token directement pour Alice
+  aliceTokenCid <- submit issuerUSDC do
+    createCmd Token with
+      issuer = issuerUSDC
+      owner = alice
+      symbol = "USDC"
+      amount = 1000.0
+  
+  debug "Created 1000 USDC for Alice"
+  
+  pure ()

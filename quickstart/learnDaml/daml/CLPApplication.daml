@@ -1,0 +1,58 @@
+module CLPApplication where
+import CLPAccount
+
+template CLPApplication
+  with
+    customer : Party
+    airline : Party
+    name : Text
+    address : Text
+    email : Text
+    phone : Optional Text
+    appTimestamp : Time 
+    dob : Date 
+
+  where 
+    signatory customer
+    observer airline
+
+    choice SubmitApplication : ContractId CLPApplication
+      with
+        appCustomer : Party
+        appAirline : Party
+        customerName : Text
+        customerAddress : Text
+        customerEmail : Text
+        customerPhone : Optional Text
+        now : Time
+        customerDob : Date
+      controller customer
+      do 
+        create CLPApplication with
+          customer = appCustomer
+          airline = appAirline
+          name = customerName
+          address = customerAddress
+          email = customerEmail
+          phone = customerPhone
+          appTimestamp = now
+          dob = customerDob
+    choice AcceptApplication : ContractId CLPAccount
+      with
+        accountTimestamp : Time
+        points : Int
+      controller airline
+      do create CLPAccount with
+          customer = this.customer
+          airline = this.airline
+          name = this.name
+          address = this.address
+          email = this.email
+          phone = this.phone
+          accountTimestamp = accountTimestamp
+          dob = this.dob
+          points = points
+    choice RejectApplication : Text
+      controller airline
+      do 
+        return "Application rejected"

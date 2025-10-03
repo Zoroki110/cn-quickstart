@@ -1,0 +1,19 @@
+sdk-version: 2.10.2
+name: clearportx
+source: daml
+version: 1.0.0
+parties:
+  - PoolOperator
+  - PoolParty
+  - LPIssuer
+  - IssuerUSDC
+  - IssuerETH
+  - Alice
+  - Bob
+  - Charlie
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+data-dependencies: []
+build-options: []

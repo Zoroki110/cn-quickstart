@@ -1,0 +1,140 @@
+module AMM.SwapRequest where
+
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+import DA.Action (void)
+import DA.Time (RelTime, subTime)
+
+-- Proposition de swap créée par le trader
+-- Pattern Proposal-Accept pour éviter les nested choices
+template SwapRequest
+  with
+    trader : Party
+    poolCid : ContractId P.Pool
+    poolParty : Party
+    poolOperator : Party
+    issuerA : Party
+    issuerB : Party
+    symbolA : Text
+    symbolB : Text
+    feeBps : Int
+    maxTTL : RelTime
+    inputTokenCid : ContractId T.Token
+    inputSymbol : Text
+    inputAmount : Numeric 10
+    outputSymbol : Text
+    minOutput : Numeric 10
+    deadline : Time
+    maxPriceImpactBps : Int
+  where
+    signatory trader
+    observer poolParty
+
+    -- Annuler la demande si le trader change d'avis
+    choice CancelSwapRequest : ()
+      controller trader
+      do
+        return ()
+
+    -- Le trader "prépare" le swap en transférant son token au pool
+    -- controller trader ONLY because Transfer has controller owner
+    choice PrepareSwap : ContractId SwapReady
+      controller trader
+      do
+        -- Transfer has controller owner (trader)
+        -- Only trader authorizes, poolParty just receives
+        _ <- exercise inputTokenCid T.Transfer with
+          recipient = poolParty
+          qty = inputAmount
+
+        -- Créer SwapReady pour que le pool puisse compléter
+        create SwapReady with
+          trader = trader
+          poolCid = poolCid
+          poolParty = poolParty
+          issuerA = issuerA
+          issuerB = issuerB
+          symbolA = symbolA
+          symbolB = symbolB
+          feeBps = feeBps
+          maxTTL = maxTTL
+          inputSymbol = inputSymbol
+          inputAmount = inputAmount
+          outputSymbol = outputSymbol
+          minOutput = minOutput
+          deadline = deadline
+          maxPriceImpactBps = maxPriceImpactBps
+
+-- Swap prêt à être exécuté par le pool
+template SwapReady
+  with
+    trader : Party
+    poolCid : ContractId P.Pool
+    poolParty : Party
+    issuerA : Party
+    issuerB : Party
+    symbolA : Text
+    symbolB : Text
+    feeBps : Int
+    maxTTL : RelTime
+    inputSymbol : Text
+    inputAmount : Numeric 10
+    outputSymbol : Text
+    minOutput : Numeric 10
+    deadline : Time
+    maxPriceImpactBps : Int
+  where
+    signatory trader
+    observer poolParty
+
+    -- Le pool exécute le swap (calcul x*y=k + transfer output)
+    choice ExecuteSwap : ContractId T.Token
+      with
+        poolTokenACid : ContractId T.Token
+        poolTokenBCid : ContractId T.Token
+        poolAmountA : Numeric 10
+        poolAmountB : Numeric 10
+      controller poolParty  -- ONLY poolParty, trader just receives
+      do
+        -- Validations
+        now <- getTime
+        assertMsg "Swap expired" (now <= deadline)
+        let timeDiff = deadline `subTime` now
+        assertMsg "TTL exceeded" (timeDiff <= maxTTL)
+
+        assertMsg "Valid input symbol" (inputSymbol == symbolA || inputSymbol == symbolB)
+        assertMsg "Different symbols" (inputSymbol /= outputSymbol)
+        assertMsg "Valid output symbol" (outputSymbol == symbolA || outputSymbol == symbolB)
+
+        -- Calcul AMM x*y=k
+        let (rin, rout, poolOutCid) =
+              if inputSymbol == symbolA
+              then (poolAmountA, poolAmountB, poolTokenBCid)
+              else (poolAmountB, poolAmountA, poolTokenACid)
+
+        assertMsg "No input reserve" (rin > 0.0)
+        assertMsg "No output reserve" (rout > 0.0)
+
+        -- Formule Uniswap v2: amountOut = (amountIn * feeMultiplier * reserveOut) / (reserveIn + amountIn * feeMultiplier)
+        let feeMul = (10000.0 - intToDecimal feeBps) / 10000.0
+        let ainFee = inputAmount * feeMul
+        let denom = rin + ainFee
+        assertMsg "Zero denominator" (denom > 0.0)
+        let aout = (ainFee * rout) / denom
+
+        assertMsg "Min output not met" (aout >= minOutput)
+        assertMsg "Liquidity exhausted" (aout < rout)
+
+        -- Price impact check
+        let pBefore = rout / rin
+        let pAfter = (rout - aout) / (rin + inputAmount)
+        let impBps = abs(pAfter - pBefore) / pBefore * 10000.0
+        assertMsg "Price impact too high" (impBps <= intToDecimal maxPriceImpactBps)
+
+        -- Le POOL (seul controller) transfère son token au trader
+        -- Transfer a controller owner (poolParty), donc pas de conflit
+        outCid <- exercise poolOutCid T.Transfer with
+          recipient = trader
+          qty = aout
+
+        return outCid

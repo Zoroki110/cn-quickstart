@@ -133,11 +133,9 @@ testThreeHopRoute = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDCs
   let (pool1USDCCid, _) = head pool1USDCs
 
-  usdcOut <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
+  (usdcOut, _) <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
     poolTokenACid = pool1ETHCid
     poolTokenBCid = pool1USDCCid
-    poolAmountA = pool1ETH.amount
-    poolAmountB = totalUSDC1
 
   Some usdcToken <- queryContractId alice usdcOut
 
@@ -171,11 +169,9 @@ testThreeHopRoute = script do
   let totalUSDC2 = sum $ map (\(_, t) -> t.amount) pool2USDCs
   let (pool2USDCCid, _) = head pool2USDCs
 
-  daiOut <- submit poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
+  (daiOut, _) <- submit poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
     poolTokenACid = pool2DAICid
     poolTokenBCid = pool2USDCCid
-    poolAmountA = pool2DAI.amount
-    poolAmountB = totalUSDC2
 
   Some daiToken <- queryContractId alice daiOut
 
@@ -209,11 +205,9 @@ testThreeHopRoute = script do
   let totalWBTC3 = sum $ map (\(_, t) -> t.amount) pool3WBTCs
   let (pool3WBTCCid, _) = head pool3WBTCs
 
-  wbtcOut <- submit poolParty3 $ exerciseCmd swapReady3 SR.ExecuteSwap with
+  (wbtcOut, _) <- submit poolParty3 $ exerciseCmd swapReady3 SR.ExecuteSwap with
     poolTokenACid = pool3DAICid
     poolTokenBCid = pool3WBTCCid
-    poolAmountA = pool3DAI.amount
-    poolAmountB = totalWBTC3
 
   Some finalWBTC <- queryContractId alice wbtcOut
 
@@ -282,11 +276,9 @@ testMultiHopSlippageFailure = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDCs
   let (pool1USDCCid, _) = head pool1USDCs
 
-  usdcOut <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
+  (usdcOut, _) <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
     poolTokenACid = pool1ETHCid
     poolTokenBCid = pool1USDCCid
-    poolAmountA = pool1ETH.amount
-    poolAmountB = totalUSDC1
 
   Some usdcToken <- queryContractId alice usdcOut
 
@@ -323,8 +315,6 @@ testMultiHopSlippageFailure = script do
   submitMustFail poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
     poolTokenACid = pool2DAICid
     poolTokenBCid = pool2USDCCid
-    poolAmountA = pool2DAI.amount
-    poolAmountB = totalUSDC2
 
   debug "✅ Multi-hop slippage: Final hop correctly rejected due to minOutput violation"
 
@@ -392,11 +382,9 @@ testRouteComparisonFull = script do
   let totalETH1 = sum $ map (\(_, t) -> t.amount) pool1ETHs
   let (pool1ETHCid, _) = head pool1ETHs
 
-  daiOutA <- submit poolParty1 $ exerciseCmd swapReadyA SR.ExecuteSwap with
+  (daiOutA, _) <- submit poolParty1 $ exerciseCmd swapReadyA SR.ExecuteSwap with
     poolTokenACid = pool1DAICid
     poolTokenBCid = pool1ETHCid
-    poolAmountA = pool1DAI.amount
-    poolAmountB = totalETH1
 
   Some finalDAIA <- queryContractId alice daiOutA
 
@@ -436,11 +424,9 @@ testRouteComparisonFull = script do
   let totalUSDC2 = sum $ map (\(_, t) -> t.amount) pool2USDCs
   let (pool2USDCCid, _) = head pool2USDCs
 
-  usdcOut <- submit poolParty2 $ exerciseCmd swapReadyB1 SR.ExecuteSwap with
+  (usdcOut, _) <- submit poolParty2 $ exerciseCmd swapReadyB1 SR.ExecuteSwap with
     poolTokenACid = pool2ETHCid
     poolTokenBCid = pool2USDCCid
-    poolAmountA = pool2ETH.amount
-    poolAmountB = totalUSDC2
 
   Some usdcToken <- queryContractId bob usdcOut
 
@@ -473,11 +459,9 @@ testRouteComparisonFull = script do
   let totalUSDC3 = sum $ map (\(_, t) -> t.amount) pool3USDCs
   let (pool3USDCCid, _) = head pool3USDCs
 
-  daiOutB <- submit poolParty3 $ exerciseCmd swapReadyB2 SR.ExecuteSwap with
+  (daiOutB, _) <- submit poolParty3 $ exerciseCmd swapReadyB2 SR.ExecuteSwap with
     poolTokenACid = pool3DAICid
     poolTokenBCid = pool3USDCCid
-    poolAmountA = pool3DAI.amount
-    poolAmountB = totalUSDC3
 
   Some finalDAIB <- queryContractId bob daiOutB
 
@@ -555,11 +539,9 @@ testFailedIntermediateHop = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDCs
   let (pool1USDCCid, _) = head pool1USDCs
 
-  usdcOut <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
+  (usdcOut, _) <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
     poolTokenACid = pool1ETHCid
     poolTokenBCid = pool1USDCCid
-    poolAmountA = pool1ETH.amount
-    poolAmountB = totalUSDC1
 
   Some usdcToken <- queryContractId alice usdcOut
 
@@ -756,8 +738,6 @@ testDeadlineExpiration = script do
   submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETHCid
     poolTokenBCid = poolUSDCCid
-    poolAmountA = poolETH.amount
-    poolAmountB = totalUSDC
 
   debug "✅ Deadline expiration: Swap correctly rejected when deadline has passed"
 

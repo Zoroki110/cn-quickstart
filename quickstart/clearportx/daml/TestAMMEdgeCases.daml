@@ -81,11 +81,9 @@ testMinimalSwap = script do
 
   -- Execute swap
   swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
-  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = 1000.0
-    poolAmountB = 2000000.0
 
   -- Verify we got some ETH (even if tiny)
   ethToken <- queryContractId alice ethReceived
@@ -166,11 +164,9 @@ testLargeSwap = script do
     maxPriceImpactBps = 10000  -- Accept high impact
 
   swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
-  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = 10.0
-    poolAmountB = 20000.0
 
   ethToken <- queryContractId alice ethReceived
   case ethToken of
@@ -254,11 +250,9 @@ testExactBalanceSwap = script do
     maxPriceImpactBps = 10000
 
   swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
-  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = 10.0
-    poolAmountB = 20000.0
 
   -- Verify no USDC remainder for Alice
   aliceTokens <- query @T.Token alice
@@ -350,8 +344,6 @@ testSlippageProtection = script do
   submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = 10.0
-    poolAmountB = 20000.0
 
   debug "✅ Slippage protection working: swap correctly rejected"
   return ()
@@ -431,8 +423,6 @@ testDeadlineExpired = script do
   submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = 10.0
-    poolAmountB = 20000.0
 
   debug "✅ Deadline enforcement working: expired swap rejected"
   return ()

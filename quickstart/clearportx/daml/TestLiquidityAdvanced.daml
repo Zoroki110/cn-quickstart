@@ -402,11 +402,9 @@ testFullCycle = script do
 
   swapReady1 <- submit bob $ exerciseCmd swapReq1 SR.PrepareSwap
 
-  bobETHOut <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
+  (bobETHOut, _) <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
     poolTokenACid = poolETH1
     poolTokenBCid = poolUSDC1
-    poolAmountA = 10.0
-    poolAmountB = 20000.0
 
   debug "Step 2: Bob swapped 1000 USDC for ETH (fees accrued) ✓"
 

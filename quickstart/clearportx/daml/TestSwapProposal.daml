@@ -93,12 +93,10 @@ testSwapWithProposal = script do
   -- TX 3: Pool exécute le swap (transfert ETH à Alice)
   -- submit poolParty ONLY because ExecuteSwap has controller poolParty
   -- alice just receives the ETH tokens
-  ethReceived <- submit poolParty $
+  (ethReceived, _) <- submit poolParty $
     exerciseCmd swapReady ExecuteSwap with
       poolTokenACid = poolETH
       poolTokenBCid = poolUSDC
-      poolAmountA = 10.0
-      poolAmountB = 20000.0
 
   debug "TX 3 complete: Pool transferred ETH to Alice"
 

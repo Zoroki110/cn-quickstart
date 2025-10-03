@@ -153,11 +153,9 @@ testTwoHopRoute = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDC
   let (pool1USDCCid, _) = head pool1USDC
 
-  usdcOut <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
+  (usdcOut, _) <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
     poolTokenACid = pool1ETHCid
     poolTokenBCid = pool1USDCCid
-    poolAmountA = pool1ETHToken.amount
-    poolAmountB = totalUSDC1
 
   -- HOP 2: USDC → DAI
   Some usdcToken <- queryContractId alice usdcOut
@@ -191,11 +189,9 @@ testTwoHopRoute = script do
   let totalUSDC2 = sum $ map (\(_, t) -> t.amount) pool2USDC
   let (pool2USDCCid, _) = head pool2USDC
 
-  daiOut <- submit poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
+  (daiOut, _) <- submit poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
     poolTokenACid = pool2DAICid
     poolTokenBCid = pool2USDCCid
-    poolAmountA = pool2DAIToken.amount
-    poolAmountB = totalUSDC2
 
   Some finalDAI <- queryContractId alice daiOut
 

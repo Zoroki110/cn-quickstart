@@ -88,20 +88,19 @@ template SwapReady
     observer poolParty
 
     -- Le pool exécute le swap (calcul x*y=k + transfer output)
-    choice ExecuteSwap : ContractId T.Token
+    -- CRITICAL-5 & CRITICAL-6 FIX: Use actual pool reserves and update them
+    choice ExecuteSwap : (ContractId T.Token, ContractId P.Pool)
       with
         poolTokenACid : ContractId T.Token
         poolTokenBCid : ContractId T.Token
-        poolAmountA : Numeric 10
-        poolAmountB : Numeric 10
       controller poolParty  -- ONLY poolParty, trader just receives
       do
-        -- CRITICAL-2 FIX: Verify pool reserves match actual Pool contract
+        -- CRITICAL-5 FIX: Fetch pool to get ACTUAL current reserves (not parameters)
         pool <- fetch poolCid
-        assertMsg "Pool reserve A mismatch - potential manipulation detected"
-          (poolAmountA == pool.reserveA)
-        assertMsg "Pool reserve B mismatch - potential manipulation detected"
-          (poolAmountB == pool.reserveB)
+
+        -- Use ACTUAL pool reserves directly
+        let poolAmountA = pool.reserveA
+        let poolAmountB = pool.reserveB
 
         -- Validations
         now <- getTime
@@ -166,4 +165,24 @@ template SwapReady
           recipient = trader
           qty = aout
 
-        return outCid
+        -- CRITICAL-6 FIX: Update pool reserves after swap
+        -- Input token was already transferred in PrepareSwap
+        -- Output token was just transferred above
+        -- Now update the pool state to reflect new reserves
+        let newReserveA = if inputSymbol == symbolA
+                         then poolAmountA + inputAmount  -- Input was A, so A increases
+                         else poolAmountA - aout         -- Output was A, so A decreases
+        let newReserveB = if inputSymbol == symbolB
+                         then poolAmountB + inputAmount  -- Input was B, so B increases
+                         else poolAmountB - aout         -- Output was B, so B decreases
+
+        -- Verify new reserves are still positive (should never fail due to earlier checks)
+        assertMsg "New reserve A must be positive" (newReserveA > 0.0)
+        assertMsg "New reserve B must be positive" (newReserveB > 0.0)
+
+        -- Archive old pool and create new one with updated reserves
+        newPool <- exercise poolCid P.ArchiveAndUpdateReserves with
+          updatedReserveA = newReserveA
+          updatedReserveB = newReserveB
+
+        return (outCid, newPool)

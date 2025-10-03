@@ -81,11 +81,9 @@ testConstantProduct = script do
     maxPriceImpactBps = 10000
 
   swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
-  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = initialETH
-    poolAmountB = initialUSDC
 
   ethToken <- queryContractId alice ethReceived
   case ethToken of
@@ -203,11 +201,9 @@ testPriceImpact = script do
   let initialPrice = reserveUSDC / reserveETH  -- 2000 USDC per ETH
 
   swapReadyAlice <- submit alice $ exerciseCmd swapRequestAlice SR.PrepareSwap
-  ethAlice <- submit poolParty $ exerciseCmd swapReadyAlice SR.ExecuteSwap with
+  (ethAlice, _) <- submit poolParty $ exerciseCmd swapReadyAlice SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = reserveETH
-    poolAmountB = reserveUSDC
 
   aliceETH <- queryContractId alice ethAlice
   case aliceETH of
@@ -278,11 +274,9 @@ testPriceImpact = script do
   swapReadyBob <- submit bob $ exerciseCmd swapRequestBob SR.PrepareSwap
 
   -- Use fresh pool tokens
-  ethBob <- submit poolParty $ exerciseCmd swapReadyBob SR.ExecuteSwap with
+  (ethBob, _) <- submit poolParty $ exerciseCmd swapReadyBob SR.ExecuteSwap with
     poolTokenACid = poolETH2
     poolTokenBCid = poolUSDC2
-    poolAmountA = reserveETH
-    poolAmountB = reserveUSDC
 
   bobETH <- queryContractId bob ethBob
   case bobETH of
@@ -372,11 +366,9 @@ testFeeAccumulation = script do
     maxPriceImpactBps = 10000
 
   swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
-  ethReceived <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = initialETH
-    poolAmountB = initialUSDC
 
   ethToken <- queryContractId alice ethReceived
   case ethToken of
@@ -482,11 +474,9 @@ testBidirectionalSwaps = script do
     maxPriceImpactBps = 10000
 
   swapReady1 <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap
-  ethReceived <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
+  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = 10.0
-    poolAmountB = 20000.0
 
   -- Alice now has ~0.0496 ETH
   ethToken <- queryContractId alice ethReceived
@@ -519,11 +509,9 @@ testBidirectionalSwaps = script do
         maxPriceImpactBps = 10000
 
       swapReady2 <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap
-      usdcReceived <- submit poolParty $ exerciseCmd swapReady2 SR.ExecuteSwap with
+      (usdcReceived, _) <- submit poolParty $ exerciseCmd swapReady2 SR.ExecuteSwap with
         poolTokenACid = poolETH
         poolTokenBCid = poolUSDC
-        poolAmountA = 9.9504  -- After first swap
-        poolAmountB = 20100.0  -- After first swap
 
       usdcToken <- queryContractId alice usdcReceived
       case usdcToken of

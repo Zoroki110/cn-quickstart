@@ -410,11 +410,9 @@ testPriceManipulation = script do
 
   swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
 
-  ethOut <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+  (ethOut, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
-    poolAmountA = 10.0
-    poolAmountB = 20000.0
 
   -- Alice gets almost all ETH from pool (extreme price impact)
   Some token <- queryContractId alice ethOut
@@ -528,11 +526,9 @@ testPoolInvariant = script do
   -- Sum all USDC amounts for total reserves
   let totalUSDC = sum $ map (\(_, t) -> t.amount) poolUSDCs
 
-  ethOut <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+  (ethOut, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETHCid
     poolTokenBCid = poolUSDCCid
-    poolAmountA = poolETH.amount
-    poolAmountB = totalUSDC
 
   Some token <- queryContractId alice ethOut
 

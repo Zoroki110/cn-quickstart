@@ -327,12 +327,22 @@ Instead of finding a direct pool, you can chain swaps through intermediate token
 - **Use Multi-Hop**: No direct pool exists, or multi-hop offers better total pricing
 - **Use Direct**: Direct pool exists with sufficient liquidity
 
-### Current Limitations
-Phase 3 implementation focuses on demonstrating multi-hop functionality. Production use would require:
-- Off-ledger route optimization
-- Gas cost estimation
-- Price impact calculation across route
-- MEV protection
+### Test Coverage
+Phase 3 includes comprehensive testing:
+- ✅ **3-hop routes** (ETH→USDC→DAI→WBTC)
+- ✅ **Slippage protection** on final output
+- ✅ **Direct vs multi-hop** comparison (proves fee impact)
+- ✅ **Liquidity validation** across hops
+- ✅ **Deadline enforcement** during multi-hop execution
+- ✅ **Mathematical verification** of AMM formulas
+
+### Production Considerations
+Current implementation demonstrates core multi-hop functionality. Production deployment would benefit from:
+- Off-ledger route optimization algorithms
+- Gas cost estimation per route
+- Aggregated price impact calculation
+- MEV protection strategies
+- Front-running detection
 
 ---
 
@@ -457,14 +467,15 @@ ClearPortX DEX provides:
 - 🚧 **Price Oracles** (Phase 4 - Next)
 - 🚧 **Advanced Features** (Phase 5)
 
-**Test Coverage:** 48/48 passing ✅
+**Test Coverage:** 54/54 passing ✅
 - **Phase 1 Tests (27):**
   - 13 swap tests (edge cases, math validation, security)
   - 8 core liquidity tests (add, remove, transfer, protections)
   - 6 advanced tests (imbalanced, multiple LPs, dust, unauthorized)
 - **Phase 2 Tests (5):**
   - Multi-pool creation, discovery, competing pools, pool announcements
-- **Phase 3 Tests (3):**
-  - 2-hop routing (ETH→USDC→DAI), slippage protection, route comparison
+- **Phase 3 Tests (9):**
+  - **Basic (3):** 2-hop routing, slippage protection, route comparison
+  - **Advanced (6):** 3-hop routing, slippage failure, direct vs multi-hop, intermediate hop validation, liquidity exhaustion, deadline expiration
 - **Security Tests (13):**
   - Authorization attacks, economic attacks, edge cases, double-spend protection

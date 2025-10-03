@@ -30,6 +30,9 @@ testConstantProduct = script do
     feeBps = 30
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 100.0  -- Initial reserves: 100 ETH
+    reserveB = 200000.0  -- 200,000 USDC
 
   -- Initial reserves: 100 ETH, 200,000 USDC
   let initialETH = 100.0
@@ -139,6 +142,9 @@ testPriceImpact = script do
     feeBps = 30
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 10.0  -- 10 ETH
+    reserveB = 20000.0  -- 20,000 USDC
 
   let reserveETH = 10.0
   let reserveUSDC = 20000.0
@@ -245,6 +251,9 @@ testPriceImpact = script do
     feeBps = 30
     poolId = "ETH-USDC-2"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 10.0  -- Same as pool1: 10 ETH
+    reserveB = 20000.0  -- 20,000 USDC
 
   -- Bob's large swap (on fresh pool2)
   swapRequestBob <- submit bob $ createCmd SR.SwapRequest with
@@ -314,6 +323,9 @@ testFeeAccumulation = script do
     feeBps = 30  -- 0.3% fee
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 10.0  -- 10 ETH
+    reserveB = 20000.0  -- 20,000 USDC
 
   let initialETH = 10.0
   let initialUSDC = 20000.0
@@ -423,6 +435,9 @@ testBidirectionalSwaps = script do
     feeBps = 30
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 10.0  -- 10 ETH
+    reserveB = 20000.0  -- 20,000 USDC
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH

@@ -32,6 +32,9 @@ testMinimalSwap = script do
     feeBps = 30
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 1000.0  -- Matches pool liquidity below
+    reserveB = 2000000.0
 
   -- Large liquidity pool: 1000 ETH, 2,000,000 USDC
   poolETH <- submit issuerETH $ createCmd T.Token with
@@ -116,6 +119,9 @@ testLargeSwap = script do
     feeBps = 30
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 10.0  -- Small pool: 10 ETH
+    reserveB = 20000.0  -- 20,000 USDC
 
   -- Small pool: 10 ETH, 20,000 USDC
   poolETH <- submit issuerETH $ createCmd T.Token with
@@ -202,6 +208,9 @@ testExactBalanceSwap = script do
     feeBps = 30
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 10.0  -- 10 ETH
+    reserveB = 20000.0  -- 20,000 USDC
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -289,6 +298,9 @@ testSlippageProtection = script do
     feeBps = 30
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 10.0  -- 10 ETH
+    reserveB = 20000.0  -- 20,000 USDC
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -366,6 +378,9 @@ testDeadlineExpired = script do
     feeBps = 30
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 10.0  -- 10 ETH
+    reserveB = 20000.0  -- 20,000 USDC
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH

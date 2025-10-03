@@ -29,6 +29,9 @@ testSwapWithProposal = script do
     feeBps = 30  -- 0.3% fee
     poolId = "ETH-USDC"
     maxTTL = seconds 120
+    totalLPSupply = 0.0  -- No LP tracking in legacy tests
+    reserveA = 10.0      -- 10 ETH
+    reserveB = 20000.0   -- 20,000 USDC
 
   -- Créer tokens de liquidité pour le pool
   -- Token a signatory issuer, donc submit issuer

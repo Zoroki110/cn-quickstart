@@ -1,8 +1,25 @@
 module AMM.Pool where
 
 import qualified Token.Token as T
-import DA.Time (RelTime, subTime)
-import DA.Action (void)
+import qualified LPToken.LPToken as LP
+import DA.Time (RelTime)
+import DA.Action (void, when)
+import DA.Math (sqrt)
+
+{-
+  POOL TEMPLATE WITH LIQUIDITY PROVISION
+
+  DESIGN CHANGES (Phase 1):
+  1. Added totalLPSupply, reserveA, reserveB to track pool state
+  2. Direct AddLiquidity/RemoveLiquidity choices (no request templates)
+  3. Multi-party controllers: provider, poolParty, lpIssuer
+  4. Slippage protection: minLPTokens, minAmountA, minAmountB
+  5. Archive-and-recreate pattern to update reserves
+
+  KEY FORMULA:
+  - First LP: lpTokens = sqrt(amountA * amountB)
+  - Subsequent: lpTokens = min(amountA * totalSupply / reserveA, amountB * totalSupply / reserveB)
+-}
 
 template Pool
   with
@@ -16,23 +33,127 @@ template Pool
     feeBps : Int
     poolId : Text
     maxTTL : RelTime
+    totalLPSupply : Numeric 10  -- Total LP tokens minted
+    reserveA : Numeric 10       -- Current reserve of tokenA
+    reserveB : Numeric 10       -- Current reserve of tokenB
   where
     signatory poolOperator
     observer poolParty, lpIssuer, issuerA, issuerB
-    
+
     key (poolOperator, ((symbolA, show issuerA), (symbolB, show issuerB))) : (Party, ((Text, Text), (Text, Text)))
     maintainer key._1
-    
-    ensure (symbolA, show issuerA) < (symbolB, show issuerB)
 
+    ensure
+      (symbolA, show issuerA) < (symbolB, show issuerB) &&
+      totalLPSupply >= 0.0 &&
+      reserveA >= 0.0 &&
+      reserveB >= 0.0
+
+    -- Add liquidity: deposit tokens A & B, receive LP tokens
+    choice AddLiquidity : (ContractId LP.LPToken, ContractId Pool)
+      with
+        provider : Party
+        tokenACid : ContractId T.Token
+        tokenBCid : ContractId T.Token
+        amountA : Numeric 10
+        amountB : Numeric 10
+        minLPTokens : Numeric 10  -- Slippage protection
+        deadline : Time
+      controller provider, poolParty, lpIssuer
+      do
+        -- Deadline check
+        now <- getTime
+        assertMsg "Deadline passed" (now <= deadline)
+
+        -- Positive amounts
+        assertMsg "Positive amountA" (amountA > 0.0)
+        assertMsg "Positive amountB" (amountB > 0.0)
+
+        -- Calculate LP tokens to mint
+        let lpTokensToMint = if totalLPSupply == 0.0
+              then sqrt (amountA * amountB)  -- First LP: geometric mean
+              else
+                let shareA = amountA * totalLPSupply / reserveA
+                    shareB = amountB * totalLPSupply / reserveB
+                in min shareA shareB  -- Subsequent: proportional to reserves
+
+        -- Slippage protection
+        assertMsg "Slippage: LP tokens below minimum" (lpTokensToMint >= minLPTokens)
+
+        -- Transfer tokens to pool
+        -- Token.Transfer has controller owner (provider), so provider authorizes
+        _ <- exercise tokenACid T.Transfer with recipient = poolParty, qty = amountA
+        _ <- exercise tokenBCid T.Transfer with recipient = poolParty, qty = amountB
+
+        -- Mint LP tokens (lpIssuer creates token for provider)
+        lpToken <- create LP.LPToken with
+          issuer = lpIssuer
+          owner = provider
+          poolId = poolId
+          amount = lpTokensToMint
+
+        -- Update pool reserves (choice is consuming, auto-archives)
+        newPool <- create this with
+          totalLPSupply = totalLPSupply + lpTokensToMint
+          reserveA = reserveA + amountA
+          reserveB = reserveB + amountB
+
+        return (lpToken, newPool)
+
+    -- Remove liquidity: burn LP tokens, receive tokens A & B
+    choice RemoveLiquidity : (ContractId T.Token, ContractId T.Token, ContractId Pool)
+      with
+        provider : Party
+        lpTokenCid : ContractId LP.LPToken
+        lpTokenAmount : Numeric 10
+        minAmountA : Numeric 10  -- Slippage protection
+        minAmountB : Numeric 10  -- Slippage protection
+        poolTokenACid : ContractId T.Token  -- Pool's tokenA holdings
+        poolTokenBCid : ContractId T.Token  -- Pool's tokenB holdings
+        deadline : Time
+      controller provider, poolParty, lpIssuer
+      do
+        -- Deadline check
+        now <- getTime
+        assertMsg "Deadline passed" (now <= deadline)
+
+        -- Positive amount
+        assertMsg "Positive LP amount" (lpTokenAmount > 0.0)
+        assertMsg "Pool has supply" (totalLPSupply > 0.0)
+
+        -- Calculate tokens to return (proportional to LP share)
+        let shareRatio = lpTokenAmount / totalLPSupply
+        let amountAOut = reserveA * shareRatio
+        let amountBOut = reserveB * shareRatio
+
+        -- Slippage protection
+        assertMsg "Slippage: amountA below minimum" (amountAOut >= minAmountA)
+        assertMsg "Slippage: amountB below minimum" (amountBOut >= minAmountB)
+
+        -- Burn LP tokens
+        -- LP.Burn has controller owner (provider), so provider authorizes
+        _ <- exercise lpTokenCid LP.Burn with qty = lpTokenAmount
+
+        -- Transfer tokens from pool to provider
+        -- Token.Transfer has controller owner (poolParty), so poolParty authorizes
+        tokenAOut <- exercise poolTokenACid T.Transfer with recipient = provider, qty = amountAOut
+        tokenBOut <- exercise poolTokenBCid T.Transfer with recipient = provider, qty = amountBOut
+
+        -- Update pool reserves (choice is consuming, auto-archives)
+        newPool <- create this with
+          totalLPSupply = totalLPSupply - lpTokenAmount
+          reserveA = reserveA - amountAOut
+          reserveB = reserveB - amountBOut
+
+        return (tokenAOut, tokenBOut, newPool)
+
+    -- Legacy choices (kept for backward compatibility with existing swap tests)
     nonconsuming choice GetReservesForPool : (Numeric 10, Numeric 10)
       controller poolParty
       do
-        -- Token no longer has key
-        -- For AMM, reserves passed directly as parameters to ExecuteSwap
-        return (0.0, 0.0)
-    
+        return (reserveA, reserveB)
+
     nonconsuming choice GetSupply : Numeric 10
       controller lpIssuer
       do
-        return 0.0
+        return totalLPSupply

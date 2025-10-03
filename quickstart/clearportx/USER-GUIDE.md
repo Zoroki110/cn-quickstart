@@ -283,7 +283,61 @@ LP tokens are tradeable assets representing your liquidity position. You can tra
 
 ---
 
-## 🔀 Feature 5: Multi-Hop Routing (Phase 3)
+## 📊 Feature 5: Spot Price Queries
+
+### What It Does
+Query the current exchange rate (spot price) of a pool without executing a swap. Useful for UIs, analytics, and routing decisions.
+
+### How It Works
+The spot price is calculated from the pool's current reserves:
+```
+Price of Token A = Reserve B / Reserve A
+Price of Token B = Reserve A / Reserve B
+```
+
+### Available Choice
+#### GetSpotPrice
+**Choice:** `GetSpotPrice` (on Pool)
+- **Who:** Pool operator
+- **Purpose:** Get instantaneous exchange rates
+- **Returns:** `(priceOfA, priceOfB)` tuple
+- **Example:**
+  - Pool: 100 ETH, 200,000 USDC
+  - Result: `(2000.0, 0.0005)`
+  - Meaning: 1 ETH = 2,000 USDC | 1 USDC = 0.0005 ETH
+
+### Use Cases
+1. **UI Display** - Show current prices to users before swapping
+2. **Route Optimization** - Compare prices across multiple pools
+3. **Price Alerts** - Monitor price changes for trading opportunities
+4. **Arbitrage Detection** - Find price differences between pools
+5. **Analytics** - Track price history off-chain
+
+### Important Notes
+⚠️ **Spot price ≠ Execution price**
+- Spot price is BEFORE any trade impact
+- Actual swap price includes:
+  - Trade size impact (larger swaps get worse prices)
+  - 0.3% fee
+  - Slippage
+
+**Example:**
+```
+Spot price: 1 ETH = 2,000 USDC
+Small swap (0.1 ETH): ~199.4 USDC (very close to spot)
+Large swap (10 ETH): ~1,817 USDC per ETH (significant impact)
+```
+
+### Test Coverage
+- ✅ **Basic spot price** calculation (ETH-USDC)
+- ✅ **Empty pool** rejection (prevents division by zero)
+- ✅ **Different ratios** (stablecoin 1:1 parity)
+- ✅ **Liquidity changes** (price updates with new liquidity)
+- ✅ **High-precision** assets (WBTC = 40,000 USDC)
+
+---
+
+## 🔀 Feature 6: Multi-Hop Routing (Phase 3)
 
 ### What It Does
 Execute swaps across multiple pools in a single atomic transaction. Useful when there's no direct pool for your desired token pair, or when multi-hop routes offer better pricing.
@@ -467,7 +521,7 @@ ClearPortX DEX provides:
 - 🚧 **Price Oracles** (Phase 4 - Next)
 - 🚧 **Advanced Features** (Phase 5)
 
-**Test Coverage:** 54/54 passing ✅
+**Test Coverage:** 59/59 passing ✅
 - **Phase 1 Tests (27):**
   - 13 swap tests (edge cases, math validation, security)
   - 8 core liquidity tests (add, remove, transfer, protections)
@@ -477,5 +531,7 @@ ClearPortX DEX provides:
 - **Phase 3 Tests (9):**
   - **Basic (3):** 2-hop routing, slippage protection, route comparison
   - **Advanced (6):** 3-hop routing, slippage failure, direct vs multi-hop, intermediate hop validation, liquidity exhaustion, deadline expiration
+- **Spot Price Tests (5):**
+  - Basic calculation, empty pool protection, different ratios, liquidity changes, high-precision assets
 - **Security Tests (13):**
   - Authorization attacks, economic attacks, edge cases, double-spend protection

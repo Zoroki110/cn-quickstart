@@ -157,3 +157,16 @@ template Pool
       controller lpIssuer
       do
         return totalLPSupply
+
+    -- Get spot price (instantaneous exchange rate)
+    -- Returns (priceOfA, priceOfB) where:
+    -- - priceOfA = how much B you get for 1 A (e.g., 1 ETH = 2000 USDC)
+    -- - priceOfB = how much A you get for 1 B (e.g., 1 USDC = 0.0005 ETH)
+    -- Note: This is the mid-market price BEFORE any swap impact
+    nonconsuming choice GetSpotPrice : (Numeric 10, Numeric 10)
+      controller poolOperator
+      do
+        assertMsg "Pool has no liquidity" (reserveA > 0.0 && reserveB > 0.0)
+        let priceOfA = reserveB / reserveA  -- Price of A in terms of B
+        let priceOfB = reserveA / reserveB  -- Price of B in terms of A
+        return (priceOfA, priceOfB)

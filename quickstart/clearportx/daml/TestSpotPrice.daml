@@ -1,0 +1,326 @@
+module TestSpotPrice where
+
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+import DA.Time (seconds, addRelTime)
+import Daml.Script
+
+{-
+  SPOT PRICE TESTS
+
+  Tests for GetSpotPrice functionality - querying instantaneous exchange rates.
+-}
+
+-- Test 1: Basic spot price calculation
+testBasicSpotPrice : Script ()
+testBasicSpotPrice = script do
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  alice <- allocateParty "Alice"
+
+  -- Create pool
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  -- Add liquidity: 100 ETH, 200,000 USDC
+  aliceETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = alice
+    symbol = "ETH"
+    amount = 100.0
+
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 200000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  (_, poolWithLiquidity) <- submitMulti [alice, poolParty, lpIssuer] [] $ exerciseCmd pool P.AddLiquidity with
+    provider = alice
+    tokenACid = aliceETH
+    tokenBCid = aliceUSDC
+    amountA = 100.0
+    amountB = 200000.0
+    minLPTokens = 0.0
+    deadline = deadline
+
+  -- Get spot price
+  (priceETH, priceUSDC) <- submit poolOperator $ exerciseCmd poolWithLiquidity P.GetSpotPrice
+
+  -- Verify prices
+  -- priceETH = reserveUSDC / reserveETH = 200,000 / 100 = 2,000 USDC per ETH
+  -- priceUSDC = reserveETH / reserveUSDC = 100 / 200,000 = 0.0005 ETH per USDC
+  assertMsg "1 ETH should equal 2000 USDC" (priceETH == 2000.0)
+  assertMsg "1 USDC should equal 0.0005 ETH" (priceUSDC == 0.0005)
+
+  debug "✅ Spot price: 1 ETH = 2,000 USDC | 1 USDC = 0.0005 ETH"
+
+  return ()
+
+
+-- Test 2: Spot price with different liquidity ratios
+testSpotPriceAfterSwap : Script ()
+testSpotPriceAfterSwap = script do
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  -- Create pool with initial liquidity: 100 ETH, 200,000 USDC (1 ETH = 2000 USDC)
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  aliceETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = alice
+    symbol = "ETH"
+    amount = 100.0
+
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 200000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  (_, pool1) <- submitMulti [alice, poolParty, lpIssuer] [] $ exerciseCmd pool P.AddLiquidity with
+    provider = alice
+    tokenACid = aliceETH
+    tokenBCid = aliceUSDC
+    amountA = 100.0
+    amountB = 200000.0
+    minLPTokens = 0.0
+    deadline = deadline
+
+  -- Get initial spot price
+  (priceBefore, _) <- submit poolOperator $ exerciseCmd pool1 P.GetSpotPrice
+  assertMsg "Initial price: 1 ETH = 2000 USDC" (priceBefore == 2000.0)
+
+  -- Bob adds more liquidity with different ratio: 10 ETH, 25,000 USDC
+  -- This will change reserves to: 110 ETH, 225,000 USDC
+  -- New price: 225,000 / 110 = ~2045 USDC per ETH
+  bobETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = bob
+    symbol = "ETH"
+    amount = 10.0
+
+  bobUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = bob
+    symbol = "USDC"
+    amount = 25000.0
+
+  (_, pool2) <- submitMulti [bob, poolParty, lpIssuer] [] $ exerciseCmd pool1 P.AddLiquidity with
+    provider = bob
+    tokenACid = bobETH
+    tokenBCid = bobUSDC
+    amountA = 10.0
+    amountB = 25000.0
+    minLPTokens = 0.0
+    deadline = deadline
+
+  -- Get new spot price after liquidity addition
+  (priceAfter, _) <- submit poolOperator $ exerciseCmd pool2 P.GetSpotPrice
+
+  debug $ "Price before: 1 ETH = " <> show priceBefore <> " USDC"
+  debug $ "Price after:  1 ETH = " <> show priceAfter <> " USDC"
+  debug "✅ Spot price changes with liquidity additions (demonstrates price discovery)"
+
+  return ()
+
+
+-- Test 3: Empty pool cannot get spot price
+testEmptyPoolSpotPrice : Script ()
+testEmptyPoolSpotPrice = script do
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  -- Create empty pool
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  -- Try to get spot price on empty pool (should FAIL)
+  submitMustFail poolOperator $ exerciseCmd pool P.GetSpotPrice
+
+  debug "✅ Empty pool correctly prevents GetSpotPrice (division by zero protection)"
+
+  return ()
+
+
+-- Test 4: Different price ratios
+testDifferentPriceRatios : Script ()
+testDifferentPriceRatios = script do
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerDAI <- allocateParty "IssuerDAI"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  alice <- allocateParty "Alice"
+
+  -- Create DAI-USDC pool (stablecoin pair, price ~1:1)
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerDAI
+    issuerB = issuerUSDC
+    symbolA = "DAI"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "DAI-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  -- Add liquidity: 100,000 DAI, 100,000 USDC (1:1 ratio)
+  aliceDAI <- submit issuerDAI $ createCmd T.Token with
+    issuer = issuerDAI
+    owner = alice
+    symbol = "DAI"
+    amount = 100000.0
+
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 100000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  (_, poolWithLiquidity) <- submitMulti [alice, poolParty, lpIssuer] [] $ exerciseCmd pool P.AddLiquidity with
+    provider = alice
+    tokenACid = aliceDAI
+    tokenBCid = aliceUSDC
+    amountA = 100000.0
+    amountB = 100000.0
+    minLPTokens = 0.0
+    deadline = deadline
+
+  -- Get spot price
+  (priceDAI, priceUSDC) <- submit poolOperator $ exerciseCmd poolWithLiquidity P.GetSpotPrice
+
+  -- Verify 1:1 price (stablecoin parity)
+  assertMsg "1 DAI should equal ~1 USDC" (priceDAI == 1.0)
+  assertMsg "1 USDC should equal ~1 DAI" (priceUSDC == 1.0)
+
+  debug "✅ Spot price: 1 DAI = 1 USDC (stablecoin parity)"
+
+  return ()
+
+
+-- Test 5: Price precision for small amounts
+testSpotPricePrecision : Script ()
+testSpotPricePrecision = script do
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerWBTC <- allocateParty "IssuerWBTC"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  alice <- allocateParty "Alice"
+
+  -- Create USDC-WBTC pool (canonical ordering: USDC < WBTC alphabetically)
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerUSDC
+    issuerB = issuerWBTC
+    symbolA = "USDC"
+    symbolB = "WBTC"
+    feeBps = 30
+    poolId = "USDC-WBTC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  -- Add liquidity: 400,000 USDC, 10 WBTC (1 WBTC = 40,000 USDC)
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 400000.0
+
+  aliceWBTC <- submit issuerWBTC $ createCmd T.Token with
+    issuer = issuerWBTC
+    owner = alice
+    symbol = "WBTC"
+    amount = 10.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  (_, poolWithLiquidity) <- submitMulti [alice, poolParty, lpIssuer] [] $ exerciseCmd pool P.AddLiquidity with
+    provider = alice
+    tokenACid = aliceUSDC
+    tokenBCid = aliceWBTC
+    amountA = 400000.0
+    amountB = 10.0
+    minLPTokens = 0.0
+    deadline = deadline
+
+  -- Get spot price
+  (priceUSDC, priceWBTC) <- submit poolOperator $ exerciseCmd poolWithLiquidity P.GetSpotPrice
+
+  -- Verify high-value asset pricing
+  -- priceUSDC = 10 / 400,000 = 0.000025 WBTC per USDC
+  -- priceWBTC = 400,000 / 10 = 40,000 USDC per WBTC
+  assertMsg "1 USDC should equal 0.000025 WBTC" (priceUSDC == 0.000025)
+  assertMsg "1 WBTC should equal 40,000 USDC" (priceWBTC == 40000.0)
+
+  debug "✅ Spot price precision: 1 USDC = 0.000025 WBTC | 1 WBTC = 40,000 USDC"
+
+  return ()

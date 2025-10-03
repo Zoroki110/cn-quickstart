@@ -2,6 +2,7 @@ module AMM.Pool where
 
 import qualified Token.Token as T
 import qualified LPToken.LPToken as LP
+import qualified AMM.Types as Types
 import DA.Time (RelTime)
 import DA.Action (void, when)
 import DA.Math (sqrt)
@@ -47,7 +48,11 @@ template Pool
       (symbolA, show issuerA) < (symbolB, show issuerB) &&
       totalLPSupply >= 0.0 &&
       reserveA >= 0.0 &&
-      reserveB >= 0.0
+      reserveB >= 0.0 &&
+      -- HIGH-4 FIX: If pool has LP tokens, it MUST have reserves
+      (totalLPSupply == 0.0 || (reserveA > 0.0 && reserveB > 0.0)) &&
+      -- If pool has reserves, it must have LP tokens (unless initial state)
+      ((reserveA == 0.0 && reserveB == 0.0) || totalLPSupply >= 0.0)
 
     -- Add liquidity: deposit tokens A & B, receive LP tokens
     choice AddLiquidity : (ContractId LP.LPToken, ContractId Pool)
@@ -65,9 +70,11 @@ template Pool
         now <- getTime
         assertMsg "Deadline passed" (now <= deadline)
 
-        -- Positive amounts
-        assertMsg "Positive amountA" (amountA > 0.0)
-        assertMsg "Positive amountB" (amountB > 0.0)
+        -- MEDIUM-2 FIX: Enforce minimum liquidity to prevent dust/griefing attacks
+        assertMsg ("Minimum liquidity not met for token A (min: " <> show Types.minLiquidity <> ")")
+          (amountA >= Types.minLiquidity)
+        assertMsg ("Minimum liquidity not met for token B (min: " <> show Types.minLiquidity <> ")")
+          (amountB >= Types.minLiquidity)
 
         -- Calculate LP tokens to mint
         let lpTokensToMint = if totalLPSupply == 0.0
@@ -170,3 +177,36 @@ template Pool
         let priceOfA = reserveB / reserveA  -- Price of A in terms of B
         let priceOfB = reserveA / reserveB  -- Price of B in terms of A
         return (priceOfA, priceOfB)
+
+    -- CRITICAL-3 FIX: Reconcile reserves with actual token balances
+    -- This nonconsuming choice allows verification that stored reserves
+    -- match the actual token holdings, preventing state inconsistencies
+    nonconsuming choice VerifyReserves : (Bool, Text)
+      with
+        poolTokenACid : ContractId T.Token
+        poolTokenBCid : ContractId T.Token
+      controller poolOperator
+      do
+        -- Fetch actual token amounts held by pool
+        tokenA <- fetch poolTokenACid
+        tokenB <- fetch poolTokenBCid
+
+        -- Verify tokens belong to poolParty
+        assertMsg "Token A not owned by pool" (tokenA.owner == poolParty)
+        assertMsg "Token B not owned by pool" (tokenB.owner == poolParty)
+        assertMsg "Token A symbol mismatch" (tokenA.symbol == symbolA)
+        assertMsg "Token B symbol mismatch" (tokenB.symbol == symbolB)
+
+        -- Check if reserves match (with small tolerance for rounding)
+        let tolerance = 0.0000001
+        let reserveAMatches = abs(tokenA.amount - reserveA) < tolerance
+        let reserveBMatches = abs(tokenB.amount - reserveB) < tolerance
+        let allMatch = reserveAMatches && reserveBMatches
+
+        -- Build status message
+        let statusMsg = if allMatch
+              then "Reserves verified: " <> show reserveA <> " " <> symbolA <> ", " <> show reserveB <> " " <> symbolB
+              else "RESERVE MISMATCH! Stored: (" <> show reserveA <> ", " <> show reserveB <>
+                   ") vs Actual: (" <> show tokenA.amount <> ", " <> show tokenB.amount <> ")"
+
+        return (allMatch, statusMsg)

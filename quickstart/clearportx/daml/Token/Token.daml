@@ -5,6 +5,20 @@ import DA.Action (void, when)
 {-
   TOKEN DESIGN FOR AMM (Automated Market Maker)
 
+  ⚠️  SECURITY WARNING - TRUST ASSUMPTION (HIGH-1) ⚠️
+
+  This token design requires COMPLETE TRUST in the token issuer:
+  - Issuer has UNILATERAL CONTROL over all tokens
+  - Issuer can create unlimited tokens for any owner
+  - Issuer could "rug pull" by inflating supply
+  - No owner authorization required for token creation
+
+  This is a CENTRALIZED design chosen for AMM atomicity.
+  Users MUST trust token issuers completely.
+
+  For production: Consider adding supply caps, multi-sig governance,
+  or transitioning to a more decentralized token standard.
+
   CRITICAL DESIGN DECISIONS:
 
   1. ISSUER AS SOLE SIGNATORY

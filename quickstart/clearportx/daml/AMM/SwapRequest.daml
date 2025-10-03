@@ -3,7 +3,7 @@ module AMM.SwapRequest where
 import qualified Token.Token as T
 import qualified AMM.Pool as P
 import DA.Action (void)
-import DA.Time (RelTime, subTime)
+import DA.Time (RelTime, subTime, addRelTime, hours)
 
 -- Proposition de swap créée par le trader
 -- Pattern Proposal-Accept pour éviter les nested choices
@@ -96,11 +96,23 @@ template SwapReady
         poolAmountB : Numeric 10
       controller poolParty  -- ONLY poolParty, trader just receives
       do
+        -- CRITICAL-2 FIX: Verify pool reserves match actual Pool contract
+        pool <- fetch poolCid
+        assertMsg "Pool reserve A mismatch - potential manipulation detected"
+          (poolAmountA == pool.reserveA)
+        assertMsg "Pool reserve B mismatch - potential manipulation detected"
+          (poolAmountB == pool.reserveB)
+
         -- Validations
         now <- getTime
         assertMsg "Swap expired" (now <= deadline)
         let timeDiff = deadline `subTime` now
         assertMsg "TTL exceeded" (timeDiff <= maxTTL)
+
+        -- MEDIUM-1 FIX: Prevent far-future deadlines (max 1 hour from now)
+        let maxAllowedDeadline = addRelTime now (hours 1)
+        assertMsg "Deadline too far in future (max 1 hour allowed)"
+          (deadline <= maxAllowedDeadline)
 
         assertMsg "Valid input symbol" (inputSymbol == symbolA || inputSymbol == symbolB)
         assertMsg "Different symbols" (inputSymbol /= outputSymbol)
@@ -112,20 +124,37 @@ template SwapReady
               then (poolAmountA, poolAmountB, poolTokenBCid)
               else (poolAmountB, poolAmountA, poolTokenACid)
 
-        assertMsg "No input reserve" (rin > 0.0)
-        assertMsg "No output reserve" (rout > 0.0)
+        -- CRITICAL-1 FIX: Validate ALL values before any division operations
+        assertMsg "Input reserve must be positive" (rin > 0.0)
+        assertMsg "Output reserve must be positive" (rout > 0.0)
+        assertMsg "Input amount must be positive" (inputAmount > 0.0)
+        assertMsg "Fee basis points must be valid" (feeBps >= 0 && feeBps <= 10000)
+
+        -- HIGH-2 FIX: Flash loan protection - limit swap to 10% of output reserve
+        let maxOutputAmount = rout * 0.1
+        assertMsg "Swap too large (max 10% of pool reserve per transaction)"
+          (inputAmount <= rin * 0.15)  -- Allow slightly more input since fees reduce impact
 
         -- Formule Uniswap v2: amountOut = (amountIn * feeMultiplier * reserveOut) / (reserveIn + amountIn * feeMultiplier)
         let feeMul = (10000.0 - intToDecimal feeBps) / 10000.0
         let ainFee = inputAmount * feeMul
         let denom = rin + ainFee
-        assertMsg "Zero denominator" (denom > 0.0)
+
+        -- Denominator guaranteed > 0 because: rin > 0 AND ainFee >= 0
         let aout = (ainFee * rout) / denom
 
         assertMsg "Min output not met" (aout >= minOutput)
         assertMsg "Liquidity exhausted" (aout < rout)
 
-        -- Price impact check
+        -- Verify output doesn't exceed flash loan protection limit
+        assertMsg "Output exceeds 10% pool reserve limit (flash loan protection)"
+          (aout <= maxOutputAmount)
+
+        -- MEDIUM-3 FIX: Enforce reasonable price impact limits
+        assertMsg "Price impact tolerance too high (max 50% allowed)"
+          (maxPriceImpactBps <= 5000)
+
+        -- Price impact check (safe because rin, rout, pBefore all > 0)
         let pBefore = rout / rin
         let pAfter = (rout - aout) / (rin + inputAmount)
         let impBps = abs(pAfter - pBefore) / pBefore * 10000.0

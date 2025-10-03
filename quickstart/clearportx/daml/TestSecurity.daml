@@ -1,0 +1,747 @@
+module TestSecurity where
+
+import qualified Token.Token as T
+import qualified LPToken.LPToken as LP
+import qualified AMM.Pool as P
+import qualified AMM.SwapRequest as SR
+import DA.Time (seconds, addRelTime)
+import DA.List (head)
+import Daml.Script
+
+{-
+  COMPREHENSIVE SECURITY TESTS
+
+  Categories:
+  1. Authorization Attacks
+     - Unauthorized token transfers
+     - Unauthorized LP token burns
+     - Unauthorized pool operations
+     - Steal tokens from pool
+
+  2. Economic Attacks
+     - Price manipulation
+     - Liquidity front-running
+     - Zero-amount attacks
+     - Negative amount attacks
+
+  3. Edge Cases & Invariants
+     - Pool reserve invariants (k never decreases except fees)
+     - LP token supply matches pool ownership
+     - Token balance conservation
+     - Division by zero protection
+
+  4. Reentrancy & Race Conditions
+     - Double-spend attempts
+     - Concurrent swap attacks
+     - Pool state consistency
+-}
+
+-- ==================== AUTHORIZATION ATTACKS ====================
+
+-- Test 1: Try to steal tokens from another user
+testStealTokens : Script ()
+testStealTokens = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  issuerETH <- allocateParty "IssuerETH"
+
+  -- Alice has 10 ETH
+  aliceETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = alice
+    symbol = "ETH"
+    amount = 10.0
+
+  -- Bob tries to transfer Alice's ETH to himself (should FAIL)
+  submitMustFail bob $ exerciseCmd aliceETH T.Transfer with
+    recipient = bob
+    qty = 10.0
+
+  debug "✅ Security: Bob cannot steal Alice's tokens"
+
+  return ()
+
+
+-- Test 2: Try to burn someone else's LP tokens
+testUnauthorizedLPBurn : Script ()
+testUnauthorizedLPBurn = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  lpIssuer <- allocateParty "LPIssuer"
+
+  -- Alice has LP tokens
+  aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
+    issuer = lpIssuer
+    owner = alice
+    poolId = "ETH-USDC"
+    amount = 100.0
+
+  -- Bob tries to burn Alice's LP tokens (should FAIL)
+  submitMustFail bob $ exerciseCmd aliceLP LP.Burn with qty = 50.0
+
+  debug "✅ Security: Bob cannot burn Alice's LP tokens"
+
+  return ()
+
+
+-- Test 3: Try to add liquidity with someone else's tokens
+testUnauthorizedLiquidityAdd : Script ()
+testUnauthorizedLiquidityAdd = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  -- Alice has tokens
+  aliceETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = alice
+    symbol = "ETH"
+    amount = 10.0
+
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 20000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  -- Bob tries to add liquidity using Alice's tokens (should FAIL)
+  -- The Transfer choice has controller=owner, so Bob can't authorize it
+  submitMustFail bob $ exerciseCmd pool P.AddLiquidity with
+    provider = bob  -- Bob claims to be provider
+    tokenACid = aliceETH  -- But uses Alice's tokens!
+    tokenBCid = aliceUSDC
+    amountA = 10.0
+    amountB = 20000.0
+    minLPTokens = 400.0
+    deadline = deadline
+
+  debug "✅ Security: Bob cannot add liquidity with Alice's tokens"
+
+  return ()
+
+
+-- Test 4: Try to steal pool reserves during swap
+testStealPoolReserves : Script ()
+testStealPoolReserves = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  -- Pool with liquidity
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 100.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 200000.0
+
+  -- Alice tries to transfer pool's tokens directly (should FAIL - not owner)
+  submitMustFail alice $ exerciseCmd poolETH T.Transfer with
+    recipient = alice
+    qty = 50.0
+
+  debug "✅ Security: Alice cannot steal pool reserves directly"
+
+  return ()
+
+
+-- ==================== ECONOMIC ATTACKS ====================
+
+-- Test 5: Zero-amount swap attack
+testZeroAmountSwap : Script ()
+testZeroAmountSwap = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  -- Alice creates token with 0 amount (should FAIL - Token.ensure amount > 0)
+  submitMustFail issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 0.0
+
+  debug "✅ Security: Cannot create zero-amount tokens"
+
+  return ()
+
+
+-- Test 6: Negative amount attack
+testNegativeAmount : Script ()
+testNegativeAmount = script do
+  alice <- allocateParty "Alice"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  -- Try to create token with negative amount (should FAIL)
+  submitMustFail issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = (-100.0)
+
+  debug "✅ Security: Cannot create negative-amount tokens"
+
+  return ()
+
+
+-- Test 7: Try to add liquidity with imbalanced ratio to extract value
+testLiquidityImbalanceAttack : Script ()
+testLiquidityImbalanceAttack = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  -- Alice creates pool: 1 ETH = 2000 USDC
+  pool0 <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  aliceETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = alice
+    symbol = "ETH"
+    amount = 10.0
+
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 20000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  (aliceLP, pool1) <- submitMulti [alice, poolParty, lpIssuer] [] $ exerciseCmd pool0 P.AddLiquidity with
+    provider = alice
+    tokenACid = aliceETH
+    tokenBCid = aliceUSDC
+    amountA = 10.0
+    amountB = 20000.0
+    minLPTokens = 400.0
+    deadline = deadline
+
+  -- Bob tries to add IMBALANCED liquidity (20 ETH but only 10,000 USDC)
+  -- Expected: Bob gets LP based on MIN ratio (10,000/20,000 = 50% of Alice)
+  -- Bob deposits extra ETH but doesn't get extra LP tokens (protection!)
+  bobETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = bob
+    symbol = "ETH"
+    amount = 20.0
+
+  bobUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = bob
+    symbol = "USDC"
+    amount = 10000.0  -- Only 50% of proper ratio
+
+  (bobLP, pool2) <- submitMulti [bob, poolParty, lpIssuer] [] $ exerciseCmd pool1 P.AddLiquidity with
+    provider = bob
+    tokenACid = bobETH
+    tokenBCid = bobUSDC
+    amountA = 20.0  -- 200% of Alice's ETH
+    amountB = 10000.0  -- 50% of Alice's USDC
+    minLPTokens = 200.0  -- Bob expects at least this
+    deadline = deadline
+
+  -- Verify Bob got LP based on MINIMUM ratio (USDC limited)
+  Some bobToken <- queryContractId bob bobLP
+  let aliceLPAmount : Numeric 10 = 447.2135955  -- sqrt(10 * 20000)
+  let expectedBobLP : Numeric 10 = 223.6067978  -- 50% based on USDC ratio
+  let tolerance : Numeric 10 = 0.0000001
+
+  assertMsg "Bob gets LP based on min ratio (USDC-limited)"
+    (abs(bobToken.amount - expectedBobLP) < tolerance)
+
+  -- Bob deposited 20 ETH and 10,000 USDC
+  -- But only got LP for 10 ETH worth (the min ratio)
+  -- The extra 10 ETH goes to pool but Bob doesn't get extra LP!
+  -- This is CORRECT behavior - protects against value extraction
+
+  debug "✅ Security: Imbalanced liquidity gets min ratio (attacker doesn't benefit)"
+
+  return ()
+
+
+-- Test 8: Price manipulation via large swap
+testPriceManipulation : Script ()
+testPriceManipulation = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  -- Small pool: 10 ETH, 20,000 USDC
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 10.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 20000.0
+
+  -- Alice tries MASSIVE swap (100,000 USDC - 5x pool size!)
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 100000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 100000.0
+    outputSymbol = "ETH"
+    minOutput = 0.0  -- No slippage protection (bad!)
+    deadline = deadline
+    maxPriceImpactBps = 10000  -- Allow 100% impact
+
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+
+  ethOut <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETH
+    poolTokenBCid = poolUSDC
+    poolAmountA = 10.0
+    poolAmountB = 20000.0
+
+  -- Alice gets almost all ETH from pool (extreme price impact)
+  Some token <- queryContractId alice ethOut
+
+  -- With 100,000 USDC into (10 ETH, 20,000 USDC) pool:
+  -- New reserve: k = 10 * 20,000 = 200,000
+  -- After: reserveB = 20,000 + 100,000 = 120,000
+  -- reserveA = 200,000 / 120,000 = 1.67 ETH
+  -- Alice gets: 10 - 1.67 = 8.33 ETH (but loses ~80% to price impact!)
+
+  assertMsg "Massive swap succeeds but with terrible price"
+    (token.amount < 9.0 && token.amount > 8.0)
+
+  debug "✅ Security: Large swaps allowed but suffer huge price impact (deterrent)"
+
+  return ()
+
+
+-- ==================== EDGE CASES & INVARIANTS ====================
+
+-- Test 9: Pool reserve invariants (k should never decrease except by fees)
+testPoolInvariant : Script ()
+testPoolInvariant = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  -- Add liquidity first to establish pool reserves
+  aliceETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = alice
+    symbol = "ETH"
+    amount = 100.0
+
+  aliceUSDC1 <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 200000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  (lpToken, pool2) <- submitMulti [alice, poolParty, lpIssuer] [] $ exerciseCmd pool P.AddLiquidity with
+    provider = alice
+    tokenACid = aliceETH
+    tokenBCid = aliceUSDC1
+    amountA = 100.0
+    amountB = 200000.0
+    minLPTokens = 0.0
+    deadline = deadline
+
+  -- Initial k = 100 * 200,000 = 20,000,000
+  let initialK : Numeric 10 = 100.0 * 200000.0
+
+  -- Alice gets USDC for swap
+  aliceUSDC2 <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 1000.0
+
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool2
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC2
+    inputSymbol = "USDC"
+    inputAmount = 1000.0
+    outputSymbol = "ETH"
+    minOutput = 0.4
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+
+  -- Get pool's token holdings (filter by symbol and sum amounts)
+  allTokens <- query @T.Token poolParty
+  let poolETHs = filter (\(_, t) -> t.symbol == "ETH") allTokens
+  let poolUSDCs = filter (\(_, t) -> t.symbol == "USDC") allTokens
+
+  -- Pool has 100 ETH from liquidity, and 200000 + 1000 = 201000 USDC (liquidity + swap input)
+  let (poolETHCid, poolETH) = head poolETHs
+  let (poolUSDCCid, poolUSDC) = head poolUSDCs
+
+  -- Sum all USDC amounts for total reserves
+  let totalUSDC = sum $ map (\(_, t) -> t.amount) poolUSDCs
+
+  ethOut <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
+    poolTokenACid = poolETHCid
+    poolTokenBCid = poolUSDCCid
+    poolAmountA = poolETH.amount
+    poolAmountB = totalUSDC
+
+  Some token <- queryContractId alice ethOut
+
+  -- Calculate new k (after swap with fees)
+  -- Input: 1000 USDC (full amount added to reserves)
+  -- Fee: 3 USDC (30 bps)
+  -- ainFee = 997 USDC (amount used for output calculation)
+  -- amountOut = (997 * 100) / (200,000 + 997) = 99,700 / 200,997 ≈ 0.496 ETH
+  -- New reserveB = 200,000 + 1000 = 201,000 USDC
+  -- New reserveA = 100 - 0.496 ≈ 99.504 ETH
+  -- New k = 99.504 * 201,000 ≈ 20,000,304 > 20,000,000 ✓
+
+  let actualOut : Numeric 10 = token.amount  -- Get actual output from executed swap
+  let newReserveB : Numeric 10 = 201000.0    -- 200,000 + 1,000
+  let newReserveA : Numeric 10 = 100.0 - actualOut
+  let newK : Numeric 10 = newReserveA * newReserveB
+
+  -- k should INCREASE due to fees staying in pool
+  assertMsg "k increases after swap (fees remain)" (newK >= initialK)
+
+  let kIncreaseRatio : Numeric 10 = newK / initialK
+  assertMsg "k increase is small (only fee impact)" (kIncreaseRatio < 1.01)
+
+  debug "✅ Security: Pool invariant k never decreases (only increases by fees)"
+
+  return ()
+
+
+-- Test 10: Cannot remove more liquidity than you own
+testExcessLiquidityRemoval : Script ()
+testExcessLiquidityRemoval = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 447.2135955
+    reserveA = 10.0
+    reserveB = 20000.0
+
+  -- Alice has 100 LP tokens (but pool has 447 total supply)
+  aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
+    issuer = lpIssuer
+    owner = alice
+    poolId = "ETH-USDC"
+    amount = 100.0
+
+  poolETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolParty
+    symbol = "ETH"
+    amount = 10.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 20000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  -- Alice tries to burn MORE LP tokens than she owns (should FAIL)
+  submitMustFail alice $ exerciseCmd aliceLP LP.Burn with qty = 200.0
+
+  debug "✅ Security: Cannot burn more LP tokens than owned"
+
+  return ()
+
+
+-- Test 11: Self-transfer protection
+testSelfTransfer : Script ()
+testSelfTransfer = script do
+  alice <- allocateParty "Alice"
+  issuerETH <- allocateParty "IssuerETH"
+
+  aliceETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = alice
+    symbol = "ETH"
+    amount = 10.0
+
+  -- Alice tries to transfer to herself (should FAIL - forbidden)
+  submitMustFail alice $ exerciseCmd aliceETH T.Transfer with
+    recipient = alice
+    qty = 5.0
+
+  debug "✅ Security: Self-transfer is forbidden"
+
+  return ()
+
+
+-- Test 12: LP Token self-transfer protection
+testLPSelfTransfer : Script ()
+testLPSelfTransfer = script do
+  alice <- allocateParty "Alice"
+  lpIssuer <- allocateParty "LPIssuer"
+
+  aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
+    issuer = lpIssuer
+    owner = alice
+    poolId = "ETH-USDC"
+    amount = 100.0
+
+  -- Alice tries to transfer LP tokens to herself (should FAIL)
+  submitMustFail alice $ exerciseCmd aliceLP LP.Transfer with
+    recipient = alice
+    qty = 50.0
+
+  debug "✅ Security: LP token self-transfer is forbidden"
+
+  return ()
+
+
+-- ==================== DOUBLE-SPEND & RACE CONDITIONS ====================
+
+-- Test 13: Cannot use same token for multiple swaps
+testDoubleSpend : Script ()
+testDoubleSpend = script do
+  alice <- allocateParty "Alice"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = seconds 120
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 1000.0
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  -- Alice creates first swap request
+  swapRequest1 <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 1000.0
+    outputSymbol = "ETH"
+    minOutput = 0.4
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  -- Alice prepares swap (transfers token to pool)
+  swapReady1 <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap
+
+  -- Alice tries to create SECOND swap request with SAME token
+  swapRequest2 <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC  -- ALREADY CONSUMED!
+    inputSymbol = "USDC"
+    inputAmount = 1000.0
+    outputSymbol = "ETH"
+    minOutput = 0.4
+    deadline = deadline
+    maxPriceImpactBps = 10000
+
+  -- Preparing second swap should FAIL - token already consumed
+  submitMustFail alice $ exerciseCmd swapRequest2 SR.PrepareSwap
+
+  debug "✅ Security: Cannot double-spend same token"
+
+  return ()

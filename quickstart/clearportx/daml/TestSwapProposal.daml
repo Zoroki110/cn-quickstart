@@ -11,6 +11,7 @@ testSwapWithProposal : Script ()
 testSwapWithProposal = script do
   -- Setup parties
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   poolParty <- allocateParty "PoolParty"
   lpIssuer <- allocateParty "LPIssuer"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -32,6 +33,7 @@ testSwapWithProposal = script do
     totalLPSupply = 0.0  -- No LP tracking in legacy tests
     reserveA = 10.0      -- 10 ETH
     reserveB = 20000.0   -- 20,000 USDC
+    protocolFeeReceiver = clearportx
 
   -- Créer tokens de liquidité pour le pool
   -- Token a signatory issuer, donc submit issuer
@@ -78,15 +80,15 @@ testSwapWithProposal = script do
     outputSymbol = "ETH"
     minOutput = 0.0  -- Pas de slippage protection pour le test
     deadline = deadline
-    maxPriceImpactBps = 10000  -- Accepter jusqu'à 100% de price impact
+    maxPriceImpactBps = 5000  -- Accepter jusqu'à 100% de price impact
 
   debug "TX 1 complete: SwapRequest created"
 
   -- TX 2: Alice prépare le swap (transfert USDC au pool)
   -- submit alice ONLY because PrepareSwap has controller trader
   -- poolParty just receives the tokens
-  swapReady <- submit alice $
-    exerciseCmd swapRequest PrepareSwap
+  (swapReady, _) <- submit alice $
+    exerciseCmd swapRequest PrepareSwap with protocolFeeReceiver = clearportx
 
   debug "TX 2 complete: Alice transferred 100 USDC to pool, SwapReady created"
 

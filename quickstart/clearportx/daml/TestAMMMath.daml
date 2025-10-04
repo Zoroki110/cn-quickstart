@@ -15,6 +15,7 @@ testConstantProduct = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -33,6 +34,7 @@ testConstantProduct = script do
     totalLPSupply = 0.0
     reserveA = 100.0  -- Initial reserves: 100 ETH
     reserveB = 200000.0  -- 200,000 USDC
+    protocolFeeReceiver = clearportx
 
   -- Initial reserves: 100 ETH, 200,000 USDC
   let initialETH = 100.0
@@ -78,9 +80,9 @@ testConstantProduct = script do
     outputSymbol = "ETH"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
   (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
@@ -124,6 +126,7 @@ testPriceImpact = script do
   bob <- allocateParty "Bob"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   poolOperator2 <- allocateParty "PoolOperator2"  -- For second pool
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
@@ -143,6 +146,7 @@ testPriceImpact = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    protocolFeeReceiver = clearportx
 
   let reserveETH = 10.0
   let reserveUSDC = 20000.0
@@ -195,12 +199,12 @@ testPriceImpact = script do
     outputSymbol = "ETH"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
   -- Calculate initial price BEFORE any swaps
   let initialPrice = reserveUSDC / reserveETH  -- 2000 USDC per ETH
 
-  swapReadyAlice <- submit alice $ exerciseCmd swapRequestAlice SR.PrepareSwap
+  (swapReadyAlice, _) <- submit alice $ exerciseCmd swapRequestAlice SR.PrepareSwap with protocolFeeReceiver = clearportx
   (ethAlice, _) <- submit poolParty $ exerciseCmd swapReadyAlice SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
@@ -250,6 +254,7 @@ testPriceImpact = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- Same as pool1: 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    protocolFeeReceiver = clearportx
 
   -- Bob's large swap (on fresh pool2)
   swapRequestBob <- submit bob $ createCmd SR.SwapRequest with
@@ -269,9 +274,9 @@ testPriceImpact = script do
     outputSymbol = "ETH"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReadyBob <- submit bob $ exerciseCmd swapRequestBob SR.PrepareSwap
+  (swapReadyBob, _) <- submit bob $ exerciseCmd swapRequestBob SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Use fresh pool tokens
   (ethBob, _) <- submit poolParty $ exerciseCmd swapReadyBob SR.ExecuteSwap with
@@ -302,6 +307,7 @@ testFeeAccumulation = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -320,6 +326,7 @@ testFeeAccumulation = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    protocolFeeReceiver = clearportx
 
   let initialETH = 10.0
   let initialUSDC = 20000.0
@@ -363,9 +370,9 @@ testFeeAccumulation = script do
     outputSymbol = "ETH"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
   (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
@@ -412,6 +419,7 @@ testBidirectionalSwaps = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -430,6 +438,7 @@ testBidirectionalSwaps = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    protocolFeeReceiver = clearportx
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -471,9 +480,9 @@ testBidirectionalSwaps = script do
     outputSymbol = "ETH"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady1 <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap
+  (swapReady1, _) <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap with protocolFeeReceiver = clearportx
   (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
     poolTokenACid = poolETH
     poolTokenBCid = poolUSDC
@@ -506,9 +515,9 @@ testBidirectionalSwaps = script do
         outputSymbol = "USDC"
         minOutput = 0.0
         deadline = deadline
-        maxPriceImpactBps = 10000
+        maxPriceImpactBps = 5000
 
-      swapReady2 <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap
+      (swapReady2, _) <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap with protocolFeeReceiver = clearportx
       (usdcReceived, _) <- submit poolParty $ exerciseCmd swapReady2 SR.ExecuteSwap with
         poolTokenACid = poolETH
         poolTokenBCid = poolUSDC

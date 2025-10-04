@@ -28,8 +28,8 @@ See [FINAL-AUDIT-REPORT.md](docs/FINAL-AUDIT-REPORT.md) for complete security an
 ## Quick Start
 
 ### Prerequisites
-- [DAML SDK](https://docs.daml.com/getting-started/installation.html) 2.10.2+
-- Canton Ledger (or Canton testnet access)
+- [DAML SDK](https://docs.daml.com/getting-started/installation.html) 3.3.0-snapshot.20250502.13767.0.v2fc6c7e2
+- Canton 3.3.0+ (Splice testnet or standalone)
 
 ### Build
 ```bash
@@ -44,8 +44,19 @@ daml test
 ```
 
 ### Deploy to Canton
+
+**NEW**: See [DEPLOYMENT-CANTON-3.3.md](./DEPLOYMENT-CANTON-3.3.md) for complete deployment guide.
+
 ```bash
-daml ledger upload-dar .daml/dist/clearportx-1.0.0.dar --host localhost --port 5011
+# Via Splice infrastructure (recommended)
+docker cp .daml/dist/clearportx-1.0.0.dar splice-onboarding:/canton/dars/
+docker exec splice-onboarding bash /tmp/upload-clearportx.sh
+
+# Or via JSON API
+curl -X POST http://localhost:3975/v2/packages \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @.daml/dist/clearportx-1.0.0.dar
 ```
 
 ## Architecture

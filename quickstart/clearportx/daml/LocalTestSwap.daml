@@ -15,6 +15,7 @@ testLocalSwap = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
@@ -57,7 +58,7 @@ testLocalSwap = script do
   debug "📝 Swap request created"
 
   -- Prepare swap (transfer USDC to pool)
-  swapReady <- submit alice $ exerciseCmd swapReq SR.PrepareSwap
+  (swapReady, _) <- submit alice $ exerciseCmd swapReq SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   debug "✅ Swap prepared (USDC transferred to pool)"
 

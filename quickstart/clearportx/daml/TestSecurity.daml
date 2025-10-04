@@ -91,6 +91,7 @@ testUnauthorizedLiquidityAdd = script do
   bob <- allocateParty "Bob"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -109,6 +110,7 @@ testUnauthorizedLiquidityAdd = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Alice has tokens
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -148,6 +150,7 @@ testStealPoolReserves = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -167,6 +170,7 @@ testStealPoolReserves = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -198,6 +202,7 @@ testZeroAmountSwap = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -216,6 +221,7 @@ testZeroAmountSwap = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Alice creates token with 0 amount (should FAIL - Token.ensure amount > 0)
   submitMustFail issuerUSDC $ createCmd T.Token with
@@ -254,6 +260,7 @@ testLiquidityImbalanceAttack = script do
   bob <- allocateParty "Bob"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -273,6 +280,7 @@ testLiquidityImbalanceAttack = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   aliceETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -347,6 +355,7 @@ testPriceManipulation = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -366,6 +375,7 @@ testPriceManipulation = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -406,9 +416,9 @@ testPriceManipulation = script do
     outputSymbol = "ETH"
     minOutput = 0.0  -- No slippage protection (bad!)
     deadline = deadline
-    maxPriceImpactBps = 10000  -- Allow 100% impact
+    maxPriceImpactBps = 5000  -- Allow 100% impact
 
-  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   (ethOut, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
     poolTokenACid = poolETH
@@ -439,6 +449,7 @@ testPoolInvariant = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -457,6 +468,7 @@ testPoolInvariant = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Add liquidity first to establish pool reserves
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -510,9 +522,9 @@ testPoolInvariant = script do
     outputSymbol = "ETH"
     minOutput = 0.4
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap
+  (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Get pool's token holdings (filter by symbol and sum amounts)
   allTokens <- query @T.Token poolParty
@@ -563,6 +575,7 @@ testExcessLiquidityRemoval = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -581,6 +594,7 @@ testExcessLiquidityRemoval = script do
     totalLPSupply = 447.2135955
     reserveA = 10.0
     reserveB = 20000.0
+    protocolFeeReceiver = clearportx
 
   -- Alice has 100 LP tokens (but pool has 447 total supply)
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
@@ -664,6 +678,7 @@ testDoubleSpend = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -682,6 +697,7 @@ testDoubleSpend = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
     issuer = issuerUSDC
@@ -710,10 +726,10 @@ testDoubleSpend = script do
     outputSymbol = "ETH"
     minOutput = 0.4
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
   -- Alice prepares swap (transfers token to pool)
-  swapReady1 <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap
+  (swapReady1, _) <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Alice tries to create SECOND swap request with SAME token
   swapRequest2 <- submit alice $ createCmd SR.SwapRequest with
@@ -733,10 +749,10 @@ testDoubleSpend = script do
     outputSymbol = "ETH"
     minOutput = 0.4
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
   -- Preparing second swap should FAIL - token already consumed
-  submitMustFail alice $ exerciseCmd swapRequest2 SR.PrepareSwap
+  submitMustFail alice $ exerciseCmd swapRequest2 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   debug "✅ Security: Cannot double-spend same token"
 

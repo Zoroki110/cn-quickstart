@@ -94,3 +94,29 @@ template Token
         assertMsg "Positive credit" (qty > 0.0)
         archive self
         create this with amount = amount + qty
+    -- TransferSplit: Like Transfer but returns both remainder and sent token CIDs
+    -- Used for protocol fee extraction where we need both tokens
+    nonconsuming choice TransferSplit : (Optional (ContractId Token), ContractId Token)
+      with
+        recipient : Party
+        qty       : Numeric 10
+      controller owner
+      do
+        assertMsg "Positive quantity" (qty > 0.0)
+        assertMsg "Sufficient balance" (qty <= amount)
+        assertMsg "Self-transfer forbidden" (recipient /= owner)
+
+        -- Create remainder FIRST if needed
+        remainderCid <- if qty < amount
+          then do
+            cid <- create this with owner = owner, amount = amount - qty
+            return (Some cid)
+          else return None
+
+        -- Create token for recipient
+        newToken <- create this with owner = recipient, amount = qty
+
+        -- Archive LAST to avoid key collision
+        archive self
+
+        return (remainderCid, newToken)

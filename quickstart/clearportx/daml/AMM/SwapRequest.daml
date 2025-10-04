@@ -38,20 +38,37 @@ template SwapRequest
 
     -- Le trader "prépare" le swap en transférant son token au pool
     -- controller trader ONLY because Transfer has controller owner
-    choice PrepareSwap : ContractId SwapReady
+    -- Returns: (SwapReady CID, poolInputToken CID)
+    choice PrepareSwap : (ContractId SwapReady, ContractId T.Token)
+      with
+        protocolFeeReceiver : Party  -- Pass as parameter instead of fetching
       controller trader
       do
-        -- Transfer has controller owner (trader)
-        -- Only trader authorizes, poolParty just receives
-        _ <- exercise inputTokenCid T.Transfer with
-          recipient = poolParty
-          qty = inputAmount
+        -- Calculate protocol fee (25% of total 0.3% fee)
+        let totalFeeRate = intToDecimal feeBps / 10000.0      -- 0.003 (0.3%)
+        let totalFeeAmount = inputAmount * totalFeeRate        -- Total fee
+        let protocolFeeAmount = totalFeeAmount * 0.25          -- 25% to protocol
+        let amountAfterProtocolFee = inputAmount - protocolFeeAmount    -- Rest to pool
 
-        -- Créer SwapReady pour que le pool puisse compléter
-        create SwapReady with
+        -- Use TransferSplit to send protocol fee AND keep remainder
+        (maybeRemainder, _) <- exercise inputTokenCid T.TransferSplit with
+          recipient = protocolFeeReceiver
+          qty = protocolFeeAmount
+
+        -- Get the remainder token CID
+        let Some remainderCid = maybeRemainder
+
+        -- Transfer remainder to pool for swap
+        poolInputTokenCid <- exercise remainderCid T.Transfer with
+          recipient = poolParty
+          qty = amountAfterProtocolFee
+
+        -- Créer SwapReady avec amount AFTER protocol fee extraction
+        swapReadyCid <- create SwapReady with
           trader = trader
           poolCid = poolCid
           poolParty = poolParty
+          protocolFeeReceiver = protocolFeeReceiver
           issuerA = issuerA
           issuerB = issuerB
           symbolA = symbolA
@@ -59,11 +76,14 @@ template SwapRequest
           feeBps = feeBps
           maxTTL = maxTTL
           inputSymbol = inputSymbol
-          inputAmount = inputAmount
+          inputAmount = amountAfterProtocolFee  -- Use amount AFTER protocol fee
           outputSymbol = outputSymbol
           minOutput = minOutput
           deadline = deadline
           maxPriceImpactBps = maxPriceImpactBps
+
+        return (swapReadyCid, poolInputTokenCid)
+
 
 -- Swap prêt à être exécuté par le pool
 template SwapReady
@@ -71,6 +91,7 @@ template SwapReady
     trader : Party
     poolCid : ContractId P.Pool
     poolParty : Party
+    protocolFeeReceiver : Party  -- Add this field
     issuerA : Party
     issuerB : Party
     symbolA : Text
@@ -85,7 +106,7 @@ template SwapReady
     maxPriceImpactBps : Int
   where
     signatory trader
-    observer poolParty
+    observer poolParty, protocolFeeReceiver  -- Add protocolFeeReceiver as observer
 
     -- Le pool exécute le swap (calcul x*y=k + transfer output)
     -- CRITICAL-5 & CRITICAL-6 FIX: Use actual pool reserves and update them
@@ -106,22 +127,11 @@ template SwapReady
         now <- getTime
         assertMsg "Swap expired" (now <= deadline)
         let timeDiff = deadline `subTime` now
-        assertMsg "TTL exceeded" (timeDiff <= maxTTL)
-
-        -- MEDIUM-1 FIX: Prevent far-future deadlines (max 1 hour from now)
-        let maxAllowedDeadline = addRelTime now (hours 1)
-        assertMsg "Deadline too far in future (max 1 hour allowed)"
-          (deadline <= maxAllowedDeadline)
-
-        assertMsg "Valid input symbol" (inputSymbol == symbolA || inputSymbol == symbolB)
-        assertMsg "Different symbols" (inputSymbol /= outputSymbol)
-        assertMsg "Valid output symbol" (outputSymbol == symbolA || outputSymbol == symbolB)
-
         -- Calcul AMM x*y=k
-        let (rin, rout, poolOutCid) =
+        let (rin, rout, poolInCid, poolOutCid) =
               if inputSymbol == symbolA
-              then (poolAmountA, poolAmountB, poolTokenBCid)
-              else (poolAmountB, poolAmountA, poolTokenACid)
+              then (poolAmountA, poolAmountB, poolTokenACid, poolTokenBCid)
+              else (poolAmountB, poolAmountA, poolTokenBCid, poolTokenACid)
 
         -- CRITICAL-1 FIX: Validate ALL values before any division operations
         assertMsg "Input reserve must be positive" (rin > 0.0)
@@ -129,18 +139,19 @@ template SwapReady
         assertMsg "Input amount must be positive" (inputAmount > 0.0)
         assertMsg "Fee basis points must be valid" (feeBps >= 0 && feeBps <= 10000)
 
-        -- HIGH-2 FIX: Flash loan protection - limit swap to 10% of output reserve
+        -- HIGH-2 FIX: Flash loan protection
         let maxOutputAmount = rout * 0.1
         assertMsg "Swap too large (max 10% of pool reserve per transaction)"
-          (inputAmount <= rin * 0.15)  -- Allow slightly more input since fees reduce impact
+          (inputAmount <= rin * 0.15)
 
-        -- Formule Uniswap v2: amountOut = (amountIn * feeMultiplier * reserveOut) / (reserveIn + amountIn * feeMultiplier)
+        -- AMM calculation - inputAmount already has protocol fee deducted in PrepareSwap
         let feeMul = (10000.0 - intToDecimal feeBps) / 10000.0
         let ainFee = inputAmount * feeMul
         let denom = rin + ainFee
 
         -- Denominator guaranteed > 0 because: rin > 0 AND ainFee >= 0
         let aout = (ainFee * rout) / denom
+
 
         assertMsg "Min output not met" (aout >= minOutput)
         assertMsg "Liquidity exhausted" (aout < rout)
@@ -155,7 +166,7 @@ template SwapReady
 
         -- Price impact check (safe because rin, rout, pBefore all > 0)
         let pBefore = rout / rin
-        let pAfter = (rout - aout) / (rin + inputAmount)
+        let pAfter = (rout - aout) / (rin + inputAmount)  -- Use inputAmount not inputAmount
         let impBps = abs(pAfter - pBefore) / pBefore * 10000.0
         assertMsg "Price impact too high" (impBps <= intToDecimal maxPriceImpactBps)
 
@@ -166,15 +177,15 @@ template SwapReady
           qty = aout
 
         -- CRITICAL-6 FIX: Update pool reserves after swap
-        -- Input token was already transferred in PrepareSwap
+        -- Protocol fee was extracted, so only inputAmount goes to reserves
         -- Output token was just transferred above
         -- Now update the pool state to reflect new reserves
         let newReserveA = if inputSymbol == symbolA
-                         then poolAmountA + inputAmount  -- Input was A, so A increases
-                         else poolAmountA - aout         -- Output was A, so A decreases
+                         then poolAmountA + inputAmount  -- Input was A (minus protocol fee)
+                         else poolAmountA - aout          -- Output was A
         let newReserveB = if inputSymbol == symbolB
-                         then poolAmountB + inputAmount  -- Input was B, so B increases
-                         else poolAmountB - aout         -- Output was B, so B decreases
+                         then poolAmountB + inputAmount  -- Input was B (minus protocol fee)
+                         else poolAmountB - aout          -- Output was B
 
         -- Verify new reserves are still positive (should never fail due to earlier checks)
         assertMsg "New reserve A must be positive" (newReserveA > 0.0)

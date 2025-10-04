@@ -1,0 +1,97 @@
+module Test.SimpleProtocolFeeTest where
+
+import Daml.Script
+import DA.Time
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+import qualified AMM.SwapRequest as SR
+
+-- Simple test: verify protocol fee is extracted to ClearportX
+simpleProtocolFeeTest : Script ()
+simpleProtocolFeeTest = script do
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerCanton <- allocateParty "Canton"
+  issuerUSDC <- allocateParty "USDC"
+  trader <- allocateParty "Alice"
+  clearportx <- allocateParty "ClearportX"
+
+  now <- getTime
+
+  -- Create pool with reserves
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator
+    poolParty
+    lpIssuer
+    issuerA = issuerCanton
+    issuerB = issuerUSDC
+    symbolA = "CANTON"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "TEST"
+    maxTTL = hours 1
+    totalLPSupply = 100000.0
+    reserveA = 1000000.0
+    reserveB = 50000.0
+    protocolFeeReceiver = clearportx
+
+  -- Pool needs tokens
+  poolCanton <- submit issuerCanton $ createCmd T.Token with
+    issuer = issuerCanton
+    owner = poolParty
+    symbol = "CANTON"
+    amount = 1000000.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 50000.0
+
+  -- Trader has 100 CANTON
+  traderCanton <- submit issuerCanton $ createCmd T.Token with
+    issuer = issuerCanton
+    owner = trader
+    symbol = "CANTON"
+    amount = 100.0
+
+  -- Create swap request: 100 CANTON -> USDC
+  swapReq <- submit trader $ createCmd SR.SwapRequest with
+    trader
+    poolCid = pool
+    poolParty
+    poolOperator
+    issuerA = issuerCanton
+    issuerB = issuerUSDC
+    symbolA = "CANTON"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = hours 1
+    inputTokenCid = traderCanton
+    inputSymbol = "CANTON"
+    inputAmount = 100.0
+    outputSymbol = "USDC"
+    minOutput = 4.5
+    deadline = addRelTime now (minutes 10)
+    maxPriceImpactBps = 100
+
+  -- PrepareSwap extracts protocol fee (0.075 CANTON) and sends rest to pool
+  (swapReady, poolInputTokenCid) <- submit trader $ exerciseCmd swapReq SR.PrepareSwap with
+    protocolFeeReceiver = clearportx
+
+  -- Query ClearportX treasury - should have 0.075 CANTON
+  clearportxTokens <- query @T.Token clearportx
+  let clearportxCanton = [t.amount | (_, t) <- clearportxTokens, t.symbol == "CANTON"]
+  let protocolFee = if null clearportxCanton then 0.0 else sum clearportxCanton
+
+  debug $ "Protocol fee received by ClearportX: " <> show protocolFee <> " CANTON"
+  debug $ "Expected: 0.075 CANTON (25% of 0.3% of 100)"
+
+  -- Verify
+  let expected = 0.075
+  let tolerance = 0.001
+  assertMsg "Protocol fee incorrect!" (abs(protocolFee - expected) < tolerance)
+
+  debug "✅ Protocol fee test PASSED!"
+  return ()

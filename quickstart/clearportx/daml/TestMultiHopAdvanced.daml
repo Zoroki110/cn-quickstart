@@ -15,8 +15,8 @@ import Daml.Script
 -}
 
 -- Helper: Create a pool with liquidity
-createPoolWithLiquidity : Party -> Party -> Party -> Party -> Party -> Party -> Text -> Text -> Numeric 10 -> Numeric 10 -> Script (ContractId P.Pool)
-createPoolWithLiquidity poolOperator poolParty lpIssuer issuerA issuerB provider symbolA symbolB amountA amountB = do
+createPoolWithLiquidity : Party -> Party -> Party -> Party -> Party -> Party -> Party -> Text -> Text -> Numeric 10 -> Numeric 10 -> Script (ContractId P.Pool)
+createPoolWithLiquidity poolOperator poolParty lpIssuer issuerA issuerB provider clearportx symbolA symbolB amountA amountB = do
   -- Determine canonical ordering
   let (issA, issB, symA, symB, amtA, amtB) =
         if (symbolA, show issuerA) < (symbolB, show issuerB)
@@ -38,6 +38,7 @@ createPoolWithLiquidity poolOperator poolParty lpIssuer issuerA issuerB provider
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Create tokens for liquidity
   tokenA <- submit issA $ createCmd T.Token with
@@ -77,6 +78,7 @@ testThreeHopRoute = script do
   poolParty2 <- allocateParty "PoolParty2"
   poolParty3 <- allocateParty "PoolParty3"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -85,13 +87,13 @@ testThreeHopRoute = script do
 
   -- Create 3 pools with liquidity
   -- Pool 1: ETH-USDC (100 ETH, 200,000 USDC)
-  pool1 <- createPoolWithLiquidity poolOperator poolParty1 lpIssuer issuerETH issuerUSDC alice "ETH" "USDC" 100.0 200000.0
+  pool1 <- createPoolWithLiquidity poolOperator poolParty1 lpIssuer issuerETH issuerUSDC alice clearportx "ETH" "USDC" 100.0 200000.0
 
   -- Pool 2: DAI-USDC (200,000 DAI, 200,000 USDC)
-  pool2 <- createPoolWithLiquidity poolOperator poolParty2 lpIssuer issuerDAI issuerUSDC alice "DAI" "USDC" 200000.0 200000.0
+  pool2 <- createPoolWithLiquidity poolOperator poolParty2 lpIssuer issuerDAI issuerUSDC alice clearportx "DAI" "USDC" 200000.0 200000.0
 
   -- Pool 3: DAI-WBTC (200,000 DAI, 10 WBTC)
-  pool3 <- createPoolWithLiquidity poolOperator poolParty3 lpIssuer issuerDAI issuerWBTC alice "DAI" "WBTC" 200000.0 10.0
+  pool3 <- createPoolWithLiquidity poolOperator poolParty3 lpIssuer issuerDAI issuerWBTC alice clearportx "DAI" "WBTC" 200000.0 10.0
 
   -- Alice gets 1 ETH to swap
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -121,9 +123,9 @@ testThreeHopRoute = script do
     outputSymbol = "USDC"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady1 <- submit alice $ exerciseCmd swapReq1 SR.PrepareSwap
+  (swapReady1, _) <- submit alice $ exerciseCmd swapReq1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Get pool1 tokens (need to sum USDC including alice's transferred amount)
   pool1Tokens <- query @T.Token poolParty1
@@ -157,9 +159,9 @@ testThreeHopRoute = script do
     outputSymbol = "DAI"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady2 <- submit alice $ exerciseCmd swapReq2 SR.PrepareSwap
+  (swapReady2, _) <- submit alice $ exerciseCmd swapReq2 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Get pool2 tokens
   pool2Tokens <- query @T.Token poolParty2
@@ -193,9 +195,9 @@ testThreeHopRoute = script do
     outputSymbol = "WBTC"
     minOutput = 0.095  -- Expect ~0.098 WBTC
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady3 <- submit alice $ exerciseCmd swapReq3 SR.PrepareSwap
+  (swapReady3, _) <- submit alice $ exerciseCmd swapReq3 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Get pool3 tokens
   pool3Tokens <- query @T.Token poolParty3
@@ -228,14 +230,15 @@ testMultiHopSlippageFailure = script do
   poolParty1 <- allocateParty "PoolParty1"
   poolParty2 <- allocateParty "PoolParty2"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
   issuerDAI <- allocateParty "IssuerDAI"
 
   -- Create pools
-  pool1 <- createPoolWithLiquidity poolOperator poolParty1 lpIssuer issuerETH issuerUSDC alice "ETH" "USDC" 100.0 200000.0
-  pool2 <- createPoolWithLiquidity poolOperator poolParty2 lpIssuer issuerDAI issuerUSDC alice "DAI" "USDC" 200000.0 200000.0
+  pool1 <- createPoolWithLiquidity poolOperator poolParty1 lpIssuer issuerETH issuerUSDC alice clearportx "ETH" "USDC" 100.0 200000.0
+  pool2 <- createPoolWithLiquidity poolOperator poolParty2 lpIssuer issuerDAI issuerUSDC alice clearportx "DAI" "USDC" 200000.0 200000.0
 
   -- Alice gets ETH
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -265,9 +268,9 @@ testMultiHopSlippageFailure = script do
     outputSymbol = "USDC"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady1 <- submit alice $ exerciseCmd swapReq1 SR.PrepareSwap
+  (swapReady1, _) <- submit alice $ exerciseCmd swapReq1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool1Tokens <- query @T.Token poolParty1
   let pool1ETHs = filter (\(_, t) -> t.symbol == "ETH") pool1Tokens
@@ -300,9 +303,9 @@ testMultiHopSlippageFailure = script do
     outputSymbol = "DAI"
     minOutput = 50000.0  -- IMPOSSIBLE: expecting 50k DAI from ~1987 USDC
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady2 <- submit alice $ exerciseCmd swapReq2 SR.PrepareSwap
+  (swapReady2, _) <- submit alice $ exerciseCmd swapReq2 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool2Tokens <- query @T.Token poolParty2
   let pool2DAIs = filter (\(_, t) -> t.symbol == "DAI") pool2Tokens
@@ -330,19 +333,20 @@ testRouteComparisonFull = script do
   poolParty2 <- allocateParty "PoolParty2"
   poolParty3 <- allocateParty "PoolParty3"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerDAI <- allocateParty "IssuerDAI"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
   -- Pool 1: ETH-DAI direct (100 ETH, 200k DAI)
-  pool1 <- createPoolWithLiquidity poolOperator poolParty1 lpIssuer issuerETH issuerDAI alice "ETH" "DAI" 100.0 200000.0
+  pool1 <- createPoolWithLiquidity poolOperator poolParty1 lpIssuer issuerETH issuerDAI alice clearportx "ETH" "DAI" 100.0 200000.0
 
   -- Pool 2: ETH-USDC (100 ETH, 200k USDC)
-  pool2 <- createPoolWithLiquidity poolOperator poolParty2 lpIssuer issuerETH issuerUSDC alice "ETH" "USDC" 100.0 200000.0
+  pool2 <- createPoolWithLiquidity poolOperator poolParty2 lpIssuer issuerETH issuerUSDC alice clearportx "ETH" "USDC" 100.0 200000.0
 
   -- Pool 3: DAI-USDC (200k DAI, 200k USDC)
-  pool3 <- createPoolWithLiquidity poolOperator poolParty3 lpIssuer issuerDAI issuerUSDC alice "DAI" "USDC" 200000.0 200000.0
+  pool3 <- createPoolWithLiquidity poolOperator poolParty3 lpIssuer issuerDAI issuerUSDC alice clearportx "DAI" "USDC" 200000.0 200000.0
 
   now <- getTime
   let deadline = addRelTime now (seconds 60)
@@ -371,9 +375,9 @@ testRouteComparisonFull = script do
     outputSymbol = "DAI"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReadyA <- submit alice $ exerciseCmd swapReqA SR.PrepareSwap
+  (swapReadyA, _) <- submit alice $ exerciseCmd swapReqA SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool1Tokens <- query @T.Token poolParty1
   let pool1DAIs = filter (\(_, t) -> t.symbol == "DAI") pool1Tokens
@@ -413,9 +417,9 @@ testRouteComparisonFull = script do
     outputSymbol = "USDC"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReadyB1 <- submit bob $ exerciseCmd swapReqB1 SR.PrepareSwap
+  (swapReadyB1, _) <- submit bob $ exerciseCmd swapReqB1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool2Tokens <- query @T.Token poolParty2
   let pool2ETHs = filter (\(_, t) -> t.symbol == "ETH") pool2Tokens
@@ -448,9 +452,9 @@ testRouteComparisonFull = script do
     outputSymbol = "DAI"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReadyB2 <- submit bob $ exerciseCmd swapReqB2 SR.PrepareSwap
+  (swapReadyB2, _) <- submit bob $ exerciseCmd swapReqB2 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool3Tokens <- query @T.Token poolParty3
   let pool3DAIs = filter (\(_, t) -> t.symbol == "DAI") pool3Tokens
@@ -489,16 +493,17 @@ testFailedIntermediateHop = script do
   poolParty1 <- allocateParty "PoolParty1"
   poolParty2 <- allocateParty "PoolParty2"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
   issuerDAI <- allocateParty "IssuerDAI"
 
   -- Pool 1: Normal liquidity
-  pool1 <- createPoolWithLiquidity poolOperator poolParty1 lpIssuer issuerETH issuerUSDC alice "ETH" "USDC" 100.0 200000.0
+  pool1 <- createPoolWithLiquidity poolOperator poolParty1 lpIssuer issuerETH issuerUSDC alice clearportx "ETH" "USDC" 100.0 200000.0
 
   -- Pool 2: TINY liquidity (will cause failure)
-  pool2 <- createPoolWithLiquidity poolOperator poolParty2 lpIssuer issuerDAI issuerUSDC alice "DAI" "USDC" 10.0 10.0
+  pool2 <- createPoolWithLiquidity poolOperator poolParty2 lpIssuer issuerDAI issuerUSDC alice clearportx "DAI" "USDC" 10.0 10.0
 
   -- Alice swaps 1 ETH
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -528,9 +533,9 @@ testFailedIntermediateHop = script do
     outputSymbol = "USDC"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady1 <- submit alice $ exerciseCmd swapReq1 SR.PrepareSwap
+  (swapReady1, _) <- submit alice $ exerciseCmd swapReq1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool1Tokens <- query @T.Token poolParty1
   let pool1ETHs = filter (\(_, t) -> t.symbol == "ETH") pool1Tokens
@@ -563,9 +568,9 @@ testFailedIntermediateHop = script do
     outputSymbol = "DAI"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady2 <- submit alice $ exerciseCmd swapReq2 SR.PrepareSwap
+  (swapReady2, _) <- submit alice $ exerciseCmd swapReq2 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool2Tokens <- query @T.Token poolParty2
   let pool2DAIs = filter (\(_, t) -> t.symbol == "DAI") pool2Tokens
@@ -609,12 +614,13 @@ testLiquidityExhaustion = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
   -- Small pool: 1 ETH, 2000 USDC
-  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC alice "ETH" "USDC" 1.0 2000.0
+  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC alice clearportx "ETH" "USDC" 1.0 2000.0
 
   -- Alice tries to swap 10,000 USDC (way more than pool has)
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
@@ -643,9 +649,9 @@ testLiquidityExhaustion = script do
     outputSymbol = "ETH"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady <- submit alice $ exerciseCmd swapReq SR.PrepareSwap
+  (swapReady, _) <- submit alice $ exerciseCmd swapReq SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   poolTokens <- query @T.Token poolParty
   let poolETHs = filter (\(_, t) -> t.symbol == "ETH") poolTokens
@@ -687,11 +693,12 @@ testDeadlineExpiration = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
-  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC alice "ETH" "USDC" 100.0 200000.0
+  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC alice clearportx "ETH" "USDC" 100.0 200000.0
 
   aliceETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -720,9 +727,9 @@ testDeadlineExpiration = script do
     outputSymbol = "USDC"
     minOutput = 0.0
     deadline = shortDeadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady <- submit alice $ exerciseCmd swapReq SR.PrepareSwap
+  (swapReady, _) <- submit alice $ exerciseCmd swapReq SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Advance time past deadline
   passTime (seconds 2)

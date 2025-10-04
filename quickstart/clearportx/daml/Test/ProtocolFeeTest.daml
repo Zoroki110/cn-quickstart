@@ -1,0 +1,212 @@
+-- Test complet du système de protocol fees
+-- Vérifie que 25% des fees vont à ClearportX et 75% aux LPs
+module Test.ProtocolFeeTest where
+
+import Daml.Script
+import DA.Time
+import DA.List (head)
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+import qualified AMM.SwapRequest as SR
+
+protocolFeeTest : Script ()
+protocolFeeTest = script do
+
+  debug "=== PROTOCOL FEE TEST ==="
+  debug ""
+
+  -- ============================
+  -- 1. SETUP
+  -- ============================
+
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerCanton <- allocateParty "Canton_Foundation"
+  issuerUSDC <- allocateParty "USDC_Issuer"
+  trader <- allocateParty "Alice"
+  clearportx <- allocateParty "ClearportX_Treasury"
+
+  now <- getTime
+
+  debug "✅ Parties créées"
+  debug ""
+
+  -- ============================
+  -- 2. CRÉER TOKENS INITIAUX
+  -- ============================
+
+  -- Pool initial: 1M CANTON + 50K USDC
+  poolCanton <- submit issuerCanton $ createCmd T.Token with
+    issuer = issuerCanton
+    owner = poolParty
+    symbol = "CANTON"
+    amount = 1000000.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 50000.0
+
+  -- Trader: 1000 CANTON
+  traderCanton <- submit issuerCanton $ createCmd T.Token with
+    issuer = issuerCanton
+    owner = trader
+    symbol = "CANTON"
+    amount = 1000.0
+
+  debug "✅ Tokens créés"
+  debug "   - Pool: 1,000,000 CANTON + 50,000 USDC"
+  debug "   - Trader: 1,000 CANTON"
+  debug ""
+
+  -- ============================
+  -- 3. CRÉER POOL AVEC PROTOCOL FEE RECEIVER
+  -- ============================
+
+  pool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerCanton
+    issuerB = issuerUSDC
+    symbolA = "CANTON"
+    symbolB = "USDC"
+    feeBps = 30  -- 0.3% total
+    poolId = "CANTON-USDC-TEST"
+    maxTTL = hours 1
+    totalLPSupply = 100000.0  -- Mock LP supply
+    reserveA = 1000000.0
+    reserveB = 50000.0
+    protocolFeeReceiver = clearportx  -- ← ClearportX receives 25% of fees
+
+  debug "✅ Pool créé avec protocolFeeReceiver = ClearportX_Treasury"
+  debug "   - Fee: 0.3% total (30 bps)"
+  debug "   - Protocol gets: 25% of 0.3% = 0.075%"
+  debug "   - LPs get: 75% of 0.3% = 0.225%"
+  debug ""
+
+  -- ============================
+  -- 4. SWAP: 100 CANTON → USDC
+  -- ============================
+
+  -- Expected calculations:
+  -- Input: 100 CANTON
+  -- Total fee: 100 * 0.003 = 0.3 CANTON
+  -- Protocol fee: 0.3 * 0.25 = 0.075 CANTON → ClearportX
+  -- LP fee: 0.3 * 0.75 = 0.225 CANTON → stays in pool
+  -- Amount to pool: 100 - 0.075 = 99.925 CANTON
+  -- AMM output: (99.925 * 0.997 * 50000) / (1000000 + 99.925 * 0.997) ≈ 4.98 USDC
+
+  debug "📊 SWAP TEST: 100 CANTON → USDC"
+  debug ""
+  debug "Expected calculations:"
+  debug "  - Total fee: 100 * 0.3% = 0.3 CANTON"
+  debug "  - Protocol fee (25%): 0.075 CANTON → ClearportX"
+  debug "  - LP fee (75%): 0.225 CANTON → Pool"
+  debug "  - Amount to pool: 99.925 CANTON"
+  debug "  - Expected output: ~4.98 USDC"
+  debug ""
+
+  -- Créer swap request
+  swapReq <- submit trader $ createCmd SR.SwapRequest with
+    trader = trader
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerCanton
+    issuerB = issuerUSDC
+    symbolA = "CANTON"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = hours 1
+    inputTokenCid = traderCanton
+    inputSymbol = "CANTON"
+    inputAmount = 100.0
+    outputSymbol = "USDC"
+    minOutput = 4.5  -- Accept min 4.5 USDC
+    deadline = addRelTime now (minutes 10)
+    maxPriceImpactBps = 100  -- Max 1% price impact
+
+  -- Prepare swap (transfer input to pool)
+  (swapReady, _) <- submit trader $ exerciseCmd swapReq SR.PrepareSwap with protocolFeeReceiver = clearportx
+
+  -- Query pool's tokens after PrepareSwap to get updated CIDs
+  poolTokens <- query @T.Token poolParty
+  let poolCantonTokens = [(cid, t) | (cid, t) <- poolTokens, t.symbol == "CANTON"]
+  let poolUSDCTokens = [(cid, t) | (cid, t) <- poolTokens, t.symbol == "USDC"]
+  let (poolCantonCid, _) = head poolCantonTokens
+  let (poolUSDCCid, _) = head poolUSDCTokens
+
+  -- Execute swap with queried token CIDs
+  (outputToken, newPool) <- submitMulti [poolParty] [poolOperator, lpIssuer, trader] $
+    exerciseCmd swapReady SR.ExecuteSwap with
+      poolTokenACid = poolCantonCid  -- CANTON is symbolA
+      poolTokenBCid = poolUSDCCid    -- USDC is symbolB
+
+  -- Fetch results
+  Some output <- queryContractId trader outputToken
+  Some updatedPool <- queryContractId poolOperator newPool
+  let expectedProtocolFee = 0.075  -- 25% of 0.3% of 100
+
+  debug "✅ SWAP EXECUTED"
+  debug ""
+  debug "Results:"
+  debug ("  - Trader received: " <> show output.amount <> " " <> output.symbol)
+  debug ("  - New pool reserve B: " <> show updatedPool.reserveB <> " USDC")
+  debug ""
+
+  -- ============================
+  -- 5. VÉRIFIER PROTOCOL FEE
+
+  -- Query ClearportX treasury balance
+  protocolFees <- query @T.Token clearportx
+
+  let clearportxCantonFees = sum [t.amount | (_, t) <- protocolFees, t.symbol == "CANTON"]
+  debug "💰 PROTOCOL FEES COLLECTED:"
+  debug ("  - ClearportX received: " <> show clearportxCantonFees <> " CANTON")
+  let tolerance = 0.001  -- 0.1% tolerance
+  debug ""
+
+
+  assertMsg "Protocol fee incorrect"
+    (abs(clearportxCantonFees - expectedProtocolFee) < tolerance)
+
+  debug ("  - Expected: " <> show expectedProtocolFee <> " CANTON")
+  debug ("  - Actual: " <> show clearportxCantonFees <> " CANTON")
+  debug ("  - Difference: " <> show (abs(clearportxCantonFees - expectedProtocolFee)))
+  debug ""
+
+  -- 6. VÉRIFIER LP FEE (dans pool)
+  -- ============================
+
+  -- LP fee should be in the pool reserves
+  -- Initial reserve: 1,000,000 CANTON
+  -- New reserve should be: ~1,000,099.925 CANTON
+
+  let reserveIncrease = updatedPool.reserveA - 1000000.0
+  let expectedLPContribution = 99.925  -- 100 - 0.075 protocol fee
+
+  debug ("  - Pool reserve increase: " <> show reserveIncrease <> " CANTON")
+  debug ("  - Expected (100 - protocol fee): " <> show expectedLPContribution <> " CANTON")
+  debug ""
+
+  assertMsg "LP contribution incorrect" (abs(reserveIncrease - expectedLPContribution) < tolerance)
+
+  debug "✅ LP FEE VERIFICATION PASSED"
+  debug ""
+
+  -- ============================
+  -- ============================
+
+  debug "🎉 === PROTOCOL FEE SYSTEM TEST PASSED ==="
+  debug ""
+  debug "Summary:"
+  debug "  2. ✅ Protocol fee (0.075 CANTON) sent to ClearportX"
+  debug "  3. ✅ LP fee (99.925 CANTON) added to pool"
+  debug "  4. ✅ Trader received ~4.98 USDC output"
+  debug "  5. ✅ All assertions passed"
+  debug ""
+
+  return ()

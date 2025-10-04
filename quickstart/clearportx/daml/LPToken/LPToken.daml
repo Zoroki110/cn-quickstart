@@ -12,11 +12,11 @@ import DA.Action (void, when)
      - Owner is observer only
      - Enables bilateral transfers without recipient authorization
 
-  2. CONTRACT KEY:
-     - Key: (issuer, poolId, owner)
-     - LPTokens CAN have keys because they represent static pool shares
-     - Unlike tradeable tokens, LP shares for same pool can be aggregated
-     - Maintainer: issuer (the lpIssuer party)
+  2. NO CONTRACT KEY (DAML 3.x Compatibility):
+     - DAML 3.x REMOVED contract key support
+     - LPTokens are tracked by ContractId only
+     - Pool must pass LPToken ContractIds to choices
+     - This matches Token.Token design for consistency
 
   3. NONCONSUMING + MANUAL ARCHIVE:
      - Same workaround as Token to avoid "contract consumed twice"
@@ -38,8 +38,8 @@ template LPToken
     signatory issuer  -- ONLY issuer is signatory
     observer owner     -- owner can see their LP tokens
 
-    key (issuer, poolId, owner) : (Party, Text, Party)
-    maintainer key._1
+    -- NO KEY: DAML 3.x does not support contract keys
+    -- LPTokens are tracked by ContractId directly
 
     ensure amount > 0.0
 
@@ -55,7 +55,7 @@ template LPToken
         assertMsg "Sufficient balance" (qty <= amount)
         assertMsg "Self-transfer forbidden" (recipient /= owner)
 
-        -- Archive FIRST (before creating remainder with same key)
+        -- Archive FIRST (before creating remainder)
         archive self
 
         -- Create token for recipient
@@ -87,7 +87,7 @@ template LPToken
         assertMsg "Positive burn" (qty > 0.0)
         assertMsg "Sufficient balance" (qty <= amount)
 
-        -- Archive FIRST (before creating remainder with same key)
+        -- Archive FIRST (before creating remainder)
         archive self
 
         -- Create remainder if not burning full balance

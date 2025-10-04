@@ -11,6 +11,7 @@ initLocal : Script ()
 initLocal = script do
   -- Créer les parties
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   poolParty <- allocateParty "PoolParty"
   lpIssuer <- allocateParty "LPIssuer"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -44,6 +45,9 @@ initLocal = script do
 
   debug "✅ Test users have tokens"
 
+  -- ClearportX Treasury for protocol fees
+  clearportx <- allocateParty "ClearportX_Treasury"
+
   -- Créer le pool
   pool <- submit poolOperator $ createCmd P.Pool with
     poolOperator
@@ -59,6 +63,7 @@ initLocal = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   debug "✅ Pool created"
 

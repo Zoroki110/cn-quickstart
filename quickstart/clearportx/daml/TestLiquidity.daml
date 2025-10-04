@@ -27,6 +27,7 @@ testFirstLP = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -46,6 +47,7 @@ testFirstLP = script do
     totalLPSupply = 0.0  -- EMPTY pool
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Alice has tokens to provide liquidity
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -100,6 +102,7 @@ testSubsequentLP = script do
   bob <- allocateParty "Bob"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -119,6 +122,7 @@ testSubsequentLP = script do
     totalLPSupply = 447.2135955  -- Alice's LP tokens
     reserveA = 10.0  -- 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    protocolFeeReceiver = clearportx
 
   -- Bob has tokens to provide liquidity (same ratio: 2000 USDC per ETH)
   bobETH <- submit issuerETH $ createCmd T.Token with
@@ -174,6 +178,7 @@ testRemoveLiquidity = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -193,6 +198,7 @@ testRemoveLiquidity = script do
     totalLPSupply = 447.2135955  -- Alice owns all LP tokens
     reserveA = 10.0
     reserveB = 20000.0
+    protocolFeeReceiver = clearportx
 
   -- Alice has LP tokens
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
@@ -239,6 +245,7 @@ testSlippageProtectionAddLP = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -257,6 +264,7 @@ testSlippageProtectionAddLP = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   aliceETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -293,6 +301,7 @@ testSlippageProtectionRemoveLP = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -311,6 +320,7 @@ testSlippageProtectionRemoveLP = script do
     totalLPSupply = 447.2135955
     reserveA = 10.0
     reserveB = 20000.0
+    protocolFeeReceiver = clearportx
 
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
     issuer = lpIssuer
@@ -354,6 +364,7 @@ testDeadlineEnforcementAddLP = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -372,6 +383,7 @@ testDeadlineEnforcementAddLP = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   aliceETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -407,6 +419,7 @@ testDeadlineEnforcementRemoveLP = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -425,6 +438,7 @@ testDeadlineEnforcementRemoveLP = script do
     totalLPSupply = 447.2135955
     reserveA = 10.0
     reserveB = 20000.0
+    protocolFeeReceiver = clearportx
 
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
     issuer = lpIssuer

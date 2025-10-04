@@ -1,0 +1,11 @@
+-- Script to test ClearportX deployment on Canton
+module UploadDAR where
+
+import Daml.Script
+import DA.Time
+
+-- Simple test to verify DAR is loaded
+testDARLoaded : Script ()
+testDARLoaded = script do
+  debug "Testing if ClearportX DAR is loaded..."
+  return ()

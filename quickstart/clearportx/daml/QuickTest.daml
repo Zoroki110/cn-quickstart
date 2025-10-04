@@ -1,0 +1,60 @@
+-- Quick test script for ClearportX on Canton
+module QuickTest where
+
+import Daml.Script
+import DA.Time
+
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+
+-- Simple test to verify ClearportX contracts work on Canton
+quickTest : Script ()
+quickTest = script do
+  debug "=== ClearportX Quick Test on Canton ==="
+
+  -- Allocate parties
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+  issuerETH <- allocateParty "IssuerETH"
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+
+  debug "✓ Parties allocated"
+
+  -- Test 1: Create tokens
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 10000.0
+
+  bobETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = bob
+    symbol = "ETH"
+    amount = 50.0
+
+  debug "✓ Tokens created successfully"
+  debug ("  - Alice has 10000 USDC")
+  debug ("  - Bob has 50 ETH")
+
+  -- Test 2: Transfer tokens
+  bobUSDC <- submit alice $ exerciseCmd aliceUSDC T.Transfer with
+    recipient = bob
+    qty = 1000.0
+
+  debug "✓ Token transfer successful"
+  debug ("  - Alice transferred 1000 USDC to Bob")
+
+  -- Test 3: Credit tokens (add more)
+  bobETH2 <- submit bob $ exerciseCmd bobETH T.Credit with
+    qty = 25.0
+
+  debug "✓ Token credit successful"
+  debug ("  - Bob credited 25 ETH (now has 75 ETH total)")
+
+  debug "\n=== All tests passed! ClearportX is working on Canton ==="
+
+  return ()

@@ -28,6 +28,7 @@ testImbalancedLiquidity = script do
   bob <- allocateParty "Bob"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -47,6 +48,7 @@ testImbalancedLiquidity = script do
     totalLPSupply = 447.2135955  -- Alice has this
     reserveA = 10.0
     reserveB = 20000.0
+    protocolFeeReceiver = clearportx
 
   -- Bob wants to add IMBALANCED liquidity
   -- He deposits MORE ETH relative to USDC
@@ -99,6 +101,7 @@ testPartialLPBurn = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -117,6 +120,7 @@ testPartialLPBurn = script do
     totalLPSupply = 447.2135955
     reserveA = 10.0
     reserveB = 20000.0
+    protocolFeeReceiver = clearportx
 
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
     issuer = lpIssuer
@@ -176,6 +180,7 @@ testMultipleLPs = script do
   charlie <- allocateParty "Charlie"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -195,6 +200,7 @@ testMultipleLPs = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   now <- getTime
   let deadline = addRelTime now (seconds 60)
@@ -315,6 +321,7 @@ testFullCycle = script do
   bob <- allocateParty "Bob"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -334,6 +341,7 @@ testFullCycle = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   now <- getTime
   let deadline = addRelTime now (seconds 60)
@@ -398,9 +406,9 @@ testFullCycle = script do
     outputSymbol = "ETH"
     minOutput = 0.04
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady1 <- submit bob $ exerciseCmd swapReq1 SR.PrepareSwap
+  (swapReady1, _) <- submit bob $ exerciseCmd swapReq1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   (bobETHOut, _) <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
     poolTokenACid = poolETH1
@@ -435,6 +443,7 @@ testDustAmounts = script do
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -453,6 +462,7 @@ testDustAmounts = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Very small amounts (dust)
   aliceETH <- submit issuerETH $ createCmd T.Token with

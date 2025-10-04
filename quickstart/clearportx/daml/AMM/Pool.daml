@@ -17,7 +17,13 @@ import DA.Math (sqrt)
   4. Slippage protection: minLPTokens, minAmountA, minAmountB
   5. Archive-and-recreate pattern to update reserves
 
-  KEY FORMULA:
+  NO CONTRACT KEY (DAML 3.x Compatibility):
+  - DAML 3.x REMOVED contract key support
+  - Pool is tracked by ContractId only
+  - PoolAnnouncement template provides discovery mechanism
+  - Callers must pass Pool ContractId to execute swaps
+
+  LP TOKEN FORMULA:
   - First LP: lpTokens = sqrt(amountA * amountB)
   - Subsequent: lpTokens = min(amountA * totalSupply / reserveA, amountB * totalSupply / reserveB)
 -}
@@ -37,12 +43,13 @@ template Pool
     totalLPSupply : Numeric 10  -- Total LP tokens minted
     reserveA : Numeric 10       -- Current reserve of tokenA
     reserveB : Numeric 10       -- Current reserve of tokenB
+    protocolFeeReceiver : Party -- ClearportX treasury (receives 25% of fees)
   where
     signatory poolOperator
-    observer poolParty, lpIssuer, issuerA, issuerB
+    observer poolParty, lpIssuer, issuerA, issuerB, protocolFeeReceiver
 
-    key (poolOperator, ((symbolA, show issuerA), (symbolB, show issuerB))) : (Party, ((Text, Text), (Text, Text)))
-    maintainer key._1
+    -- NO KEY: DAML 3.x does not support contract keys
+    -- Pool discovery is handled by PoolAnnouncement template
 
     ensure
       (symbolA, show issuerA) < (symbolB, show issuerB) &&

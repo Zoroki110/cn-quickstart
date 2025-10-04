@@ -32,6 +32,7 @@ testTwoHopRoute = script do
   poolParty1 <- allocateParty "PoolParty1"
   poolParty2 <- allocateParty "PoolParty2"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -52,6 +53,7 @@ testTwoHopRoute = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Create Pool 2: DAI-USDC (canonical ordering)
   pool2 <- submit poolOperator $ createCmd P.Pool with
@@ -68,6 +70,7 @@ testTwoHopRoute = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Add liquidity to Pool 1 (100 ETH, 200,000 USDC)
   lpETH <- submit issuerETH $ createCmd T.Token with
@@ -141,9 +144,9 @@ testTwoHopRoute = script do
     outputSymbol = "USDC"
     minOutput = 0.0  -- No slippage check on intermediate hop
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady1 <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap
+  (swapReady1, _) <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Get pool1 tokens
   pool1Tokens <- query @T.Token poolParty1
@@ -177,9 +180,9 @@ testTwoHopRoute = script do
     outputSymbol = "DAI"
     minOutput = 1900.0  -- Final output check
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady2 <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap
+  (swapReady2, _) <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Get pool2 tokens
   pool2Tokens <- query @T.Token poolParty2
@@ -219,6 +222,7 @@ testMultiHopSlippageComplex = script do
   poolParty1 <- allocateParty "PoolParty1"
   poolParty2 <- allocateParty "PoolParty2"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
@@ -239,6 +243,7 @@ testMultiHopSlippageComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   pool2 <- submit poolOperator $ createCmd P.Pool with
     poolOperator = poolOperator
@@ -254,6 +259,7 @@ testMultiHopSlippageComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Add liquidity
   lpETH <- submit issuerETH $ createCmd T.Token with
@@ -326,9 +332,9 @@ testMultiHopSlippageComplex = script do
     outputSymbol = "USDC"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady1 <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap
+  (swapReady1, _) <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool1Tokens <- query @T.Token poolParty1
   let pool1ETH = filter (\(_, t) -> t.symbol == "ETH") pool1Tokens
@@ -363,9 +369,9 @@ testMultiHopSlippageComplex = script do
     outputSymbol = "DAI"
     minOutput = 10000.0  -- UNREALISTIC: expecting 10,000 DAI from ~2000 USDC
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReady2 <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap
+  (swapReady2, _) <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool2Tokens <- query @T.Token poolParty2
   let pool2DAI = filter (\(_, t) -> t.symbol == "DAI") pool2Tokens
@@ -404,6 +410,7 @@ testRouteComparisonComplex = script do
   poolParty2 <- allocateParty "PoolParty2"
   poolParty3 <- allocateParty "PoolParty3"
   poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
   lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerDAI <- allocateParty "IssuerDAI"
@@ -428,6 +435,7 @@ testRouteComparisonComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   pool2 <- submit poolOperator $ createCmd P.Pool with
     poolOperator = poolOperator
@@ -443,6 +451,7 @@ testRouteComparisonComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   pool3 <- submit poolOperator $ createCmd P.Pool with
     poolOperator = poolOperator
@@ -458,6 +467,7 @@ testRouteComparisonComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    protocolFeeReceiver = clearportx
 
   -- Add liquidity to all pools
   now <- getTime
@@ -553,9 +563,9 @@ testRouteComparisonComplex = script do
     outputSymbol = "DAI"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReadyA <- submit alice $ exerciseCmd swapRequestA SR.PrepareSwap
+  (swapReadyA, _) <- submit alice $ exerciseCmd swapRequestA SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool1Tokens <- query @T.Token poolParty1
   let pool1DAI = filter (\(_, t) -> t.symbol == "DAI") pool1Tokens
@@ -597,9 +607,9 @@ testRouteComparisonComplex = script do
     outputSymbol = "USDC"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReadyB1 <- submit bob $ exerciseCmd swapRequestB1 SR.PrepareSwap
+  (swapReadyB1, _) <- submit bob $ exerciseCmd swapRequestB1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool2Tokens <- query @T.Token poolParty2
   let pool2ETH = filter (\(_, t) -> t.symbol == "ETH") pool2Tokens
@@ -634,9 +644,9 @@ testRouteComparisonComplex = script do
     outputSymbol = "DAI"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 10000
+    maxPriceImpactBps = 5000
 
-  swapReadyB2 <- submit bob $ exerciseCmd swapRequestB2 SR.PrepareSwap
+  (swapReadyB2, _) <- submit bob $ exerciseCmd swapRequestB2 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   pool3Tokens <- query @T.Token poolParty3
   let pool3DAI = filter (\(_, t) -> t.symbol == "DAI") pool3Tokens

@@ -1,6 +1,6 @@
 -- Test complet du système de protocol fees
 -- Vérifie que 25% des fees vont à ClearportX et 75% aux LPs
-module Test.ProtocolFeeTest where
+module ProtocolFeeTest where
 
 import Daml.Script
 import DA.Time
@@ -8,6 +8,7 @@ import DA.List (head)
 import qualified Token.Token as T
 import qualified AMM.Pool as P
 import qualified AMM.SwapRequest as SR
+import qualified AMM.Receipt as R
 
 protocolFeeTest : Script ()
 protocolFeeTest = script do
@@ -79,7 +80,11 @@ protocolFeeTest = script do
     totalLPSupply = 100000.0  -- Mock LP supply
     reserveA = 1000000.0
     reserveB = 50000.0
+    tokenACid = Some poolCanton
+    tokenBCid = Some poolUSDC
     protocolFeeReceiver = clearportx  -- ← ClearportX receives 25% of fees
+    maxInBps = 10000
+    maxOutBps = 5000
 
   debug "✅ Pool créé avec protocolFeeReceiver = ClearportX_Treasury"
   debug "   - Fee: 0.3% total (30 bps)"
@@ -132,22 +137,14 @@ protocolFeeTest = script do
   -- Prepare swap (transfer input to pool)
   (swapReady, _) <- submit trader $ exerciseCmd swapReq SR.PrepareSwap with protocolFeeReceiver = clearportx
 
-  -- Query pool's tokens after PrepareSwap to get updated CIDs
-  poolTokens <- query @T.Token poolParty
-  let poolCantonTokens = [(cid, t) | (cid, t) <- poolTokens, t.symbol == "CANTON"]
-  let poolUSDCTokens = [(cid, t) | (cid, t) <- poolTokens, t.symbol == "USDC"]
-  let (poolCantonCid, _) = head poolCantonTokens
-  let (poolUSDCCid, _) = head poolUSDCTokens
+  -- Execute swap (no longer needs token CID parameters)
+  receiptCid <- submitMulti [poolParty] [poolOperator, lpIssuer, trader] $
+    exerciseCmd swapReady SR.ExecuteSwap
 
-  -- Execute swap with queried token CIDs
-  (outputToken, newPool) <- submitMulti [poolParty] [poolOperator, lpIssuer, trader] $
-    exerciseCmd swapReady SR.ExecuteSwap with
-      poolTokenACid = poolCantonCid  -- CANTON is symbolA
-      poolTokenBCid = poolUSDCCid    -- USDC is symbolB
-
-  -- Fetch results
-  Some output <- queryContractId trader outputToken
-  Some updatedPool <- queryContractId poolOperator newPool
+  -- Fetch results from Receipt
+  Some receipt <- queryContractId trader receiptCid
+  Some output <- queryContractId trader receipt.outputTokenCid
+  Some updatedPool <- queryContractId poolOperator receipt.newPoolCid
   let expectedProtocolFee = 0.075  -- 25% of 0.3% of 100
 
   debug "✅ SWAP EXECUTED"

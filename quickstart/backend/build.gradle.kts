@@ -39,9 +39,12 @@ dependencies {
     implementation("io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:${Deps.opentelemetry.version}")
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")
     implementation(Deps.springBoot.actuator)
+    implementation("io.micrometer:micrometer-registry-otlp:1.14.2")  // Bridge Micrometer → OTEL
+    implementation("io.micrometer:micrometer-registry-prometheus:1.14.2")  // Prometheus scrape endpoint
     implementation(Deps.springBoot.oauth2Client)
     implementation(Deps.springBoot.oauth2ResourceServer)
     implementation(Deps.springBoot.security)
+
     runtimeOnly("org.postgresql:postgresql:42.7.3")
     runtimeOnly(Deps.grpc.api)
     runtimeOnly(Deps.grpc.netty)

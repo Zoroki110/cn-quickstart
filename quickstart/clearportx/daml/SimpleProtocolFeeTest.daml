@@ -1,4 +1,4 @@
-module Test.SimpleProtocolFeeTest where
+module SimpleProtocolFeeTest where
 
 import Daml.Script
 import DA.Time
@@ -19,6 +19,19 @@ simpleProtocolFeeTest = script do
 
   now <- getTime
 
+  -- Pool needs tokens
+  poolCanton <- submit issuerCanton $ createCmd T.Token with
+    issuer = issuerCanton
+    owner = poolParty
+    symbol = "CANTON"
+    amount = 1000000.0
+
+  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolParty
+    symbol = "USDC"
+    amount = 50000.0
+
   -- Create pool with reserves
   pool <- submit poolOperator $ createCmd P.Pool with
     poolOperator
@@ -34,20 +47,11 @@ simpleProtocolFeeTest = script do
     totalLPSupply = 100000.0
     reserveA = 1000000.0
     reserveB = 50000.0
+    tokenACid = Some poolCanton  -- Link actual tokens
+    tokenBCid = Some poolUSDC
     protocolFeeReceiver = clearportx
-
-  -- Pool needs tokens
-  poolCanton <- submit issuerCanton $ createCmd T.Token with
-    issuer = issuerCanton
-    owner = poolParty
-    symbol = "CANTON"
-    amount = 1000000.0
-
-  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
-    issuer = issuerUSDC
-    owner = poolParty
-    symbol = "USDC"
-    amount = 50000.0
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Trader has 100 CANTON
   traderCanton <- submit issuerCanton $ createCmd T.Token with

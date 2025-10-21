@@ -1,0 +1,87 @@
+# Copyright (c) 2025, Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+# SPDX-License-Identifier: 0BSD
+
+#
+# Canton Network Devnet Configuration Profile
+#
+# Activate with: SPRING_PROFILES_ACTIVE=devnet
+#
+# Requirements:
+# - 0.5 TPS rate limit compliance (we use 0.4 TPS safely under limit)
+# - Production-grade security
+# - Observability for monitoring
+#
+
+server:
+  port: ${BACKEND_PORT:8080}
+  error:
+    # Production error handling (don't leak internals)
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-path: never
+    include-exception: false
+
+logging:
+  level:
+    root: INFO
+    com.digitalasset.quickstart: INFO
+    org.springframework: WARN
+    org.springframework.security: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Expose only health and metrics (actuator protected by Basic Auth)
+        include: 'health,prometheus,metrics,info'
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# Rate Limiter Configuration (CRITICAL for devnet compliance)
+rate-limiter:
+  enabled: true
+  global-tps: 0.4  # 0.4 TPS = safely under 0.5 TPS devnet requirement
+  per-party-rpm: 10  # 10 requests per minute per party
+
+# CORS Configuration for Frontend
+cors:
+  # TODO: Update with actual canton-website domain after deployment
+  allowed-origins: ${FRONTEND_URL:https://canton.clearportx.com}
+  allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+  allowed-headers: '*'
+  allow-credentials: true
+
+# Security Configuration
+security:
+  # Basic Auth for actuator endpoints
+  actuator:
+    username: ${ACTUATOR_USERNAME:admin}
+    password: ${ACTUATOR_PASSWORD}  # MUST be set via environment variable
+
+# Ledger Configuration
+ledger:
+  application-id: ${AUTH_APP_PROVIDER_BACKEND_USER_ID:ClearportX-Devnet}
+  # TODO: Update with actual Canton Network devnet participant endpoint
+  # Will be provided by Canton Network team after IP whitelist approval
+  registry-base-uri: ${REGISTRY_BASE_URI:https://TBD_DEVNET_PARTICIPANT_ENDPOINT}
+
+# Application Tenants
+application:
+  tenants:
+    AppProvider:
+      tenantId: AppProvider
+      partyId: ${APP_PROVIDER_PARTY}
+      internal: true
+
+# OAuth2 Configuration
+# TODO: Update with Canton Network devnet Keycloak realm
+# Waiting for Canton Network team to provide devnet Keycloak configuration
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:https://TBD_DEVNET_KEYCLOAK/realms/AppProvider}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:https://TBD_DEVNET_KEYCLOAK/realms/AppProvider/protocol/openid-connect/certs}

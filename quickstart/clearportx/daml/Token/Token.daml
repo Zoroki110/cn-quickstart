@@ -64,6 +64,8 @@ template Token
     ensure amount > 0.0
 
     -- Transfer: nonconsuming to manually control archiving order
+    -- Note: For same-owner transfers (e.g., pool bootstrap), this will work fine
+    -- The "self-transfer forbidden" check is removed to allow pool operations
     nonconsuming choice Transfer : ContractId Token
       with
         recipient : Party
@@ -72,7 +74,6 @@ template Token
       do
         assertMsg "Positive quantity" (qty > 0.0)
         assertMsg "Sufficient balance" (qty <= amount)
-        assertMsg "Self-transfer forbidden" (recipient /= owner)
 
         -- Create remainder FIRST (same key, will replace when we archive)
         when (qty < amount) $
@@ -87,15 +88,44 @@ template Token
         return newToken
 
     -- Credit : pour ajouter des tokens (mint/faucet)
-    choice Credit : ContractId Token
+    nonconsuming choice Credit : ContractId Token
       with qty : Numeric 10
       controller owner
       do
         assertMsg "Positive credit" (qty > 0.0)
+        newCid <- create this with amount = amount + qty
         archive self
-        create this with amount = amount + qty
+        return newCid
+
+    -- Merge: Consolidate two tokens into one (for reserve consolidation)
+    -- Used to prevent token fragmentation after multiple transfers
+    nonconsuming choice Merge : ContractId Token
+      with
+        otherTokenCid : ContractId Token
+      controller owner
+      do
+        other <- fetch otherTokenCid
+
+        -- Validations: can only merge identical tokens
+        assertMsg "Cannot merge tokens with different issuers"
+          (issuer == other.issuer)
+        assertMsg "Cannot merge tokens with different owners"
+          (owner == other.owner)
+        assertMsg "Cannot merge tokens with different symbols"
+          (symbol == other.symbol)
+
+        -- Create consolidated token
+        newCid <- create this with
+          amount = amount + other.amount
+
+        -- Archive both tokens (manual control)
+        archive otherTokenCid
+        archive self
+
+        return newCid
     -- TransferSplit: Like Transfer but returns both remainder and sent token CIDs
     -- Used for protocol fee extraction where we need both tokens
+    -- Also allows same-owner transfers for pool operations
     nonconsuming choice TransferSplit : (Optional (ContractId Token), ContractId Token)
       with
         recipient : Party
@@ -104,7 +134,6 @@ template Token
       do
         assertMsg "Positive quantity" (qty > 0.0)
         assertMsg "Sufficient balance" (qty <= amount)
-        assertMsg "Self-transfer forbidden" (recipient /= owner)
 
         -- Create remainder FIRST if needed
         remainderCid <- if qty < amount

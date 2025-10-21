@@ -66,10 +66,16 @@ public class OAuth2Config {
                 .csrf((csrf) -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
+                        .ignoringRequestMatchers("/api/clearportx/**")  // TODO: Add CSRF back with proper token handling
                 )
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.GET, "/user", "/login-links", "/feature-flags", "/oauth2/authorization/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/logout").permitAll()
+                        .requestMatchers("/api/health/**").permitAll()  // Health endpoints are public
+                        .requestMatchers("/api/actuator/**").permitAll()  // Metrics endpoints are public (Prometheus scraping)
+                        .requestMatchers("/api/clearportx/**").permitAll()  // TODO: Add proper admin auth after testing
+                        // Ledger API endpoints require JWT authentication (party extracted from JWT sub)
+                        .requestMatchers("/api/tokens", "/api/pools").authenticated()
                         .requestMatchers("/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
@@ -79,7 +85,22 @@ public class OAuth2Config {
                             response.getWriter().write("Unauthorized");
                         })
                 )
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .jwt(Customizer.withDefaults())
+                        // Exclude actuator endpoints from JWT validation
+                        .bearerTokenResolver(request -> {
+                            String path = request.getRequestURI();
+                            if (path.startsWith("/api/actuator/") || path.startsWith("/api/health/")) {
+                                return null;  // No bearer token required for metrics/health
+                            }
+                            // Default bearer token extraction for other endpoints
+                            String authorization = request.getHeader("Authorization");
+                            if (authorization != null && authorization.startsWith("Bearer ")) {
+                                return authorization.substring(7);
+                            }
+                            return null;
+                        })
+                )
                 .oauth2Login(oauth2 ->
                         oauth2.defaultSuccessUrl("/", true)
                                 .successHandler(authenticationSuccessHandler)

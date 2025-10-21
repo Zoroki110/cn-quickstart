@@ -1,6 +1,6 @@
 module TestCreate where
 
-import Token.Token
+import qualified Token.Token as T
 import Daml.Script
 
 setup : Script ()
@@ -10,7 +10,7 @@ setup = script do
   
   -- Create token for Alice
   token <- submit issuerUSDC do
-    createCmd Token with
+    createCmd T.Token with
       issuer = issuerUSDC
       owner = alice
       symbol = "USDC"

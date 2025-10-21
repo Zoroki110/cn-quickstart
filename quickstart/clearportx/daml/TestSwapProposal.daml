@@ -34,6 +34,10 @@ testSwapWithProposal = script do
     reserveA = 10.0      -- 10 ETH
     reserveB = 20000.0   -- 20,000 USDC
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Créer tokens de liquidité pour le pool
   -- Token a signatory issuer, donc submit issuer
@@ -48,6 +52,13 @@ testSwapWithProposal = script do
     owner = poolParty
     symbol = "USDC"
     amount = 20000.0
+
+  -- Update pool to link the tokens
+  updatedPool <- submit poolParty $ exerciseCmd pool ArchiveAndUpdateReserves with
+    updatedReserveA = 10.0
+    updatedReserveB = 20000.0
+    updatedTokenACid = Some poolETH
+    updatedTokenBCid = Some poolUSDC
 
   -- Token pour Alice (100 USDC)
   -- Issuer creates token for Alice
@@ -65,7 +76,7 @@ testSwapWithProposal = script do
   -- TX 1: Alice crée une SwapRequest
   swapRequest <- submit alice $ createCmd SwapRequest with
     trader = alice
-    poolCid = pool
+    poolCid = updatedPool
     poolParty = poolParty
     poolOperator = poolOperator
     issuerA = issuerETH
@@ -95,15 +106,14 @@ testSwapWithProposal = script do
   -- TX 3: Pool exécute le swap (transfert ETH à Alice)
   -- submit poolParty ONLY because ExecuteSwap has controller poolParty
   -- alice just receives the ETH tokens
-  (ethReceived, _) <- submit poolParty $
-    exerciseCmd swapReady ExecuteSwap with
-      poolTokenACid = poolETH
-      poolTokenBCid = poolUSDC
+  receiptCid <- submit poolParty $
+    exerciseCmd swapReady ExecuteSwap
 
   debug "TX 3 complete: Pool transferred ETH to Alice"
 
   -- Vérifier le résultat
-  ethToken <- queryContractId alice ethReceived
+  Some receipt <- queryContractId alice receiptCid
+  ethToken <- queryContractId alice receipt.outputTokenCid
   case ethToken of
     None -> assertFail "ETH token not found"
     Some token -> do

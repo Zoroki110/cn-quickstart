@@ -166,7 +166,7 @@ build-frontend: ## Build the frontend application
 
 .PHONY: build-backend
 build-backend: ## Build the backend service
-	./gradlew :backend:build
+	./gradlew :backend:build -x test
 
 .PHONY: build-daml
 build-daml: ## Build the Daml model

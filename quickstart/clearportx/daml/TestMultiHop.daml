@@ -4,6 +4,7 @@ import qualified Token.Token as T
 import qualified LPToken.LPToken as LP
 import qualified AMM.Pool as P
 import qualified AMM.SwapRequest as SR
+import qualified AMM.Receipt as R
 import qualified AMM.PoolAnnouncement as PA
 import DA.Time (seconds, addRelTime)
 import DA.List (head)
@@ -53,7 +54,11 @@ testTwoHopRoute = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Create Pool 2: DAI-USDC (canonical ordering)
   pool2 <- submit poolOperator $ createCmd P.Pool with
@@ -70,7 +75,11 @@ testTwoHopRoute = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Add liquidity to Pool 1 (100 ETH, 200,000 USDC)
   lpETH <- submit issuerETH $ createCmd T.Token with
@@ -156,12 +165,11 @@ testTwoHopRoute = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDC
   let (pool1USDCCid, _) = head pool1USDC
 
-  (usdcOut, _) <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
-    poolTokenACid = pool1ETHCid
-    poolTokenBCid = pool1USDCCid
+  receiptCid1 <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap
 
   -- HOP 2: USDC → DAI
-  Some usdcToken <- queryContractId alice usdcOut
+  Some receipt1 <- queryContractId alice receiptCid1
+  Some usdcToken <- queryContractId alice receipt1.outputTokenCid
 
   swapRequest2 <- submit alice $ createCmd SR.SwapRequest with
     trader = alice
@@ -174,7 +182,7 @@ testTwoHopRoute = script do
     symbolB = "USDC"
     feeBps = 30
     maxTTL = seconds 120
-    inputTokenCid = usdcOut
+    inputTokenCid = receipt1.outputTokenCid
     inputSymbol = "USDC"
     inputAmount = usdcToken.amount
     outputSymbol = "DAI"
@@ -192,11 +200,10 @@ testTwoHopRoute = script do
   let totalUSDC2 = sum $ map (\(_, t) -> t.amount) pool2USDC
   let (pool2USDCCid, _) = head pool2USDC
 
-  (daiOut, _) <- submit poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
-    poolTokenACid = pool2DAICid
-    poolTokenBCid = pool2USDCCid
+  receiptCid2 <- submit poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap
 
-  Some finalDAI <- queryContractId alice daiOut
+  Some receipt2 <- queryContractId alice receiptCid2
+  Some finalDAI <- queryContractId alice receipt2.outputTokenCid
 
   -- Verify Alice received DAI
   assertMsg "Alice should own DAI" (finalDAI.owner == alice)
@@ -243,7 +250,11 @@ testMultiHopSlippageComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   pool2 <- submit poolOperator $ createCmd P.Pool with
     poolOperator = poolOperator
@@ -259,7 +270,11 @@ testMultiHopSlippageComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Add liquidity
   lpETH <- submit issuerETH $ createCmd T.Token with
@@ -343,9 +358,7 @@ testMultiHopSlippageComplex = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDC
   let (pool1USDCCid, _) = head pool1USDC
 
-  usdcOut <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
-    poolTokenACid = pool1ETHCid
-    poolTokenBCid = pool1USDCCid
+  usdcOut <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap
     poolAmountA = pool1ETHToken.amount
     poolAmountB = totalUSDC1
 
@@ -381,9 +394,7 @@ testMultiHopSlippageComplex = script do
   let (pool2USDCCid, _) = head pool2USDC
 
   -- Should FAIL due to slippage
-  submitMustFail poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
-    poolTokenACid = pool2DAICid
-    poolTokenBCid = pool2USDCCid
+  submitMustFail poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap
     poolAmountA = pool2DAIToken.amount
     poolAmountB = totalUSDC2
 
@@ -435,7 +446,11 @@ testRouteComparisonComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   pool2 <- submit poolOperator $ createCmd P.Pool with
     poolOperator = poolOperator
@@ -451,7 +466,11 @@ testRouteComparisonComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   pool3 <- submit poolOperator $ createCmd P.Pool with
     poolOperator = poolOperator
@@ -467,7 +486,11 @@ testRouteComparisonComplex = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Add liquidity to all pools
   now <- getTime
@@ -574,9 +597,7 @@ testRouteComparisonComplex = script do
   let totalETH1 = sum $ map (\(_, t) -> t.amount) pool1ETH
   let (pool1ETHCid, _) = head pool1ETH
 
-  daiOutA <- submit poolParty1 $ exerciseCmd swapReadyA SR.ExecuteSwap with
-    poolTokenACid = pool1DAICid
-    poolTokenBCid = pool1ETHCid
+  daiOutA <- submit poolParty1 $ exerciseCmd swapReadyA SR.ExecuteSwap
     poolAmountA = pool1DAIToken.amount
     poolAmountB = totalETH1
 
@@ -618,9 +639,7 @@ testRouteComparisonComplex = script do
   let totalUSDC2 = sum $ map (\(_, t) -> t.amount) pool2USDC
   let (pool2USDCCid, _) = head pool2USDC
 
-  usdcOut <- submit poolParty2 $ exerciseCmd swapReadyB1 SR.ExecuteSwap with
-    poolTokenACid = pool2ETHCid
-    poolTokenBCid = pool2USDCCid
+  usdcOut <- submit poolParty2 $ exerciseCmd swapReadyB1 SR.ExecuteSwap
     poolAmountA = pool2ETHToken.amount
     poolAmountB = totalUSDC2
 
@@ -655,9 +674,7 @@ testRouteComparisonComplex = script do
   let totalUSDC3 = sum $ map (\(_, t) -> t.amount) pool3USDC
   let (pool3USDCCid, _) = head pool3USDC
 
-  daiOutB <- submit poolParty3 $ exerciseCmd swapReadyB2 SR.ExecuteSwap with
-    poolTokenACid = pool3DAICid
-    poolTokenBCid = pool3USDCCid
+  daiOutB <- submit poolParty3 $ exerciseCmd swapReadyB2 SR.ExecuteSwap
     poolAmountA = pool3DAIToken.amount
     poolAmountB = totalUSDC3
 

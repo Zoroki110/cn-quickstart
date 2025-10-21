@@ -1,0 +1,63 @@
+-- Bootstrap liquidity using Alice (separate party from pool operator)
+module BootstrapWithAlice where
+
+import Daml.Script
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+import DA.Time (days)
+
+-- Bootstrap script: Alice adds liquidity to existing pools
+bootstrap : Script ()
+bootstrap = script do
+  -- Allocate Alice party
+  alice <- allocatePartyWithHint "Alice" (PartyIdHint "Alice")
+  debug ("🎯 Allocated Alice: " <> show alice)
+
+  -- Get app-provider party (pool operator, issuer, lpIssuer)
+  appProvider <- allocatePartyWithHint "app-provider" (PartyIdHint "app-provider")
+
+  -- Mint large amounts of tokens to Alice for liquidity provision
+  debug "\n💰 Minting tokens to Alice..."
+
+  aliceETH <- submit appProvider do
+    createCmd T.Token with
+      issuer = appProvider
+      owner = alice
+      symbol = "ETH"
+      amount = 200.0  -- 200 ETH for liquidity
+
+  aliceBTC <- submit appProvider do
+    createCmd T.Token with
+      issuer = appProvider
+      owner = alice
+      symbol = "BTC"
+      amount = 20.0  -- 20 BTC for liquidity
+
+  aliceUSDC <- submit appProvider do
+    createCmd T.Token with
+      issuer = appProvider
+      owner = alice
+      symbol = "USDC"
+      amount = 600000.0  -- 600K USDC for all pools
+
+  aliceUSDT <- submit appProvider do
+    createCmd T.Token with
+      issuer = appProvider
+      owner = alice
+      symbol = "USDT"
+      amount = 300000.0  -- 300K USDT
+
+  debug "✅ Tokens minted to Alice"
+  debug ("ETH: " <> show aliceETH)
+  debug ("BTC: " <> show aliceBTC)
+  debug ("USDC: " <> show aliceUSDC)
+  debug ("USDT: " <> show aliceUSDT)
+
+  -- TODO: Query for existing pools and add liquidity
+  -- This would require querying ledger state which needs PQS in production
+  -- For now, script shows the pattern - backend will query PQS and call AddLiquidity
+
+  debug "\n🎉 Alice is ready to provide liquidity!"
+  debug "Next: Backend should query pools and call AddLiquidity with Alice as provider"
+
+  return ()

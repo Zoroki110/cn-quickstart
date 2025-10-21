@@ -49,7 +49,11 @@ testCreateMultiplePools = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announce1 <- submit operator $ createCmd PA.PoolAnnouncement with
     poolOperator = operator
@@ -77,7 +81,11 @@ testCreateMultiplePools = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announce2 <- submit operator $ createCmd PA.PoolAnnouncement with
     poolOperator = operator
@@ -105,7 +113,11 @@ testCreateMultiplePools = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announce3 <- submit operator $ createCmd PA.PoolAnnouncement with
     poolOperator = operator
@@ -151,7 +163,11 @@ testPoolDiscovery = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announce1 <- submit operator $ createCmd PA.PoolAnnouncement with
     poolOperator = operator
@@ -178,7 +194,11 @@ testPoolDiscovery = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announce2 <- submit operator $ createCmd PA.PoolAnnouncement with
     poolOperator = operator
@@ -235,7 +255,11 @@ testCompetingPools = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announce1 <- submit operator1 $ createCmd PA.PoolAnnouncement with
     poolOperator = operator1
@@ -263,7 +287,11 @@ testCompetingPools = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announce2 <- submit operator2 $ createCmd PA.PoolAnnouncement with
     poolOperator = operator2
@@ -362,7 +390,11 @@ testSwapAcrossPools = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announceEthUsdc <- submit operator $ createCmd PA.PoolAnnouncement with
     poolOperator = operator
@@ -390,7 +422,11 @@ testSwapAcrossPools = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   announceDaiUsdc <- submit operator $ createCmd PA.PoolAnnouncement with
     poolOperator = operator

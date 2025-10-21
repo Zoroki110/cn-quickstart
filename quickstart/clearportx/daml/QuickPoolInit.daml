@@ -1,0 +1,37 @@
+-- Simplified pool initialization for testing atomic swap
+module QuickPoolInit where
+
+import Daml.Script
+import qualified AMM.Pool as P
+import DA.Time (days)
+
+-- Create a minimal pool with fake reserves for testing
+quickPoolInit : Script ()
+quickPoolInit = script do
+  -- Use party that already exists
+  poolOperator <- allocatePartyWithHint "app-provider" (PartyIdHint "app-provider")
+
+  -- Create one simple pool
+  poolCid <- submit poolOperator do
+    createCmd P.Pool with
+      poolOperator = poolOperator
+      poolParty = poolOperator
+      lpIssuer = poolOperator
+      issuerA = poolOperator
+      issuerB = poolOperator
+      symbolA = "ETH"
+      symbolB = "USDC"
+      feeBps = 30  -- 0.3%
+      poolId = "ETH-USDC-01"
+      maxTTL = days 1
+      totalLPSupply = 0.0
+      reserveA = 100.0  -- 100 ETH
+      reserveB = 200000.0  -- 200k USDC
+      tokenACid = None
+      tokenBCid = None
+      protocolFeeReceiver = poolOperator
+      maxInBps = 10000  -- 100%
+      maxOutBps = 5000  -- 50%
+
+  debug $ "✓ Created pool: " <> show poolCid
+  return ()

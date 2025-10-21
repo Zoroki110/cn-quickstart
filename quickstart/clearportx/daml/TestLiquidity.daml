@@ -4,7 +4,9 @@ import qualified Token.Token as T
 import qualified LPToken.LPToken as LP
 import qualified AMM.Pool as P
 import DA.Time (seconds, addRelTime)
+import DA.List (head)
 import Daml.Script
+import Test.TestHelpers (createPoolWithLiquidity)
 
 {-
   LIQUIDITY PROVISION TESTS (Phase 1)
@@ -47,7 +49,11 @@ testFirstLP = script do
     totalLPSupply = 0.0  -- EMPTY pool
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Alice has tokens to provide liquidity
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -122,7 +128,11 @@ testSubsequentLP = script do
     totalLPSupply = 447.2135955  -- Alice's LP tokens
     reserveA = 10.0  -- 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Bob has tokens to provide liquidity (same ratio: 2000 USDC per ETH)
   bobETH <- submit issuerETH $ createCmd T.Token with
@@ -183,42 +193,12 @@ testRemoveLiquidity = script do
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
-  -- Create pool with liquidity
-  pool <- submit poolOperator $ createCmd P.Pool with
-    poolOperator = poolOperator
-    poolParty = poolParty
-    lpIssuer = lpIssuer
-    issuerA = issuerETH
-    issuerB = issuerUSDC
-    symbolA = "ETH"
-    symbolB = "USDC"
-    feeBps = 30
-    poolId = "ETH-USDC"
-    maxTTL = seconds 120
-    totalLPSupply = 447.2135955  -- Alice owns all LP tokens
-    reserveA = 10.0
-    reserveB = 20000.0
-    protocolFeeReceiver = clearportx
+  -- Create pool with actual liquidity using helper (this creates pool + tokens + LP token)
+  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC alice clearportx "ETH" "USDC" 10.0 20000.0
 
-  -- Alice has LP tokens
-  aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
-    issuer = lpIssuer
-    owner = alice
-    poolId = "ETH-USDC"
-    amount = 447.2135955
-
-  -- Pool has tokens to return
-  poolETH <- submit issuerETH $ createCmd T.Token with
-    issuer = issuerETH
-    owner = poolParty
-    symbol = "ETH"
-    amount = 10.0
-
-  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
-    issuer = issuerUSDC
-    owner = poolParty
-    symbol = "USDC"
-    amount = 20000.0
+  -- Query for Alice's LP token (created by createPoolWithLiquidity)
+  lpTokens <- query @LP.LPToken alice
+  let (aliceLP, _) = head lpTokens
 
   now <- getTime
   let deadline = addRelTime now (seconds 60)
@@ -231,8 +211,6 @@ testRemoveLiquidity = script do
     lpTokenAmount = lpBurn
     minAmountA = 9.5  -- Expect 10 ETH, with safety margin
     minAmountB = 19500.0  -- Expect 20000 USDC, with safety margin
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
     deadline = deadline
 
   debug $ "✅ Remove liquidity successful"
@@ -264,7 +242,11 @@ testSlippageProtectionAddLP = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   aliceETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -320,7 +302,11 @@ testSlippageProtectionRemoveLP = script do
     totalLPSupply = 447.2135955
     reserveA = 10.0
     reserveB = 20000.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
     issuer = lpIssuer
@@ -350,8 +336,6 @@ testSlippageProtectionRemoveLP = script do
     lpTokenAmount = 223.6067978  -- Burn 50%
     minAmountA = 10.0  -- UNREALISTIC! Should get ~5
     minAmountB = 5000.0
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
     deadline = deadline
 
   debug "✅ Slippage protection works on RemoveLiquidity"
@@ -383,7 +367,11 @@ testDeadlineEnforcementAddLP = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   aliceETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -438,7 +426,11 @@ testDeadlineEnforcementRemoveLP = script do
     totalLPSupply = 447.2135955
     reserveA = 10.0
     reserveB = 20000.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
     issuer = lpIssuer
@@ -467,8 +459,6 @@ testDeadlineEnforcementRemoveLP = script do
     lpTokenAmount = 223.6067978
     minAmountA = 4.5
     minAmountB = 9500.0
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
     deadline = deadline  -- EXPIRED
 
   debug "✅ Deadline enforcement works on RemoveLiquidity"

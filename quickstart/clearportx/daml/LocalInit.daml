@@ -48,7 +48,7 @@ initLocal = script do
   -- ClearportX Treasury for protocol fees
   clearportx <- allocateParty "ClearportX_Treasury"
 
-  -- Créer le pool
+  -- Créer le pool (empty, will add liquidity next)
   pool <- submit poolOperator $ createCmd P.Pool with
     poolOperator
     poolParty
@@ -63,7 +63,11 @@ initLocal = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None  -- Will be set by AddLiquidity
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000  -- 100% (for testing)
+    maxOutBps = 5000  -- 50%
 
   debug "✅ Pool created"
 

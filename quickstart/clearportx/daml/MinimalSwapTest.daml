@@ -1,0 +1,69 @@
+module MinimalSwapTest where
+
+import Daml.Script
+import DA.Time
+import qualified Token.Token as T
+import qualified AMM.SwapRequest as SR
+import Test.TestHelpers (createPoolWithLiquidity)
+
+-- Minimal test to debug swap failure
+minimalSwapTest : Script ()
+minimalSwapTest = script do
+  alice <- allocateParty "Alice"
+  lpProvider <- allocateParty "LPProvider"
+  poolParty <- allocateParty "PoolParty"
+  poolOperator <- allocateParty "PoolOperator"
+  clearportx <- allocateParty "ClearportX"
+  lpIssuer <- allocateParty "LPIssuer"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  debug "Step 1: Creating pool with liquidity..."
+  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC lpProvider clearportx "ETH" "USDC" 100.0 200000.0
+  debug "✅ Pool created"
+
+  debug "Step 2: Creating Alice's USDC..."
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 1000.0
+  debug "✅ Alice has USDC"
+
+  now <- getTime
+  let deadline = addRelTime now (seconds 60)
+
+  debug "Step 3: Creating swap request..."
+  swapRequest <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = seconds 120
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 1000.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 5000
+  debug "✅ Swap request created"
+
+  debug "Step 4: Preparing swap..."
+  (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
+  debug "✅ Swap prepared"
+
+  debug "Step 5: Executing swap..."
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
+  debug "✅ Swap executed!"
+
+  debug "Step 6: Verifying receipt..."
+  Some receipt <- queryContractId alice receiptCid
+  debug $ "✅ Receipt verified - amountOut: " <> show receipt.amountOut
+
+  return ()

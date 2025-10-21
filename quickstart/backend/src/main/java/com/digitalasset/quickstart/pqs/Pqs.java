@@ -15,6 +15,7 @@ import com.digitalasset.transcode.schema.Identifier;
 import daml.Daml;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 
+import java.lang.reflect.Field;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
@@ -53,11 +54,29 @@ public class Pqs {
     @WithSpan
     public <T extends Template> CompletableFuture<List<Contract<T>>> active(Class<T> clazz) {
         Identifier identifier = Utils.getTemplateIdByClass(clazz);
-        var ctx = tracingCtx(logger, "active", "templateId", identifier.qualifiedName());
+        // Use full template ID with package hash to avoid ambiguity when multiple package versions exist
+        String fullTemplateId = getFullTemplateId(identifier);
+        var ctx = tracingCtx(logger, "active", "templateId", fullTemplateId);
         return runAndTraceAsync(ctx, () -> {
             String sql = "select contract_id, payload from active(?)";
-            return jdbcTemplate.query(sql, new PqsContractRowMapper<>(identifier), identifier.qualifiedName());
+            return jdbcTemplate.query(sql, new PqsContractRowMapper<>(identifier), fullTemplateId);
         });
+    }
+
+    /**
+     * Gets the full template ID in PQS format: "packageName:moduleName:templateName"
+     * Uses reflection to access the private packageName field.
+     */
+    private String getFullTemplateId(Identifier identifier) {
+        try {
+            Field packageNameField = Identifier.class.getDeclaredField("packageName");
+            packageNameField.setAccessible(true);
+            String packageName = (String) packageNameField.get(identifier);
+            return packageName + ":" + identifier.qualifiedName();
+        } catch (Exception e) {
+            logger.warn("Could not access packageName field, falling back to qualifiedName only", e);
+            return identifier.qualifiedName();
+        }
     }
 
     /**

@@ -4,6 +4,7 @@ import qualified Token.Token as T
 import qualified LPToken.LPToken as LP
 import qualified AMM.Pool as P
 import qualified AMM.SwapRequest as SR
+import qualified AMM.Receipt as R
 import DA.Time (seconds, addRelTime)
 import DA.List (head)
 import Daml.Script
@@ -38,7 +39,11 @@ createPoolWithLiquidity poolOperator poolParty lpIssuer issuerA issuerB provider
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Create tokens for liquidity
   tokenA <- submit issA $ createCmd T.Token with
@@ -135,11 +140,10 @@ testThreeHopRoute = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDCs
   let (pool1USDCCid, _) = head pool1USDCs
 
-  (usdcOut, _) <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
-    poolTokenACid = pool1ETHCid
-    poolTokenBCid = pool1USDCCid
+  receiptCid1 <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap
 
-  Some usdcToken <- queryContractId alice usdcOut
+  Some receipt1 <- queryContractId alice receiptCid1
+  Some usdcToken <- queryContractId alice receipt1.outputTokenCid
 
   -- HOP 2: USDC → DAI
   swapReq2 <- submit alice $ createCmd SR.SwapRequest with
@@ -153,7 +157,7 @@ testThreeHopRoute = script do
     symbolB = "USDC"
     feeBps = 30
     maxTTL = seconds 120
-    inputTokenCid = usdcOut
+    inputTokenCid = receipt1.outputTokenCid
     inputSymbol = "USDC"
     inputAmount = usdcToken.amount
     outputSymbol = "DAI"
@@ -171,11 +175,10 @@ testThreeHopRoute = script do
   let totalUSDC2 = sum $ map (\(_, t) -> t.amount) pool2USDCs
   let (pool2USDCCid, _) = head pool2USDCs
 
-  (daiOut, _) <- submit poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
-    poolTokenACid = pool2DAICid
-    poolTokenBCid = pool2USDCCid
+  receiptCid2 <- submit poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap
 
-  Some daiToken <- queryContractId alice daiOut
+  Some receipt2 <- queryContractId alice receiptCid2
+  Some daiToken <- queryContractId alice receipt2.outputTokenCid
 
   -- HOP 3: DAI → WBTC
   swapReq3 <- submit alice $ createCmd SR.SwapRequest with
@@ -189,7 +192,7 @@ testThreeHopRoute = script do
     symbolB = "WBTC"
     feeBps = 30
     maxTTL = seconds 120
-    inputTokenCid = daiOut
+    inputTokenCid = receipt2.outputTokenCid
     inputSymbol = "DAI"
     inputAmount = daiToken.amount
     outputSymbol = "WBTC"
@@ -207,11 +210,10 @@ testThreeHopRoute = script do
   let totalWBTC3 = sum $ map (\(_, t) -> t.amount) pool3WBTCs
   let (pool3WBTCCid, _) = head pool3WBTCs
 
-  (wbtcOut, _) <- submit poolParty3 $ exerciseCmd swapReady3 SR.ExecuteSwap with
-    poolTokenACid = pool3DAICid
-    poolTokenBCid = pool3WBTCCid
+  receiptCid3 <- submit poolParty3 $ exerciseCmd swapReady3 SR.ExecuteSwap
 
-  Some finalWBTC <- queryContractId alice wbtcOut
+  Some receipt3 <- queryContractId alice receiptCid3
+  Some finalWBTC <- queryContractId alice receipt3.outputTokenCid
 
   -- Verify
   assertMsg "Alice should own WBTC" (finalWBTC.owner == alice)
@@ -279,11 +281,10 @@ testMultiHopSlippageFailure = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDCs
   let (pool1USDCCid, _) = head pool1USDCs
 
-  (usdcOut, _) <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
-    poolTokenACid = pool1ETHCid
-    poolTokenBCid = pool1USDCCid
+  receiptCid1 <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap
 
-  Some usdcToken <- queryContractId alice usdcOut
+  Some receipt1 <- queryContractId alice receiptCid1
+  Some usdcToken <- queryContractId alice receipt1.outputTokenCid
 
   -- HOP 2: USDC → DAI with UNREALISTIC minOutput (should FAIL)
   swapReq2 <- submit alice $ createCmd SR.SwapRequest with
@@ -297,7 +298,7 @@ testMultiHopSlippageFailure = script do
     symbolB = "USDC"
     feeBps = 30
     maxTTL = seconds 120
-    inputTokenCid = usdcOut
+    inputTokenCid = receipt1.outputTokenCid
     inputSymbol = "USDC"
     inputAmount = usdcToken.amount
     outputSymbol = "DAI"
@@ -315,9 +316,7 @@ testMultiHopSlippageFailure = script do
   let (pool2USDCCid, _) = head pool2USDCs
 
   -- ExecuteSwap should FAIL due to minOutput check
-  submitMustFail poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap with
-    poolTokenACid = pool2DAICid
-    poolTokenBCid = pool2USDCCid
+  submitMustFail poolParty2 $ exerciseCmd swapReady2 SR.ExecuteSwap
 
   debug "✅ Multi-hop slippage: Final hop correctly rejected due to minOutput violation"
 
@@ -386,11 +385,10 @@ testRouteComparisonFull = script do
   let totalETH1 = sum $ map (\(_, t) -> t.amount) pool1ETHs
   let (pool1ETHCid, _) = head pool1ETHs
 
-  (daiOutA, _) <- submit poolParty1 $ exerciseCmd swapReadyA SR.ExecuteSwap with
-    poolTokenACid = pool1DAICid
-    poolTokenBCid = pool1ETHCid
+  receiptA <- submit poolParty1 $ exerciseCmd swapReadyA SR.ExecuteSwap
 
-  Some finalDAIA <- queryContractId alice daiOutA
+  Some receiptDataA <- queryContractId alice receiptA
+  Some finalDAIA <- queryContractId alice receiptDataA.outputTokenCid
 
   -- BOB: Multi-hop route ETH → USDC → DAI
   bobETH <- submit issuerETH $ createCmd T.Token with
@@ -428,11 +426,10 @@ testRouteComparisonFull = script do
   let totalUSDC2 = sum $ map (\(_, t) -> t.amount) pool2USDCs
   let (pool2USDCCid, _) = head pool2USDCs
 
-  (usdcOut, _) <- submit poolParty2 $ exerciseCmd swapReadyB1 SR.ExecuteSwap with
-    poolTokenACid = pool2ETHCid
-    poolTokenBCid = pool2USDCCid
+  receiptB1 <- submit poolParty2 $ exerciseCmd swapReadyB1 SR.ExecuteSwap
 
-  Some usdcToken <- queryContractId bob usdcOut
+  Some receiptDataB1 <- queryContractId bob receiptB1
+  Some usdcToken <- queryContractId bob receiptDataB1.outputTokenCid
 
   -- Hop 2: USDC → DAI
   swapReqB2 <- submit bob $ createCmd SR.SwapRequest with
@@ -446,7 +443,7 @@ testRouteComparisonFull = script do
     symbolB = "USDC"
     feeBps = 30
     maxTTL = seconds 120
-    inputTokenCid = usdcOut
+    inputTokenCid = receiptDataB1.outputTokenCid
     inputSymbol = "USDC"
     inputAmount = usdcToken.amount
     outputSymbol = "DAI"
@@ -463,11 +460,10 @@ testRouteComparisonFull = script do
   let totalUSDC3 = sum $ map (\(_, t) -> t.amount) pool3USDCs
   let (pool3USDCCid, _) = head pool3USDCs
 
-  (daiOutB, _) <- submit poolParty3 $ exerciseCmd swapReadyB2 SR.ExecuteSwap with
-    poolTokenACid = pool3DAICid
-    poolTokenBCid = pool3USDCCid
+  receiptB2 <- submit poolParty3 $ exerciseCmd swapReadyB2 SR.ExecuteSwap
 
-  Some finalDAIB <- queryContractId bob daiOutB
+  Some receiptDataB2 <- queryContractId bob receiptB2
+  Some finalDAIB <- queryContractId bob receiptDataB2.outputTokenCid
 
   -- Compare results
   let directAmount = finalDAIA.amount
@@ -544,11 +540,10 @@ testFailedIntermediateHop = script do
   let totalUSDC1 = sum $ map (\(_, t) -> t.amount) pool1USDCs
   let (pool1USDCCid, _) = head pool1USDCs
 
-  (usdcOut, _) <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap with
-    poolTokenACid = pool1ETHCid
-    poolTokenBCid = pool1USDCCid
+  receiptCid1 <- submit poolParty1 $ exerciseCmd swapReady1 SR.ExecuteSwap
 
-  Some usdcToken <- queryContractId alice usdcOut
+  Some receipt1 <- queryContractId alice receiptCid1
+  Some usdcToken <- queryContractId alice receipt1.outputTokenCid
 
   -- HOP 2: USDC → DAI (should FAIL - pool too small for ~1987 USDC)
   swapReq2 <- submit alice $ createCmd SR.SwapRequest with
@@ -562,7 +557,7 @@ testFailedIntermediateHop = script do
     symbolB = "USDC"
     feeBps = 30
     maxTTL = seconds 120
-    inputTokenCid = usdcOut
+    inputTokenCid = receipt1.outputTokenCid
     inputSymbol = "USDC"
     inputAmount = usdcToken.amount
     outputSymbol = "DAI"
@@ -742,9 +737,7 @@ testDeadlineExpiration = script do
   let (poolUSDCCid, _) = head poolUSDCs
 
   -- ExecuteSwap should FAIL - "Swap expired"
-  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETHCid
-    poolTokenBCid = poolUSDCCid
+  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
   debug "✅ Deadline expiration: Swap correctly rejected when deadline has passed"
 

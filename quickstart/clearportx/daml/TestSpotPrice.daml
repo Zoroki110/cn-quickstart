@@ -37,7 +37,11 @@ testBasicSpotPrice = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Add liquidity: 100 ETH, 200,000 USDC
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -105,7 +109,11 @@ testSpotPriceAfterSwap = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   aliceETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -194,7 +202,11 @@ testEmptyPoolSpotPrice = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Try to get spot price on empty pool (should FAIL)
   submitMustFail poolOperator $ exerciseCmd pool P.GetSpotPrice
@@ -230,7 +242,11 @@ testDifferentPriceRatios = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Add liquidity: 100,000 DAI, 100,000 USDC (1:1 ratio)
   aliceDAI <- submit issuerDAI $ createCmd T.Token with
@@ -295,7 +311,11 @@ testSpotPricePrecision = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Add liquidity: 400,000 USDC, 10 WBTC (1 WBTC = 40,000 USDC)
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with

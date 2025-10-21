@@ -4,6 +4,7 @@ import qualified Token.Token as T
 import qualified LPToken.LPToken as LP
 import qualified AMM.Pool as P
 import qualified AMM.SwapRequest as SR
+import qualified AMM.Receipt as R
 import DA.Time (seconds, addRelTime)
 import Daml.Script
 
@@ -48,7 +49,11 @@ testImbalancedLiquidity = script do
     totalLPSupply = 447.2135955  -- Alice has this
     reserveA = 10.0
     reserveB = 20000.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Bob wants to add IMBALANCED liquidity
   -- He deposits MORE ETH relative to USDC
@@ -120,7 +125,11 @@ testPartialLPBurn = script do
     totalLPSupply = 447.2135955
     reserveA = 10.0
     reserveB = 20000.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
     issuer = lpIssuer
@@ -151,8 +160,6 @@ testPartialLPBurn = script do
     lpTokenAmount = lpBurn
     minAmountA = 4.9
     minAmountB = 9900.0
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
     deadline = deadline
 
   -- Verify Alice got 50% back
@@ -200,7 +207,11 @@ testMultipleLPs = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   now <- getTime
   let deadline = addRelTime now (seconds 60)
@@ -341,7 +352,11 @@ testFullCycle = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   now <- getTime
   let deadline = addRelTime now (seconds 60)
@@ -410,9 +425,7 @@ testFullCycle = script do
 
   (swapReady1, _) <- submit bob $ exerciseCmd swapReq1 SR.PrepareSwap with protocolFeeReceiver = clearportx
 
-  (bobETHOut, _) <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
-    poolTokenACid = poolETH1
-    poolTokenBCid = poolUSDC1
+  receiptCidBob <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap
 
   debug "Step 2: Bob swapped 1000 USDC for ETH (fees accrued) ✓"
 
@@ -462,7 +475,11 @@ testDustAmounts = script do
     totalLPSupply = 0.0
     reserveA = 0.0
     reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Very small amounts (dust)
   aliceETH <- submit issuerETH $ createCmd T.Token with

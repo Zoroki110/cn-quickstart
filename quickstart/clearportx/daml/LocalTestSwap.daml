@@ -7,33 +7,41 @@ import DA.List (head)
 import qualified Token.Token as T
 import qualified AMM.SwapRequest as SR
 import qualified AMM.Pool as P
+import qualified AMM.Receipt as R
+import Test.TestHelpers (createPoolWithLiquidity)
+import qualified LPToken.LPToken as LP
 
 -- Test un swap: Alice swap 5000 USDC → ETH
 testLocalSwap : Script ()
 testLocalSwap = script do
-  -- Récupérer les parties existantes
+  -- Setup parties
   alice <- allocateParty "Alice"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
   clearportx <- allocateParty "ClearportX"
+  lpIssuer <- allocateParty "LPIssuer"
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
+  lpProvider <- allocateParty "LPProvider"
 
   now <- getTime
 
-  -- Trouver le pool
-  pools <- query @P.Pool poolOperator
-  let (poolCid, pool) = head pools
+  -- Create pool with liquidity (100 ETH, 200,000 USDC)
+  poolCid <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC lpProvider clearportx "ETH" "USDC" 100.0 200000.0
 
-  debug $ "Found pool: " <> pool.poolId
+  Some pool <- queryContractId poolOperator poolCid
+
+  debug $ "Created pool: " <> pool.poolId
   debug $ "Reserves: " <> show pool.reserveA <> " ETH, " <> show pool.reserveB <> " USDC"
 
-  -- Trouver les tokens d'Alice
-  aliceTokens <- query @T.Token alice
-  let aliceUSDCs = filter (\(_, t) -> t.symbol == "USDC" && t.owner == alice) aliceTokens
-  let (aliceUSDCCid, aliceUSDC) = head aliceUSDCs
+  -- Create Alice's USDC token
+  aliceUSDCCid <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 5000.0
 
-  debug $ "Alice has: " <> show aliceUSDC.amount <> " USDC"
+  debug $ "Alice has: 5000.0 USDC"
 
   -- Créer swap request: 5000 USDC → ETH
   swapReq <- submit alice $ createCmd SR.SwapRequest with
@@ -62,23 +70,17 @@ testLocalSwap = script do
 
   debug "✅ Swap prepared (USDC transferred to pool)"
 
-  -- Trouver les pool tokens
-  poolTokens <- query @T.Token poolParty
-  let poolETHs = filter (\(_, t) -> t.symbol == "ETH" && t.owner == poolParty) poolTokens
-  let poolUSDCs = filter (\(_, t) -> t.symbol == "USDC" && t.owner == poolParty) poolTokens
-  let (poolETHCid, _) = head poolETHs
-  let (poolUSDCCid, _) = head poolUSDCs
+  -- Execute swap (no longer needs poolTokenACid/poolTokenBCid parameters)
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
-  -- Execute swap
-  (aliceNewETH, newPool) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETHCid
-    poolTokenBCid = poolUSDCCid
+  -- Vérifier résultat depuis Receipt
+  receipt <- queryContractId alice receiptCid
+  let Some swapReceipt = receipt
 
-  -- Vérifier résultat
-  newETHToken <- queryContractId alice aliceNewETH
-  let Some ethReceived = newETHToken
+  aliceNewETH <- queryContractId alice swapReceipt.outputTokenCid
+  let Some ethReceived = aliceNewETH
 
-  newPoolData <- queryContractId poolOperator newPool
+  newPoolData <- queryContractId poolOperator swapReceipt.newPoolCid
   let Some newPoolState = newPoolData
 
   debug ""

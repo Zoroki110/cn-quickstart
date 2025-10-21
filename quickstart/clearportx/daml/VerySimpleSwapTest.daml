@@ -1,0 +1,147 @@
+module VerySimpleSwapTest where
+
+import Daml.Script
+import DA.Time
+import qualified Token.Token as T
+import qualified AMM.SwapRequest as SR
+import qualified AMM.Pool as P
+
+verySimpleSwapTest : Script ()
+verySimpleSwapTest = script do
+  alice <- allocateParty "Alice"
+  poolOperator <- allocateParty "PoolOperator"
+  poolParty <- allocateParty "PoolParty"
+  lpIssuer <- allocateParty "LPIssuer"
+  clearportx <- allocateParty "ClearportX"
+  issuerETH <- allocateParty "IssuerETH"
+  issuerUSDC <- allocateParty "IssuerUSDC"
+
+  now <- getTime
+  let deadline = addRelTime now (hours 1)
+
+  -- Create empty pool
+  emptyPool <- submit poolOperator $ createCmd P.Pool with
+    poolOperator = poolOperator
+    poolParty = poolParty
+    lpIssuer = lpIssuer
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "ETH-USDC"
+    maxTTL = hours 2
+    totalLPSupply = 0.0
+    reserveA = 0.0
+    reserveB = 0.0
+    tokenACid = None
+    tokenBCid = None
+    protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
+
+  debug "✅ Empty pool created"
+
+  -- Create LP tokens
+  lpETH <- submit issuerETH $ createCmd T.Token with
+    issuer = issuerETH
+    owner = poolOperator
+    symbol = "ETH"
+    amount = 100.0
+
+  lpUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = poolOperator
+    symbol = "USDC"
+    amount = 200000.0
+
+  debug "✅ LP tokens created"
+
+  -- Add liquidity
+  (lpToken, pool) <- submitMulti [poolOperator, poolParty, lpIssuer] [] $
+    exerciseCmd emptyPool P.AddLiquidity with
+      provider = poolOperator
+      tokenACid = lpETH
+      tokenBCid = lpUSDC
+      amountA = 100.0
+      amountB = 200000.0
+      minLPTokens = 0.0
+      deadline = deadline
+
+  debug "✅ Liquidity added"
+
+  -- Fetch pool to verify
+  Some poolData <- queryContractId poolOperator pool
+  debug $ "Pool reserves: " <> show poolData.reserveA <> " ETH, " <> show poolData.reserveB <> " USDC"
+  debug $ "Pool has tokenACid: " <> show (case poolData.tokenACid of { None -> "No"; Some _ -> "Yes" })
+  debug $ "Pool has tokenBCid: " <> show (case poolData.tokenBCid of { None -> "No"; Some _ -> "Yes" })
+
+  -- Create Alice's USDC
+  aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
+    issuer = issuerUSDC
+    owner = alice
+    symbol = "USDC"
+    amount = 1000.0
+
+  debug "✅ Alice has USDC"
+
+  -- Create swap request
+  swapReq <- submit alice $ createCmd SR.SwapRequest with
+    trader = alice
+    poolCid = pool
+    poolParty = poolParty
+    poolOperator = poolOperator
+    issuerA = issuerETH
+    issuerB = issuerUSDC
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    maxTTL = hours 2
+    inputTokenCid = aliceUSDC
+    inputSymbol = "USDC"
+    inputAmount = 1000.0
+    outputSymbol = "ETH"
+    minOutput = 0.0
+    deadline = deadline
+    maxPriceImpactBps = 5000
+
+  debug "✅ Swap request created"
+
+  -- Prepare swap
+  (swapReady, _) <- submit alice $ exerciseCmd swapReq SR.PrepareSwap with protocolFeeReceiver = clearportx
+
+  debug "✅ Swap prepared"
+
+  -- Execute swap
+  debug "About to execute swap..."
+
+  -- Try to execute and catch what happens
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
+
+  debug "🎉 SWAP EXECUTED! Receipt created."
+
+  -- Query receipt
+  receiptMaybe <- queryContractId alice receiptCid
+  case receiptMaybe of
+    None -> do
+      debug "❌ ERROR: Receipt not found!"
+      assertFail "Receipt was not created or not visible to Alice"
+    Some receipt -> do
+      debug $ "✅ Receipt found - Amount out: " <> show receipt.amountOut <> " ETH"
+
+      -- Query output token
+      outputTokenMaybe <- queryContractId alice receipt.outputTokenCid
+      case outputTokenMaybe of
+        None -> do
+          debug "❌ ERROR: Output token not found!"
+          assertFail "Output token was not created or not visible to Alice"
+        Some ethToken -> do
+          debug $ "✅ Output token found - Amount: " <> show ethToken.amount <> " ETH"
+
+          -- Verify amount is reasonable
+          assertMsg "ETH amount should be > 0" (ethToken.amount > 0.0)
+          assertMsg "ETH amount should be < 1 (max possible from 1000 USDC)" (ethToken.amount < 1.0)
+
+          debug "🎉 ALL CHECKS PASSED!"
+
+  return ()

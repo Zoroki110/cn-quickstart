@@ -1,0 +1,137 @@
+-- Initialize ClearportX DEX with tokens and pools
+module InitializeClearportX where
+
+import Daml.Script
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+import DA.Time (days)
+
+-- Initialize the DEX with tokens and pools
+initialize : Script ()
+initialize = script do
+  -- Allocate parties
+  clearportx <- allocatePartyWithHint "ClearportX" (PartyIdHint "ClearportX")
+  poolParty <- allocatePartyWithHint "PoolParty" (PartyIdHint "PoolParty")
+  lpIssuer <- allocatePartyWithHint "LPIssuer" (PartyIdHint "LPIssuer")
+
+  debug "🚀 Starting ClearportX initialization..."
+  debug ("ClearportX: " <> show clearportx)
+  debug ("PoolParty: " <> show poolParty)
+  debug ("LPIssuer: " <> show lpIssuer)
+
+  -- Create tokens (issuer = clearportx)
+  debug "\n📝 Creating tokens..."
+
+  ethToken <- submit clearportx do
+    createCmd T.Token with
+      issuer = clearportx
+      owner = poolParty  -- Pool will own initial liquidity
+      symbol = "ETH"
+      amount = 1000.0  -- 1000 ETH for liquidity
+
+  debug "✅ Created 1000 ETH (owned by PoolParty)"
+
+  usdtToken <- submit clearportx do
+    createCmd T.Token with
+      issuer = clearportx
+      owner = poolParty
+      symbol = "USDT"
+      amount = 3000000.0  -- 3M USDT for liquidity
+
+  debug "✅ Created 3M USDT (owned by PoolParty)"
+
+  usdcToken <- submit clearportx do
+    createCmd T.Token with
+      issuer = clearportx
+      owner = poolParty
+      symbol = "USDC"
+      amount = 3000000.0  -- 3M USDC for liquidity
+
+  debug "✅ Created 3M USDC (owned by PoolParty)"
+
+  -- Create pools with initial reserves
+  debug "\n🏊 Creating liquidity pools..."
+
+  -- Pool 1: ETH/USDT (1 ETH = 3000 USDT)
+  ethUsdtPool <- submit clearportx do
+    createCmd P.Pool with
+      poolOperator = clearportx
+      poolParty = poolParty
+      lpIssuer = lpIssuer
+      issuerA = clearportx
+      issuerB = clearportx
+      symbolA = "ETH"
+      symbolB = "USDT"
+      feeBps = 30  -- 0.3% fee (30 basis points)
+      poolId = "ETH-USDT"
+      maxTTL = days 365
+      totalLPSupply = 54772.2557505  -- sqrt(100 * 300000) ≈ 54772 (10 decimals max)
+      reserveA = 100.0      -- 100 ETH
+      reserveB = 300000.0   -- 300k USDT
+      tokenACid = Some ethToken  -- Link to actual token CIDs
+      tokenBCid = Some usdtToken
+      protocolFeeReceiver = clearportx
+      maxInBps = 10000  -- 100% (for testing)
+      maxOutBps = 5000  -- 50%
+
+  debug "✅ Created ETH/USDT pool (100 ETH : 300k USDT, price: 1 ETH = 3000 USDT)"
+
+  -- Pool 2: ETH/USDC (1 ETH = 3000 USDC)
+  ethUsdcPool <- submit clearportx do
+    createCmd P.Pool with
+      poolOperator = clearportx
+      poolParty = poolParty
+      lpIssuer = lpIssuer
+      issuerA = clearportx
+      issuerB = clearportx
+      symbolA = "ETH"
+      symbolB = "USDC"
+      feeBps = 30  -- 0.3% fee
+      poolId = "ETH-USDC"
+      maxTTL = days 365
+      totalLPSupply = 54772.2557505  -- sqrt(100 * 300000) ≈ 54772 (10 decimals max)
+      reserveA = 100.0      -- 100 ETH
+      reserveB = 300000.0   -- 300k USDC
+      tokenACid = Some ethToken
+      tokenBCid = Some usdcToken
+      protocolFeeReceiver = clearportx
+      maxInBps = 10000
+      maxOutBps = 5000
+
+  debug "✅ Created ETH/USDC pool (100 ETH : 300k USDC, price: 1 ETH = 3000 USDC)"
+
+  -- Pool 3: USDT/USDC (1:1 stablecoin pair)
+  usdtUsdcPool <- submit clearportx do
+    createCmd P.Pool with
+      poolOperator = clearportx
+      poolParty = poolParty
+      lpIssuer = lpIssuer
+      issuerA = clearportx
+      issuerB = clearportx
+      symbolA = "USDC"  -- USDC < USDT alphabetically
+      symbolB = "USDT"
+      feeBps = 10  -- 0.1% fee for stablecoin pairs (lower)
+      poolId = "USDC-USDT"
+      maxTTL = days 365
+      totalLPSupply = 100000.0  -- sqrt(100k * 100k)
+      reserveA = 100000.0   -- 100k USDC
+      reserveB = 100000.0   -- 100k USDT
+      tokenACid = Some usdcToken
+      tokenBCid = Some usdtToken
+      protocolFeeReceiver = clearportx
+      maxInBps = 10000
+      maxOutBps = 5000
+
+  debug "✅ Created USDC/USDT pool (100k USDC : 100k USDT, price: 1:1)"
+
+  debug "\n🎉 ClearportX initialization complete!"
+  debug "\n📊 Contract IDs:"
+  debug ("  ETH token: " <> show ethToken)
+  debug ("  USDT token: " <> show usdtToken)
+  debug ("  USDC token: " <> show usdcToken)
+  debug ("  ETH/USDT pool: " <> show ethUsdtPool)
+  debug ("  ETH/USDC pool: " <> show ethUsdcPool)
+  debug ("  USDC/USDT pool: " <> show usdtUsdcPool)
+  debug "\n✅ Ready for testing on app.clearportx.com!"
+
+  return ()

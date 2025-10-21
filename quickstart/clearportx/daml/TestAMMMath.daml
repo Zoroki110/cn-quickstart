@@ -5,6 +5,9 @@ import DA.Time
 import qualified Token.Token as T
 import qualified AMM.Pool as P
 import qualified AMM.SwapRequest as SR
+import qualified AMM.Receipt as R
+import qualified LPToken.LPToken as LP
+import Test.TestHelpers (createPoolWithLiquidity)
 
 -- Test suite for AMM mathematical accuracy
 -- Validates constant product formula (x * y = k)
@@ -13,6 +16,7 @@ import qualified AMM.SwapRequest as SR
 testConstantProduct : Script ()
 testConstantProduct = script do
   alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"  -- LP provider
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
   clearportx <- allocateParty "ClearportX"
@@ -20,38 +24,13 @@ testConstantProduct = script do
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
-  pool <- submit poolOperator $ createCmd P.Pool with
-    poolOperator = poolOperator
-    poolParty = poolParty
-    lpIssuer = lpIssuer
-    issuerA = issuerETH
-    issuerB = issuerUSDC
-    symbolA = "ETH"
-    symbolB = "USDC"
-    feeBps = 30
-    poolId = "ETH-USDC"
-    maxTTL = seconds 120
-    totalLPSupply = 0.0
-    reserveA = 100.0  -- Initial reserves: 100 ETH
-    reserveB = 200000.0  -- 200,000 USDC
-    protocolFeeReceiver = clearportx
-
   -- Initial reserves: 100 ETH, 200,000 USDC
   let initialETH = 100.0
   let initialUSDC = 200000.0
   let k = initialETH * initialUSDC  -- k = 20,000,000
 
-  poolETH <- submit issuerETH $ createCmd T.Token with
-    issuer = issuerETH
-    owner = poolParty
-    symbol = "ETH"
-    amount = initialETH
-
-  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
-    issuer = issuerUSDC
-    owner = poolParty
-    symbol = "USDC"
-    amount = initialUSDC
+  -- Create pool with initial liquidity using helper
+  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC bob clearportx "ETH" "USDC" initialETH initialUSDC
 
   -- Alice swaps 1000 USDC
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
@@ -83,11 +62,10 @@ testConstantProduct = script do
     maxPriceImpactBps = 5000
 
   (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
-  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
-  ethToken <- queryContractId alice ethReceived
+  Some receipt <- queryContractId alice receiptCid
+  ethToken <- queryContractId alice receipt.outputTokenCid
   case ethToken of
     None -> assertFail "ETH token not found"
     Some token -> do
@@ -124,6 +102,7 @@ testPriceImpact : Script ()
 testPriceImpact = script do
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
+  lpProvider <- allocateParty "LPProvider"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
   clearportx <- allocateParty "ClearportX"
@@ -132,36 +111,11 @@ testPriceImpact = script do
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
-  pool <- submit poolOperator $ createCmd P.Pool with
-    poolOperator = poolOperator
-    poolParty = poolParty
-    lpIssuer = lpIssuer
-    issuerA = issuerETH
-    issuerB = issuerUSDC
-    symbolA = "ETH"
-    symbolB = "USDC"
-    feeBps = 30
-    poolId = "ETH-USDC"
-    maxTTL = seconds 120
-    totalLPSupply = 0.0
-    reserveA = 10.0  -- 10 ETH
-    reserveB = 20000.0  -- 20,000 USDC
-    protocolFeeReceiver = clearportx
-
   let reserveETH = 10.0
   let reserveUSDC = 20000.0
 
-  poolETH <- submit issuerETH $ createCmd T.Token with
-    issuer = issuerETH
-    owner = poolParty
-    symbol = "ETH"
-    amount = reserveETH
-
-  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
-    issuer = issuerUSDC
-    owner = poolParty
-    symbol = "USDC"
-    amount = reserveUSDC
+  -- Create pool with initial liquidity using helper
+  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC lpProvider clearportx "ETH" "USDC" reserveETH reserveUSDC
 
   -- Test different swap sizes and measure price impact
   -- Small swap: 100 USDC (0.5% of reserve)
@@ -205,11 +159,10 @@ testPriceImpact = script do
   let initialPrice = reserveUSDC / reserveETH  -- 2000 USDC per ETH
 
   (swapReadyAlice, _) <- submit alice $ exerciseCmd swapRequestAlice SR.PrepareSwap with protocolFeeReceiver = clearportx
-  (ethAlice, _) <- submit poolParty $ exerciseCmd swapReadyAlice SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  receiptCidAlice <- submit poolParty $ exerciseCmd swapReadyAlice SR.ExecuteSwap
 
-  aliceETH <- queryContractId alice ethAlice
+  Some receiptAlice <- queryContractId alice receiptCidAlice
+  aliceETH <- queryContractId alice receiptAlice.outputTokenCid
   case aliceETH of
     None -> assertFail "Alice ETH not found"
     Some token -> do
@@ -254,12 +207,23 @@ testPriceImpact = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- Same as pool1: 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
+
+  -- Update pool2 to link tokens
+  updatedPool2 <- submit poolParty $ exerciseCmd pool2 P.ArchiveAndUpdateReserves with
+    updatedReserveA = reserveETH
+    updatedReserveB = reserveUSDC
+    updatedTokenACid = Some poolETH2
+    updatedTokenBCid = Some poolUSDC2
 
   -- Bob's large swap (on fresh pool2)
   swapRequestBob <- submit bob $ createCmd SR.SwapRequest with
     trader = bob
-    poolCid = pool2  -- Use fresh pool
+    poolCid = updatedPool2  -- Use updated pool
     poolParty = poolParty
     poolOperator = poolOperator
     issuerA = issuerETH
@@ -279,11 +243,10 @@ testPriceImpact = script do
   (swapReadyBob, _) <- submit bob $ exerciseCmd swapRequestBob SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- Use fresh pool tokens
-  (ethBob, _) <- submit poolParty $ exerciseCmd swapReadyBob SR.ExecuteSwap with
-    poolTokenACid = poolETH2
-    poolTokenBCid = poolUSDC2
+  receiptCidBob <- submit poolParty $ exerciseCmd swapReadyBob SR.ExecuteSwap
 
-  bobETH <- queryContractId bob ethBob
+  Some receiptBob <- queryContractId bob receiptCidBob
+  bobETH <- queryContractId bob receiptBob.outputTokenCid
   case bobETH of
     None -> assertFail "Bob ETH not found"
     Some token -> do
@@ -305,6 +268,7 @@ testPriceImpact = script do
 testFeeAccumulation : Script ()
 testFeeAccumulation = script do
   alice <- allocateParty "Alice"
+  lpProvider <- allocateParty "LPProvider"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
   clearportx <- allocateParty "ClearportX"
@@ -312,36 +276,11 @@ testFeeAccumulation = script do
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
-  pool <- submit poolOperator $ createCmd P.Pool with
-    poolOperator = poolOperator
-    poolParty = poolParty
-    lpIssuer = lpIssuer
-    issuerA = issuerETH
-    issuerB = issuerUSDC
-    symbolA = "ETH"
-    symbolB = "USDC"
-    feeBps = 30  -- 0.3% fee
-    poolId = "ETH-USDC"
-    maxTTL = seconds 120
-    totalLPSupply = 0.0
-    reserveA = 10.0  -- 10 ETH
-    reserveB = 20000.0  -- 20,000 USDC
-    protocolFeeReceiver = clearportx
-
   let initialETH = 10.0
   let initialUSDC = 20000.0
 
-  poolETH <- submit issuerETH $ createCmd T.Token with
-    issuer = issuerETH
-    owner = poolParty
-    symbol = "ETH"
-    amount = initialETH
-
-  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
-    issuer = issuerUSDC
-    owner = poolParty
-    symbol = "USDC"
-    amount = initialUSDC
+  -- Create pool with initial liquidity using helper
+  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC lpProvider clearportx "ETH" "USDC" initialETH initialUSDC
 
   -- Alice swaps 1000 USDC
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
@@ -373,11 +312,10 @@ testFeeAccumulation = script do
     maxPriceImpactBps = 5000
 
   (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
-  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
-  ethToken <- queryContractId alice ethReceived
+  Some receipt <- queryContractId alice receiptCid
+  ethToken <- queryContractId alice receipt.outputTokenCid
   case ethToken of
     None -> assertFail "ETH token not found"
     Some token -> do
@@ -417,6 +355,7 @@ testFeeAccumulation = script do
 testBidirectionalSwaps : Script ()
 testBidirectionalSwaps = script do
   alice <- allocateParty "Alice"
+  lpProvider <- allocateParty "LPProvider"
   poolParty <- allocateParty "PoolParty"
   poolOperator <- allocateParty "PoolOperator"
   clearportx <- allocateParty "ClearportX"
@@ -424,33 +363,8 @@ testBidirectionalSwaps = script do
   issuerETH <- allocateParty "IssuerETH"
   issuerUSDC <- allocateParty "IssuerUSDC"
 
-  pool <- submit poolOperator $ createCmd P.Pool with
-    poolOperator = poolOperator
-    poolParty = poolParty
-    lpIssuer = lpIssuer
-    issuerA = issuerETH
-    issuerB = issuerUSDC
-    symbolA = "ETH"
-    symbolB = "USDC"
-    feeBps = 30
-    poolId = "ETH-USDC"
-    maxTTL = seconds 120
-    totalLPSupply = 0.0
-    reserveA = 10.0  -- 10 ETH
-    reserveB = 20000.0  -- 20,000 USDC
-    protocolFeeReceiver = clearportx
-
-  poolETH <- submit issuerETH $ createCmd T.Token with
-    issuer = issuerETH
-    owner = poolParty
-    symbol = "ETH"
-    amount = 10.0
-
-  poolUSDC <- submit issuerUSDC $ createCmd T.Token with
-    issuer = issuerUSDC
-    owner = poolParty
-    symbol = "USDC"
-    amount = 20000.0
+  -- Create pool with initial liquidity using helper
+  pool <- createPoolWithLiquidity poolOperator poolParty lpIssuer issuerETH issuerUSDC lpProvider clearportx "ETH" "USDC" 10.0 20000.0
 
   -- Alice starts with 100 USDC
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
@@ -483,12 +397,11 @@ testBidirectionalSwaps = script do
     maxPriceImpactBps = 5000
 
   (swapReady1, _) <- submit alice $ exerciseCmd swapRequest1 SR.PrepareSwap with protocolFeeReceiver = clearportx
-  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  receiptCid1 <- submit poolParty $ exerciseCmd swapReady1 SR.ExecuteSwap
 
   -- Alice now has ~0.0496 ETH
-  ethToken <- queryContractId alice ethReceived
+  Some receipt1 <- queryContractId alice receiptCid1
+  ethToken <- queryContractId alice receipt1.outputTokenCid
   case ethToken of
     None -> assertFail "ETH token not found"
     Some token -> do
@@ -498,9 +411,10 @@ testBidirectionalSwaps = script do
 
       -- SWAP 2: Alice swaps all ETH back → USDC
       -- Pool now has: 9.9504 ETH, 20100 USDC (approximately)
+      -- Use the NEW pool from receipt1 (old pool was consumed)
       swapRequest2 <- submit alice $ createCmd SR.SwapRequest with
         trader = alice
-        poolCid = pool
+        poolCid = receipt1.newPoolCid
         poolParty = poolParty
         poolOperator = poolOperator
         issuerA = issuerETH
@@ -509,7 +423,7 @@ testBidirectionalSwaps = script do
         symbolB = "USDC"
         feeBps = 30
         maxTTL = seconds 120
-        inputTokenCid = ethReceived
+        inputTokenCid = receipt1.outputTokenCid
         inputSymbol = "ETH"
         inputAmount = ethAmount
         outputSymbol = "USDC"
@@ -518,11 +432,10 @@ testBidirectionalSwaps = script do
         maxPriceImpactBps = 5000
 
       (swapReady2, _) <- submit alice $ exerciseCmd swapRequest2 SR.PrepareSwap with protocolFeeReceiver = clearportx
-      (usdcReceived, _) <- submit poolParty $ exerciseCmd swapReady2 SR.ExecuteSwap with
-        poolTokenACid = poolETH
-        poolTokenBCid = poolUSDC
+      receiptCid2 <- submit poolParty $ exerciseCmd swapReady2 SR.ExecuteSwap
 
-      usdcToken <- queryContractId alice usdcReceived
+      Some receipt2 <- queryContractId alice receiptCid2
+      usdcToken <- queryContractId alice receipt2.outputTokenCid
       case usdcToken of
         None -> assertFail "USDC token not found"
         Some token2 -> do

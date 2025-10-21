@@ -1,0 +1,49 @@
+-- Copyright (c) 2025, Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: 0BSD
+
+module SimplePoolInit where
+
+import Daml.Script
+import qualified AMM.Pool as P
+import qualified Token.Token as T
+
+-- Simple script to create one ETH-USDC pool for testing
+simplePoolInit : Script ()
+simplePoolInit = script do
+  -- Allocate parties
+  poolParty <- allocatePartyWithHint "liquidity-provider" (PartyIdHint "liquidity-provider")
+
+  -- Create tokens for pool creation
+  ethTokenCid <- submit poolParty do
+    createCmd T.Token with
+      issuer = poolParty
+      owner = poolParty
+      symbol = "ETH"
+      amount = "100.0"
+
+  usdcTokenCid <- submit poolParty do
+    createCmd T.Token with
+      issuer = poolParty
+      owner = poolParty
+      symbol = "USDC"
+      amount = "200000.0"
+
+  -- Create pool
+  poolCid <- submit poolParty do
+    createCmd P.Pool with
+      poolParty = poolParty
+      token0Symbol = "ETH"
+      token1Symbol = "USDC"
+      reserve0 = "100.0"
+      reserve1 = "200000.0"
+      totalLiquidity = "0.0"
+      lpTokenSymbol = "LP-ETH-USDC"
+      feeNumerator = 30
+      feeDenominator = 10000
+      protocolFeeNumerator = 5
+      protocolFeeDenominator = 100
+      collectedFee0 = "0.0"
+      collectedFee1 = "0.0"
+
+  debug $ "✓ Created ETH-USDC pool: " <> show poolCid
+  return ()

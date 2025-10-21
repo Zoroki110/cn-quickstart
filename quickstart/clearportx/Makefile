@@ -46,8 +46,8 @@ build: verify-strict
 	@daml build >/dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || \
 		(echo "$(RED)✗$(NC)" && echo "$(RED)Build failed. Run 'make build-verbose' for details.$(NC)" && exit 1)
 	@printf "$(CYAN)→$(NC) Generating DAR... "
-	@if [ -f ".daml/dist/clearportx-1.0.0.dar" ]; then \
-		SIZE=$$(ls -lh .daml/dist/clearportx-1.0.0.dar | awk '{print $$5}'); \
+	@if [ -f ".daml/dist/clearportx-fees-1.0.0.dar" ]; then \
+		SIZE=$$(ls -lh .daml/dist/clearportx-fees-1.0.0.dar | awk '{print $$5}'); \
 		echo "$(GREEN)✓$(NC) ($$SIZE)"; \
 	else \
 		echo "$(RED)✗$(NC)"; \
@@ -55,7 +55,7 @@ build: verify-strict
 	fi
 	@echo ""
 	@echo "$(GREEN)✅ Build successful$(NC)"
-	@echo "$(BLUE)→$(NC) Output: $(CYAN).daml/dist/clearportx-1.0.0.dar$(NC)"
+	@echo "$(BLUE)→$(NC) Output: $(CYAN).daml/dist/clearportx-fees-1.0.0.dar$(NC)"
 
 build-verbose: verify-strict
 	@echo "$(YELLOW)Building DAML project (verbose)...$(NC)"
@@ -103,7 +103,7 @@ check:
 	@printf "$(CYAN)→$(NC) Java:         "
 	@java -version 2>&1 | head -1 | sed 's/.*version "\(.*\)".*/\1/' || echo "$(RED)Not installed$(NC)"
 	@printf "$(CYAN)→$(NC) Project:      "
-	@if [ -f "daml.yaml" ]; then echo "$(GREEN)clearportx-1.0.0$(NC)"; else echo "$(RED)Not found$(NC)"; fi
+	@if [ -f "daml.yaml" ]; then echo "$(GREEN)clearportx-fees-1.0.0$(NC)"; else echo "$(RED)Not found$(NC)"; fi
 	@printf "$(CYAN)→$(NC) Contracts:    "
 	@find daml/AMM daml/Token daml/LPToken -name "*.daml" 2>/dev/null | wc -l | tr -d ' ' | xargs echo
 	@printf "$(CYAN)→$(NC) Tests:        "
@@ -114,10 +114,22 @@ check:
 # Commande pour déployer (à configurer selon ton setup)
 deploy: build
 	@echo "$(YELLOW)Deploying to Canton...$(NC)"
-	@echo "$(CYAN)→$(NC) Upload command: $(BLUE)daml ledger upload-dar .daml/dist/clearportx-1.0.0.dar$(NC)"
+	@echo "$(CYAN)→$(NC) Upload command: $(BLUE)daml ledger upload-dar .daml/dist/clearportx-fees-1.0.0.dar$(NC)"
 	@echo "$(YELLOW)⚠$(NC)  Configure your Canton connection first"
 
 # Raccourci rapide
 all: build test-summary
+
+# Initialize contracts on Canton
+init:
+	@echo "$(COLOR_YELLOW)Initializing ClearportX contracts...$(COLOR_RESET)"
+	@echo "$(COLOR_BLUE)→$(COLOR_RESET) Creating tokens and pools..."
+	@daml script \
+		--dar .daml/dist/clearportx-fees-1.0.0.dar \
+		--script-name InitializeClearportX:initialize \
+		--ledger-host localhost \
+		--ledger-port 3901 \
+		|| (echo "$(COLOR_RED)⚠$(COLOR_RESET)  Configure Canton connection first" && exit 1)
+	@echo "$(COLOR_GREEN)✅ Initialization complete!$(COLOR_RESET)"
 
 .DEFAULT_GOAL := build

@@ -5,6 +5,7 @@ import DA.Time
 import qualified Token.Token as T
 import qualified AMM.Pool as P
 import qualified AMM.SwapRequest as SR
+import qualified AMM.Receipt as R
 
 -- Test suite for AMM edge cases and robustness
 -- Tests boundary conditions, extreme values, and error handling
@@ -36,7 +37,11 @@ testMinimalSwap = script do
     totalLPSupply = 0.0
     reserveA = 1000.0  -- Matches pool liquidity below
     reserveB = 2000000.0
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Large liquidity pool: 1000 ETH, 2,000,000 USDC
   poolETH <- submit issuerETH $ createCmd T.Token with
@@ -51,6 +56,13 @@ testMinimalSwap = script do
     symbol = "USDC"
     amount = 2000000.0
 
+  -- Update pool to link tokens
+  updatedPool <- submit poolParty $ exerciseCmd pool P.ArchiveAndUpdateReserves with
+    updatedReserveA = 1000.0
+    updatedReserveB = 2000000.0
+    updatedTokenACid = Some poolETH
+    updatedTokenBCid = Some poolUSDC
+
   -- Alice has tiny amount: 0.01 USDC (1 cent)
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
     issuer = issuerUSDC
@@ -64,7 +76,7 @@ testMinimalSwap = script do
   -- Create swap request
   swapRequest <- submit alice $ createCmd SR.SwapRequest with
     trader = alice
-    poolCid = pool
+    poolCid = updatedPool
     poolParty = poolParty
     poolOperator = poolOperator
     issuerA = issuerETH
@@ -83,12 +95,11 @@ testMinimalSwap = script do
 
   -- Execute swap
   (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
-  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
   -- Verify we got some ETH (even if tiny)
-  ethToken <- queryContractId alice ethReceived
+  Some receipt <- queryContractId alice receiptCid
+  ethToken <- queryContractId alice receipt.outputTokenCid
   case ethToken of
     None -> assertFail "ETH token not found"
     Some token -> do
@@ -123,7 +134,11 @@ testLargeSwap = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- Small pool: 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Small pool: 10 ETH, 20,000 USDC
   poolETH <- submit issuerETH $ createCmd T.Token with
@@ -138,19 +153,26 @@ testLargeSwap = script do
     symbol = "USDC"
     amount = 20000.0
 
-  -- Alice wants to swap HUGE amount: 10,000 USDC (50% of pool!)
+  -- Update pool to link tokens
+  updatedPool <- submit poolParty $ exerciseCmd pool P.ArchiveAndUpdateReserves with
+    updatedReserveA = 10.0
+    updatedReserveB = 20000.0
+    updatedTokenACid = Some poolETH
+    updatedTokenBCid = Some poolUSDC
+
+  -- Alice wants to swap large amount: 8,000 USDC (40% of pool!)
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
     issuer = issuerUSDC
     owner = alice
     symbol = "USDC"
-    amount = 10000.0
+    amount = 8000.0
 
   now <- getTime
   let deadline = addRelTime now (seconds 60)
 
   swapRequest <- submit alice $ createCmd SR.SwapRequest with
     trader = alice
-    poolCid = pool
+    poolCid = updatedPool
     poolParty = poolParty
     poolOperator = poolOperator
     issuerA = issuerETH
@@ -161,24 +183,23 @@ testLargeSwap = script do
     maxTTL = seconds 120
     inputTokenCid = aliceUSDC
     inputSymbol = "USDC"
-    inputAmount = 10000.0
+    inputAmount = 8000.0
     outputSymbol = "ETH"
     minOutput = 0.0
     deadline = deadline
-    maxPriceImpactBps = 5000  -- Accept high impact
+    maxPriceImpactBps = 5000  -- Accept high impact (50%) - large swap causes ~44% impact
 
   (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
-  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
-  ethToken <- queryContractId alice ethReceived
+  Some receipt <- queryContractId alice receiptCid
+  ethToken <- queryContractId alice receipt.outputTokenCid
   case ethToken of
     None -> assertFail "ETH token not found"
     Some token -> do
-      -- Calculate expected: (10000 * 0.997 * 10) / (20000 + 10000 * 0.997)
-      -- = 99700 / 29970 = 3.327 ETH
-      let expected = 3.327
+      -- Calculate expected: (8000 * 0.997 * 10) / (20000 + 8000 * 0.997)
+      -- = 79760 / 27976 = 2.851 ETH
+      let expected = 2.851
       let tolerance = 0.01  -- 1% tolerance
       assertMsg "Amount should be close to expected"
         (abs(token.amount - expected) < tolerance)
@@ -212,7 +233,11 @@ testExactBalanceSwap = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -226,6 +251,13 @@ testExactBalanceSwap = script do
     symbol = "USDC"
     amount = 20000.0
 
+  -- Update pool to link tokens
+  updatedPool <- submit poolParty $ exerciseCmd pool P.ArchiveAndUpdateReserves with
+    updatedReserveA = 10.0
+    updatedReserveB = 20000.0
+    updatedTokenACid = Some poolETH
+    updatedTokenBCid = Some poolUSDC
+
   -- Alice has exactly 100 USDC and swaps ALL of it
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
     issuer = issuerUSDC
@@ -238,7 +270,7 @@ testExactBalanceSwap = script do
 
   swapRequest <- submit alice $ createCmd SR.SwapRequest with
     trader = alice
-    poolCid = pool
+    poolCid = updatedPool
     poolParty = poolParty
     poolOperator = poolOperator
     issuerA = issuerETH
@@ -256,9 +288,9 @@ testExactBalanceSwap = script do
     maxPriceImpactBps = 5000
 
   (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
-  (ethReceived, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
+
+  Some receipt <- queryContractId alice receiptCid
 
   -- Verify no USDC remainder for Alice
   aliceTokens <- query @T.Token alice
@@ -267,7 +299,7 @@ testExactBalanceSwap = script do
   assertMsg "Alice should have no USDC left" (length aliceUSDCTokens == 0)
 
   -- Verify Alice got ETH
-  ethToken <- queryContractId alice ethReceived
+  ethToken <- queryContractId alice receipt.outputTokenCid
   case ethToken of
     None -> assertFail "ETH token not found"
     Some token -> do
@@ -302,7 +334,11 @@ testSlippageProtection = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -349,9 +385,7 @@ testSlippageProtection = script do
   (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
 
   -- This should FAIL with "Min output not met"
-  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
   debug "✅ Slippage protection working: swap correctly rejected"
   return ()
@@ -382,7 +416,11 @@ testDeadlineExpired = script do
     totalLPSupply = 0.0
     reserveA = 10.0  -- 10 ETH
     reserveB = 20000.0  -- 20,000 USDC
+    tokenACid = None
+    tokenBCid = None
     protocolFeeReceiver = clearportx
+    maxInBps = 10000
+    maxOutBps = 5000
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -430,9 +468,7 @@ testDeadlineExpired = script do
   passTime (seconds 10)
 
   -- This should FAIL with "Swap expired"
-  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
   debug "✅ Deadline enforcement working: expired swap rejected"
   return ()

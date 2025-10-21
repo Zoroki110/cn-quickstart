@@ -4,6 +4,7 @@ import qualified Token.Token as T
 import qualified LPToken.LPToken as LP
 import qualified AMM.Pool as P
 import qualified AMM.SwapRequest as SR
+import qualified AMM.Receipt as R
 import DA.Time (seconds, addRelTime)
 import DA.List (head)
 import Daml.Script
@@ -111,6 +112,10 @@ testUnauthorizedLiquidityAdd = script do
     reserveA = 0.0
     reserveB = 0.0
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Alice has tokens
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -171,6 +176,10 @@ testStealPoolReserves = script do
     reserveA = 0.0
     reserveB = 0.0
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -222,6 +231,10 @@ testZeroAmountSwap = script do
     reserveA = 0.0
     reserveB = 0.0
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Alice creates token with 0 amount (should FAIL - Token.ensure amount > 0)
   submitMustFail issuerUSDC $ createCmd T.Token with
@@ -281,6 +294,10 @@ testLiquidityImbalanceAttack = script do
     reserveA = 0.0
     reserveB = 0.0
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   aliceETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -376,6 +393,10 @@ testPriceManipulation = script do
     reserveA = 0.0
     reserveB = 0.0
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   poolETH <- submit issuerETH $ createCmd T.Token with
     issuer = issuerETH
@@ -389,19 +410,26 @@ testPriceManipulation = script do
     symbol = "USDC"
     amount = 20000.0
 
-  -- Alice tries MASSIVE swap (100,000 USDC - 5x pool size!)
+  -- Update pool to link tokens and set correct reserves
+  updatedPool <- submit poolParty $ exerciseCmd pool P.ArchiveAndUpdateReserves with
+    updatedReserveA = 10.0
+    updatedReserveB = 20000.0
+    updatedTokenACid = Some poolETH
+    updatedTokenBCid = Some poolUSDC
+
+  -- Alice tries large swap (10,000 USDC - 50% of pool size!)
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
     issuer = issuerUSDC
     owner = alice
     symbol = "USDC"
-    amount = 100000.0
+    amount = 10000.0
 
   now <- getTime
   let deadline = addRelTime now (seconds 60)
 
   swapRequest <- submit alice $ createCmd SR.SwapRequest with
     trader = alice
-    poolCid = pool
+    poolCid = updatedPool
     poolParty = poolParty
     poolOperator = poolOperator
     issuerA = issuerETH
@@ -412,31 +440,19 @@ testPriceManipulation = script do
     maxTTL = seconds 120
     inputTokenCid = aliceUSDC
     inputSymbol = "USDC"
-    inputAmount = 100000.0
+    inputAmount = 10000.0
     outputSymbol = "ETH"
     minOutput = 0.0  -- No slippage protection (bad!)
     deadline = deadline
-    maxPriceImpactBps = 5000  -- Allow 100% impact
+    maxPriceImpactBps = 5000  -- Allow high impact (50%)
 
   (swapReady, _) <- submit alice $ exerciseCmd swapRequest SR.PrepareSwap with protocolFeeReceiver = clearportx
 
-  (ethOut, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETH
-    poolTokenBCid = poolUSDC
+  -- The swap should FAIL due to excessive price impact (>50%)
+  -- This is the security feature working correctly!
+  submitMustFail poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
-  -- Alice gets almost all ETH from pool (extreme price impact)
-  Some token <- queryContractId alice ethOut
-
-  -- With 100,000 USDC into (10 ETH, 20,000 USDC) pool:
-  -- New reserve: k = 10 * 20,000 = 200,000
-  -- After: reserveB = 20,000 + 100,000 = 120,000
-  -- reserveA = 200,000 / 120,000 = 1.67 ETH
-  -- Alice gets: 10 - 1.67 = 8.33 ETH (but loses ~80% to price impact!)
-
-  assertMsg "Massive swap succeeds but with terrible price"
-    (token.amount < 9.0 && token.amount > 8.0)
-
-  debug "✅ Security: Large swaps allowed but suffer huge price impact (deterrent)"
+  debug "✅ Security: Massive swaps correctly rejected by price impact protection (50% limit)"
 
   return ()
 
@@ -469,6 +485,10 @@ testPoolInvariant = script do
     reserveA = 0.0
     reserveB = 0.0
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Add liquidity first to establish pool reserves
   aliceETH <- submit issuerETH $ createCmd T.Token with
@@ -538,11 +558,10 @@ testPoolInvariant = script do
   -- Sum all USDC amounts for total reserves
   let totalUSDC = sum $ map (\(_, t) -> t.amount) poolUSDCs
 
-  (ethOut, _) <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap with
-    poolTokenACid = poolETHCid
-    poolTokenBCid = poolUSDCCid
+  receiptCid <- submit poolParty $ exerciseCmd swapReady SR.ExecuteSwap
 
-  Some token <- queryContractId alice ethOut
+  Some receipt <- queryContractId alice receiptCid
+  Some token <- queryContractId alice receipt.outputTokenCid
 
   -- Calculate new k (after swap with fees)
   -- Input: 1000 USDC (full amount added to reserves)
@@ -595,6 +614,10 @@ testExcessLiquidityRemoval = script do
     reserveA = 10.0
     reserveB = 20000.0
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   -- Alice has 100 LP tokens (but pool has 447 total supply)
   aliceLP <- submit lpIssuer $ createCmd LP.LPToken with
@@ -626,7 +649,7 @@ testExcessLiquidityRemoval = script do
   return ()
 
 
--- Test 11: Self-transfer protection
+-- Test 11: Self-transfer (NOW ALLOWED for pool operations)
 testSelfTransfer : Script ()
 testSelfTransfer = script do
   alice <- allocateParty "Alice"
@@ -638,17 +661,17 @@ testSelfTransfer = script do
     symbol = "ETH"
     amount = 10.0
 
-  -- Alice tries to transfer to herself (should FAIL - forbidden)
-  submitMustFail alice $ exerciseCmd aliceETH T.Transfer with
+  -- Alice can now transfer to herself (for bootstrap and consolidation)
+  newAliceETH <- submit alice $ exerciseCmd aliceETH T.Transfer with
     recipient = alice
     qty = 5.0
 
-  debug "✅ Security: Self-transfer is forbidden"
+  debug "✅ Security: Self-transfer is now allowed for pool operations"
 
   return ()
 
 
--- Test 12: LP Token self-transfer protection
+-- Test 12: LP Token self-transfer (NOW ALLOWED for pool operations)
 testLPSelfTransfer : Script ()
 testLPSelfTransfer = script do
   alice <- allocateParty "Alice"
@@ -660,12 +683,12 @@ testLPSelfTransfer = script do
     poolId = "ETH-USDC"
     amount = 100.0
 
-  -- Alice tries to transfer LP tokens to herself (should FAIL)
-  submitMustFail alice $ exerciseCmd aliceLP LP.Transfer with
+  -- Alice can now transfer LP tokens to herself (for consolidation)
+  newAliceLP <- submit alice $ exerciseCmd aliceLP LP.Transfer with
     recipient = alice
     qty = 50.0
 
-  debug "✅ Security: LP token self-transfer is forbidden"
+  debug "✅ Security: LP token self-transfer is now allowed for pool operations"
 
   return ()
 
@@ -698,6 +721,10 @@ testDoubleSpend = script do
     reserveA = 0.0
     reserveB = 0.0
     protocolFeeReceiver = clearportx
+    tokenACid = None
+    tokenBCid = None
+    maxInBps = 10000
+    maxOutBps = 5000
 
   aliceUSDC <- submit issuerUSDC $ createCmd T.Token with
     issuer = issuerUSDC

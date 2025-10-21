@@ -45,6 +45,7 @@ template LPToken
 
     -- Transfer: nonconsuming to manually control archiving order
     -- Identical pattern to Token.Transfer
+    -- Self-transfer is allowed to support pool operations and consolidation
     nonconsuming choice Transfer : ContractId LPToken
       with
         recipient : Party
@@ -53,7 +54,7 @@ template LPToken
       do
         assertMsg "Positive quantity" (qty > 0.0)
         assertMsg "Sufficient balance" (qty <= amount)
-        assertMsg "Self-transfer forbidden" (recipient /= owner)
+        -- Self-transfer check removed to allow pool operations
 
         -- Archive FIRST (before creating remainder)
         archive self

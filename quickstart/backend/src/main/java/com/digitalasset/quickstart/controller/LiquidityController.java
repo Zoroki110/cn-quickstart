@@ -14,6 +14,7 @@ import com.digitalasset.quickstart.ledger.LedgerApi;
 import com.digitalasset.quickstart.ledger.StaleAcsRetry;
 import com.digitalasset.quickstart.security.AuthUtils;
 import com.digitalasset.quickstart.security.PartyMappingService;
+import com.digitalasset.quickstart.metrics.SwapMetrics;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
@@ -35,20 +36,23 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * LiquidityController - Handles liquidity provision and removal
+ *
+ * CORS configured globally in WebSecurityConfig
  */
 @RestController
 @RequestMapping("/api/liquidity")
-@CrossOrigin(origins = {"http://localhost:3001", "http://localhost:3000"})
 public class LiquidityController {
     private static final Logger logger = LoggerFactory.getLogger(LiquidityController.class);
     private final LedgerApi ledger;
     private final AuthUtils authUtils;
     private final PartyMappingService partyMappingService;
+    private final SwapMetrics swapMetrics;
 
-    public LiquidityController(LedgerApi ledger, AuthUtils authUtils, PartyMappingService partyMappingService) {
+    public LiquidityController(LedgerApi ledger, AuthUtils authUtils, PartyMappingService partyMappingService, SwapMetrics swapMetrics) {
         this.ledger = ledger;
         this.authUtils = authUtils;
         this.partyMappingService = partyMappingService;
+        this.swapMetrics = swapMetrics;
     }
 
     /**
@@ -90,6 +94,9 @@ public class LiquidityController {
         // Step 1: Validate pool at ledger end
         return ledger.getActiveContracts(Pool.class)
             .thenCompose(pools -> {
+                // Note: Active pools count is updated by PoolMetricsScheduler (scheduled task)
+                // Not updated here to avoid traffic-dependent metrics
+
                 // Find pool by poolId
                 Optional<LedgerApi.ActiveContract<Pool>> maybePool = pools.stream()
                     .filter(p -> p.payload.getPoolId.equals(req.poolId))

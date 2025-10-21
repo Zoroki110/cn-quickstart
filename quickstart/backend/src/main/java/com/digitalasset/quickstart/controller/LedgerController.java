@@ -22,10 +22,11 @@ import java.util.concurrent.CompletableFuture;
  *
  * Provides REST endpoints for reading tokens and pools directly from Canton.
  * No PQS lag, no package allowlist issues, always authoritative.
+ *
+ * CORS configured globally in WebSecurityConfig
  */
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = {"http://localhost:3001", "http://localhost:3000"})
 public class LedgerController {
     private static final Logger logger = LoggerFactory.getLogger(LedgerController.class);
     private final LedgerReader reader;

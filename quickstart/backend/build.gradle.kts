@@ -44,6 +44,8 @@ dependencies {
     implementation(Deps.springBoot.oauth2Client)
     implementation(Deps.springBoot.oauth2ResourceServer)
     implementation(Deps.springBoot.security)
+    implementation("org.springframework.boot:spring-boot-starter-data-redis:3.4.2")
+    implementation("commons-codec:commons-codec:1.17.1")  // For SHA-256 hashing
 
     runtimeOnly("org.postgresql:postgresql:42.7.3")
     runtimeOnly(Deps.grpc.api)

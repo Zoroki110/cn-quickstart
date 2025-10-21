@@ -41,10 +41,11 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * SwapController - Handles swap preparation and execution
+ *
+ * CORS configured globally in WebSecurityConfig
  */
 @RestController
 @RequestMapping("/api/swap")
-@CrossOrigin(origins = {"http://localhost:3001", "http://localhost:3000"})
 public class SwapController {
     private static final Logger logger = LoggerFactory.getLogger(SwapController.class);
     private final LedgerApi ledger;
@@ -80,7 +81,8 @@ public class SwapController {
     @PreAuthorize("@partyGuard.isAuthenticated(#jwt)")
     public CompletableFuture<PrepareSwapResponse> prepareSwap(
         @AuthenticationPrincipal Jwt jwt,
-        @Valid @RequestBody PrepareSwapRequest req
+        @Valid @RequestBody PrepareSwapRequest req,
+        @RequestHeader(value = SwapConstants.IDEMPOTENCY_HEADER, required = false) String idempotencyKey
     ) {
         if (jwt == null || jwt.getSubject() == null) {
             logger.error("POST /api/swap/prepare called without valid JWT");
@@ -89,6 +91,17 @@ public class SwapController {
 
         String jwtSubject = jwt.getSubject();
         String trader = partyMappingService.mapJwtSubjectToParty(jwtSubject);
+
+        // IDEMPOTENCY: Check if this request was already processed
+        if (idempotencyKey != null) {
+            idempotencyService.validateIdempotencyKey(idempotencyKey);
+            Object cachedResponse = idempotencyService.checkIdempotency(idempotencyKey);
+            if (cachedResponse != null) {
+                logger.info("Returning cached response for idempotency key: {}", idempotencyKey);
+                return CompletableFuture.completedFuture((PrepareSwapResponse) cachedResponse);
+            }
+        }
+
         String commandId = UUID.randomUUID().toString();
 
         // Enforce scale=10 for all amounts
@@ -105,6 +118,9 @@ public class SwapController {
         // Step 1: Validate pool at ledger end - find pool with POSITIVE reserves
         return ledger.getActiveContracts(Pool.class)
             .thenCompose(pools -> {
+                // Note: Active pools count is updated by PoolMetricsScheduler (scheduled task)
+                // Not updated here to avoid traffic-dependent metrics
+
                 Optional<LedgerApi.ActiveContract<Pool>> maybePool = pools.stream()
                     .filter(p -> p.payload.getPoolId.equals(req.poolId))
                     .filter(p -> p.payload.getReserveA.compareTo(BigDecimal.ZERO) > 0)  // MUST have reserves
@@ -212,7 +228,7 @@ public class SwapController {
                                 logger.info("PrepareSwap success - swapReadyCid: {}, poolInputTokenCid: {}",
                                     swapReadyCid.getContractId, poolInputTokenCid.getContractId);
 
-                                return new PrepareSwapResponse(
+                                PrepareSwapResponse response = new PrepareSwapResponse(
                                     swapReadyCid.getContractId,
                                     poolInputTokenCid.getContractId,
                                     req.inputSymbol,
@@ -220,6 +236,13 @@ public class SwapController {
                                     req.inputAmount.toPlainString(),
                                     req.minOutput.toPlainString()
                                 );
+
+                                // IDEMPOTENCY: Register successful response
+                                if (idempotencyKey != null) {
+                                    idempotencyService.registerSuccess(idempotencyKey, commandId, null, response);
+                                }
+
+                                return response;
                             });
                     });
             })
@@ -260,7 +283,8 @@ public class SwapController {
     @PreAuthorize("@partyGuard.isPoolParty(#jwt)")
     public CompletableFuture<ExecuteSwapResponse> executeSwap(
         @AuthenticationPrincipal Jwt jwt,
-        @Valid @RequestBody ExecuteSwapRequest req
+        @Valid @RequestBody ExecuteSwapRequest req,
+        @RequestHeader(value = SwapConstants.IDEMPOTENCY_HEADER, required = false) String idempotencyKey
     ) {
         if (jwt == null || jwt.getSubject() == null) {
             logger.error("POST /api/swap/execute called without valid JWT");
@@ -269,6 +293,17 @@ public class SwapController {
 
         String jwtSubject = jwt.getSubject();
         String executingParty = partyMappingService.mapJwtSubjectToParty(jwtSubject);
+
+        // IDEMPOTENCY: Check if this request was already processed
+        if (idempotencyKey != null) {
+            idempotencyService.validateIdempotencyKey(idempotencyKey);
+            Object cachedResponse = idempotencyService.checkIdempotency(idempotencyKey);
+            if (cachedResponse != null) {
+                logger.info("Returning cached response for idempotency key: {}", idempotencyKey);
+                return CompletableFuture.completedFuture((ExecuteSwapResponse) cachedResponse);
+            }
+        }
+
         String commandId = UUID.randomUUID().toString();
 
         logger.info("POST /api/swap/execute - JWT subject: {}, Canton party: {}, swapReadyCid: {}, commandId: {}",
@@ -369,7 +404,7 @@ public class SwapController {
                             logger.info("ExecuteSwap success - receiptCid: {}, amountIn: {}, amountOut: {}, executionTime: {}ms",
                                 receiptCid.getContractId, receipt.getAmountIn, receipt.getAmountOut, executionTime);
 
-                            return new ExecuteSwapResponse(
+                            ExecuteSwapResponse response = new ExecuteSwapResponse(
                                 receiptCid.getContractId,
                                 receipt.getTrader.getParty,
                                 receipt.getInputSymbol,
@@ -378,6 +413,13 @@ public class SwapController {
                                 receipt.getAmountOut.toPlainString(),
                                 receipt.getTimestamp.toString()
                             );
+
+                            // IDEMPOTENCY: Register successful response
+                            if (idempotencyKey != null) {
+                                idempotencyService.registerSuccess(idempotencyKey, commandId, null, response);
+                            }
+
+                            return response;
                         });
                 });
             })
@@ -467,12 +509,8 @@ public class SwapController {
         // Step 1: Find pool with positive reserves
         return ledger.getActiveContracts(Pool.class)
             .thenCompose(pools -> {
-                // Update active pools count metric
-                long activePoolsCount = pools.stream()
-                    .filter(p -> p.payload.getReserveA.compareTo(BigDecimal.ZERO) > 0)
-                    .filter(p -> p.payload.getReserveB.compareTo(BigDecimal.ZERO) > 0)
-                    .count();
-                swapMetrics.setActivePoolsCount((int) activePoolsCount);
+                // Note: Active pools count is updated by PoolMetricsScheduler (scheduled task)
+                // Not updated here to avoid traffic-dependent metrics
 
                 // Find pool: either by poolId if provided, or by token pair auto-discovery
                 Optional<LedgerApi.ActiveContract<Pool>> maybePool;

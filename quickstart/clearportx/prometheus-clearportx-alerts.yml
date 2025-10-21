@@ -1,0 +1,63 @@
+groups:
+- name: clearportx
+  interval: 30s
+  rules:
+  - alert: HIGH_ERROR_RATE
+    expr: rate(clearportx_swap_failed_total[5m]) / clamp_min(rate(clearportx_swap_prepared_total[5m]),1) > 0.05
+    for: 5m
+    labels:
+      severity: page
+      service: clearportx
+    annotations:
+      summary: "Swap error rate >5% (5m window)"
+      description: "{{ $value | humanizePercentage }} of swaps failing in last 5 minutes"
+
+  - alert: P95_SLOW
+    expr: histogram_quantile(0.95, rate(clearportx_swap_execution_time_seconds_bucket[5m])) > 2
+    for: 5m
+    labels:
+      severity: ticket
+      service: clearportx
+    annotations:
+      summary: "P95 latency >2s (5m window)"
+      description: "95th percentile swap execution time is {{ $value }}s"
+
+  - alert: HIT_RATE_LIMIT_OFTEN
+    expr: rate(http_server_requests_seconds_count{status="429"}[5m]) > 0.4
+    for: 5m
+    labels:
+      severity: info
+      service: clearportx
+    annotations:
+      summary: "Frequent 429 rate limits (5m window)"
+      description: "{{ $value }} rate limit rejections per second (devnet limit 0.5 TPS)"
+
+  - alert: K_INVARIANT_DRIFT
+    expr: abs(deriv(clearportx_pool_k_invariant[10m])) > 1000
+    for: 10m
+    labels:
+      severity: warning
+      service: clearportx
+    annotations:
+      summary: "Pool K-invariant drifting (10m window)"
+      description: "Pool {{ $labels.pair }} K-invariant changing by {{ $value }}/s"
+
+  - alert: ACTIVE_POOLS_ZERO
+    expr: clearportx_pool_active_count == 0
+    for: 2m
+    labels:
+      severity: critical
+      service: clearportx
+    annotations:
+      summary: "No active pools detected"
+      description: "All pools have been archived or have zero reserves"
+
+  - alert: HEALTH_ENDPOINT_DOWN
+    expr: up{job="clearportx"} == 0
+    for: 1m
+    labels:
+      severity: page
+      service: clearportx
+    annotations:
+      summary: "ClearportX health endpoint down"
+      description: "Service unreachable for 1 minute"

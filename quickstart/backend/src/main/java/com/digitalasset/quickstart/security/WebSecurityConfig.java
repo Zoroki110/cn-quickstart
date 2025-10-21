@@ -45,17 +45,23 @@ public class WebSecurityConfig {
     @Value("${security.actuator.password}")
     private String actuatorPassword;
 
-    @Value("${cors.allowed-origins:http://localhost:3000}")
+    @Value("${cors.allowed-origins:http://localhost:3000,http://localhost:3001}")
     private String allowedOrigins;
 
     @Value("${cors.allowed-methods:GET,POST,PUT,DELETE,OPTIONS}")
     private String allowedMethods;
 
-    @Value("${cors.allowed-headers:*}")
+    @Value("${cors.allowed-headers:Authorization,Content-Type,X-Idempotency-Key,X-Request-ID}")
     private String allowedHeaders;
+
+    @Value("${cors.exposed-headers:Retry-After,X-Request-ID}")
+    private String exposedHeaders;
 
     @Value("${cors.allow-credentials:true}")
     private boolean allowCredentials;
+
+    @Value("${cors.max-age:3600}")
+    private long maxAge;
 
     /**
      * Security filter chain for actuator endpoints.
@@ -128,13 +134,19 @@ public class WebSecurityConfig {
     /**
      * CORS configuration for frontend integration.
      *
-     * Allows canton-website to make API calls from different domain.
+     * Strict configuration:
+     * - Explicit origins (no wildcards)
+     * - Limited HTTP methods (GET, POST, PUT, DELETE, OPTIONS)
+     * - Specific allowed headers (Authorization, Content-Type, X-Idempotency-Key, X-Request-ID)
+     * - Exposed headers (Retry-After, X-Request-ID) for client access
+     * - Credentials support for JWT authentication
+     * - 1 hour preflight cache
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Parse comma-separated origins
+        // Parse comma-separated origins (explicit list, no wildcards)
         List<String> origins = Arrays.asList(allowedOrigins.split(","));
         configuration.setAllowedOrigins(origins);
 
@@ -142,15 +154,19 @@ public class WebSecurityConfig {
         List<String> methods = Arrays.asList(allowedMethods.split(","));
         configuration.setAllowedMethods(methods);
 
-        // Parse comma-separated headers or allow all with "*"
-        if ("*".equals(allowedHeaders)) {
-            configuration.addAllowedHeader("*");
-        } else {
-            List<String> headers = Arrays.asList(allowedHeaders.split(","));
-            configuration.setAllowedHeaders(headers);
-        }
+        // Parse comma-separated allowed headers (request headers client can send)
+        List<String> headers = Arrays.asList(allowedHeaders.split(","));
+        configuration.setAllowedHeaders(headers);
 
+        // Parse comma-separated exposed headers (response headers client can read)
+        List<String> exposed = Arrays.asList(exposedHeaders.split(","));
+        configuration.setExposedHeaders(exposed);
+
+        // Allow credentials (cookies, authorization headers)
         configuration.setAllowCredentials(allowCredentials);
+
+        // Preflight cache duration (in seconds)
+        configuration.setMaxAge(maxAge);
 
         // Apply CORS to all API endpoints
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

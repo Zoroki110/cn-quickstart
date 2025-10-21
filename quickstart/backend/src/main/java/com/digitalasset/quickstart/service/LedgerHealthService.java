@@ -8,6 +8,7 @@ import io.opentelemetry.instrumentation.annotations.WithSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -30,6 +31,12 @@ public class LedgerHealthService {
     private final Pqs pqs;
     private final LedgerReader ledgerReader;
 
+    @Value("${spring.profiles.active:localnet}")
+    private String environment;
+
+    @Value("${application.version:1.0.1}")
+    private String applicationVersion;
+
     @Autowired
     public LedgerHealthService(JdbcTemplate jdbcTemplate, Pqs pqs, LedgerReader ledgerReader) {
         this.jdbcTemplate = jdbcTemplate;
@@ -48,14 +55,23 @@ public class LedgerHealthService {
      */
     @WithSpan
     public CompletableFuture<Map<String, Object>> getHealthStatus() {
+        long startTime = System.currentTimeMillis();
+
         return CompletableFuture.supplyAsync(() -> {
             Map<String, Object> health = new HashMap<>();
 
             try {
-                // Get PQS current offset (watermark) from events table
-                String pqsOffsetQuery = "SELECT COALESCE(MAX(pk), 0) as max_offset FROM __events";
-                Long pqsOffset = jdbcTemplate.queryForObject(pqsOffsetQuery, Long.class);
-                health.put("pqsOffset", pqsOffset);
+                // Get PQS current offset (best-effort with 200ms timeout)
+                try {
+                    String pqsOffsetQuery = "SELECT COALESCE(MAX(pk), 0) as max_offset FROM __events";
+                    Long pqsOffset = CompletableFuture.supplyAsync(() ->
+                        jdbcTemplate.queryForObject(pqsOffsetQuery, Long.class)
+                    ).orTimeout(200, java.util.concurrent.TimeUnit.MILLISECONDS).join();
+                    health.put("pqsOffset", pqsOffset);
+                } catch (Exception ex) {
+                    logger.debug("PQS offset query timeout/failed (best-effort): {}", ex.getMessage());
+                    // Omit pqsOffset field on timeout
+                }
 
                 // Get distinct package names in PQS
                 String packageQuery = "SELECT DISTINCT package_name FROM __contract_tpe LIMIT 20";
@@ -101,7 +117,7 @@ public class LedgerHealthService {
                 } else {
                     // All good - package indexed and contracts present
                     status = "OK";
-                    logger.info("✅ Health check OK: pqsOffset={}, clearportxContracts={}", pqsOffset, clearportxCount);
+                    logger.info("✅ Health check OK: clearportxContracts={}", clearportxCount);
                 }
 
                 health.put("synced", hasClearportxTemplates);
@@ -110,6 +126,10 @@ public class LedgerHealthService {
                     health.put("diagnostic", diagnostic);
                 }
                 health.put("hasClearportxPackage", hasClearportxPackage);
+
+                // Add environment information
+                health.put("environment", environment);
+                health.put("applicationVersion", applicationVersion);
 
                 // Add package versioning information
                 health.put("darVersion", "1.0.1");
@@ -137,8 +157,10 @@ public class LedgerHealthService {
                     logger.debug("Could not retrieve clearportx package ID: {}", e.getMessage());
                 }
 
-                // Emit metrics for Grafana
-                logMetric("pqs_offset", pqsOffset);
+                // Emit metrics for Grafana (only if PQS offset available)
+                if (health.containsKey("pqsOffset")) {
+                    logMetric("pqs_offset", (Long) health.get("pqsOffset"));
+                }
                 logMetric("clearportx_contract_count", clearportxCount != null ? clearportxCount : 0);
 
             } catch (Exception e) {

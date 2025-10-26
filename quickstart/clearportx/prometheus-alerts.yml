@@ -1,0 +1,252 @@
+# Prometheus Alert Rules for ClearportX
+# Golden alerts for production monitoring
+
+groups:
+  - name: clearportx_critical
+    interval: 30s
+    rules:
+      # CRITICAL: High swap failure rate
+      - alert: HighSwapFailureRate
+        expr: |
+          (
+            increase(clearportx_swap_failed_total[5m])
+            /
+            clamp_min(increase(clearportx_swap_prepared_total[5m]), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: clearportx
+          component: swap
+        annotations:
+          summary: "High swap failure rate detected"
+          description: "{{ $value | humanizePercentage }} of swaps are failing (threshold: 5%)"
+          runbook: "Check backend logs for errors, verify Canton participant health, check pool liquidity"
+
+      # CRITICAL: No swaps executing (but prepares happening)
+      - alert: SwapsNotExecuting
+        expr: |
+          (
+            increase(clearportx_swap_prepared_total[10m]) > 0
+            and
+            increase(clearportx_swap_executed_total[10m]) == 0
+          )
+        for: 10m
+        labels:
+          severity: critical
+          service: clearportx
+          component: swap
+        annotations:
+          summary: "Swaps preparing but not executing"
+          description: "{{ $value }} swaps prepared in last 10m, but 0 executed"
+          runbook: "Check poolParty authorization, verify Canton ledger connectivity, check PQS sync status"
+
+  - name: clearportx_performance
+    interval: 30s
+    rules:
+      # WARNING: Slow swap execution (P95 > 1s)
+      - alert: SlowSwapExecution
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(clearportx_swap_execution_time_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: clearportx
+          component: performance
+        annotations:
+          summary: "Swap execution latency high"
+          description: "P95 execution time is {{ $value | humanizeDuration }}, exceeding 1s SLO"
+          runbook: "Check Canton participant load, verify database performance, review concurrent swap count"
+
+      # WARNING: Execution time exceeding 5s SLO
+      - alert: VerySlowSwapExecution
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(clearportx_swap_execution_time_seconds_bucket[5m])) by (le)
+          ) > 5
+        for: 2m
+        labels:
+          severity: critical
+          service: clearportx
+          component: performance
+        annotations:
+          summary: "Swap execution critically slow"
+          description: "P95 execution time is {{ $value | humanizeDuration }}, far exceeding 5s SLO"
+          runbook: "URGENT: Check Canton participant health, database connections, network latency"
+
+  - name: clearportx_liquidity
+    interval: 60s
+    rules:
+      # WARNING: Low pool liquidity
+      - alert: LowPoolLiquidity
+        expr: |
+          clearportx_pool_reserve_amount < 1
+        for: 10m
+        labels:
+          severity: warning
+          service: clearportx
+          component: liquidity
+        annotations:
+          summary: "Low liquidity in pool {{ $labels.pair }}"
+          description: "{{ $labels.token }} reserve is {{ $value }}, below minimum threshold of 1"
+          runbook: "Notify pool operators, consider suspending swaps for this pool"
+
+      # CRITICAL: K-invariant decreased (should never happen)
+      - alert: KInvariantDecreased
+        expr: |
+          deriv(clearportx_pool_k_invariant[30m]) < 0
+        for: 5m
+        labels:
+          severity: critical
+          service: clearportx
+          component: integrity
+        annotations:
+          summary: "K-invariant decreasing for pool {{ $labels.pair }}"
+          description: "K-invariant is trending down over 30m (rate: {{ $value }})"
+          runbook: "CRITICAL: This indicates a bug in swap logic or pool manipulation. Investigate immediately."
+
+  - name: clearportx_protection
+    interval: 60s
+    rules:
+      # WARNING: Slippage protection frequently triggered
+      - alert: FrequentSlippageProtection
+        expr: |
+          increase(clearportx_swap_slippage_protection_triggered[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: clearportx
+          component: protection
+        annotations:
+          summary: "Slippage protection frequently triggered for {{ $labels.pair }}"
+          description: "{{ $value }} swaps rejected due to slippage in last 15m"
+          runbook: "High volatility or low liquidity. Consider alerting frontend users, review pool depth"
+
+      # INFO: Deadline expirations (could indicate slow UX)
+      - alert: FrequentDeadlineExpiration
+        expr: |
+          increase(clearportx_swap_deadline_expired[30m]) > 5
+        for: 10m
+        labels:
+          severity: info
+          service: clearportx
+          component: ux
+        annotations:
+          summary: "Multiple swap deadline expirations"
+          description: "{{ $value }} swaps expired in last 30m"
+          runbook: "Review frontend UX flow, check if users are abandoning swaps"
+
+  - name: clearportx_business
+    interval: 60s
+    rules:
+      # INFO: High trading volume (success metric)
+      - alert: HighTradingVolume
+        expr: |
+          increase(clearportx_swap_executed_total[1h]) > 100
+        for: 5m
+        labels:
+          severity: info
+          service: clearportx
+          component: business
+        annotations:
+          summary: "High trading volume detected"
+          description: "{{ $value }} swaps executed in last hour"
+
+      # BUSINESS: Fee revenue tracking
+      - alert: DailyFeeRevenue
+        expr: |
+          sum(increase(clearportx_fees_protocol_collected[24h])) > 0
+        for: 5m
+        labels:
+          severity: info
+          service: clearportx
+          component: revenue
+        annotations:
+          summary: "Daily protocol fee revenue"
+          description: "Collected {{ $value }} tokens in protocol fees (24h)"
+
+  - name: clearportx_system
+    interval: 30s
+    rules:
+      # CRITICAL: Backend down
+      - alert: BackendDown
+        expr: |
+          up{job="clearportx-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: clearportx
+          component: infrastructure
+        annotations:
+          summary: "ClearportX backend is down"
+          description: "Backend service has been unreachable for 1 minute"
+          runbook: "Check Docker container status, review backend logs, verify Canton participant health"
+
+      # WARNING: High JVM memory usage
+      - alert: HighJVMMemoryUsage
+        expr: |
+          (
+            jvm_memory_used_bytes{area="heap", app="clearportx"}
+            /
+            jvm_memory_max_bytes{area="heap", app="clearportx"}
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: clearportx
+          component: jvm
+        annotations:
+          summary: "High JVM heap usage"
+          description: "Heap usage at {{ $value | humanizePercentage }}"
+          runbook: "Review heap dump, check for memory leaks, consider increasing heap size"
+
+      # WARNING: Thread pool exhaustion
+      - alert: ThreadPoolExhaustion
+        expr: |
+          (
+            tomcat_threads_busy_threads{app="clearportx"}
+            /
+            tomcat_threads_config_max_threads{app="clearportx"}
+          ) > 0.9
+        for: 2m
+        labels:
+          severity: warning
+          service: clearportx
+          component: tomcat
+        annotations:
+          summary: "Thread pool near capacity"
+          description: "{{ $value | humanizePercentage }} of Tomcat threads busy"
+          runbook: "Check for slow endpoints, review concurrent request count, increase thread pool if needed"
+
+# Recording rules for efficient queries
+  - name: clearportx_recordings
+    interval: 30s
+    rules:
+      # Pre-compute swap success rate for dashboards
+      - record: clearportx:swap:success_rate:5m
+        expr: |
+          (
+            increase(clearportx_swap_executed_total[5m])
+            /
+            clamp_min(increase(clearportx_swap_prepared_total[5m]), 1)
+          )
+
+      # Pre-compute average swap size
+      - record: clearportx:swap:avg_input_amount:5m
+        expr: |
+          (
+            rate(clearportx_swap_input_amount_sum[5m])
+            /
+            rate(clearportx_swap_input_amount_count[5m])
+          )
+
+      # Pre-compute total fees by token
+      - record: clearportx:fees:total_collected:1h
+        expr: |
+          sum by (token) (
+            increase(clearportx_fees_lp_collected[1h])
+            +
+            increase(clearportx_fees_protocol_collected[1h])
+          )

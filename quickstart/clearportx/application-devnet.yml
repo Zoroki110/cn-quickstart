@@ -1,0 +1,139 @@
+# ClearportX Backend - Devnet Configuration v2.1.0-hardened
+
+spring:
+  application:
+    name: clearportx-backend
+
+  # Redis Configuration (Distributed Rate Limiter)
+  redis:
+    host: ${REDIS_HOST:redis-cluster}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    timeout: 2000ms
+    lettuce:
+      pool:
+        max-active: 20
+        max-idle: 10
+        min-idle: 2
+
+# Rate Limiter Configuration
+rate-limiter:
+  distributed: false  # Disable Redis for initial testing
+  global-max-per-5s: 2  # 0.4 TPS global limit
+  party-max-per-min: 10  # 10 requests per minute per party
+  redis-key-ttl: 6  # Redis key TTL in seconds (must be > 5s window)
+
+# Scheduled Tasks
+scheduled:
+  pool-metrics-interval-ms: 10000  # Update active pools gauge every 10s
+  pool-metrics-timeout-ms: 500  # ACS query timeout for gauge update
+
+# Health Endpoint Configuration
+health:
+  pqs-timeout-ms: 200  # PQS offset query timeout (best-effort)
+  ledger-timeout-ms: 5000  # Ledger connection check timeout
+
+# Idempotency Configuration
+idempotency:
+  cache-ttl-minutes: 15  # Idempotency key TTL
+  cleanup-interval-ms: 300000  # Clean expired entries every 5 minutes
+  never-cache-5xx: true  # Never cache 5xx server errors
+
+# CORS Configuration
+cors:
+  allowed-origins:
+    - https://clearportx-dex.netlify.app
+    - https://clearportx-staging.netlify.app
+  allowed-methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allowed-headers:
+    - Authorization
+    - Content-Type
+    - X-Idempotency-Key
+    - X-Request-ID
+  exposed-headers:
+    - Retry-After
+    - X-Request-ID
+  allow-credentials: true
+  max-age: 3600
+
+# OAuth2 Resource Server (Disabled for initial testing)
+# spring.security.oauth2.resourceserver.jwt:
+#   issuer-uri: https://login.canton.network/realms/canton-network
+#   jwk-set-uri: https://login.canton.network/realms/canton-network/protocol/openid-connect/certs
+
+# Ledger API Configuration (Local DevNet Validator)
+ledger:
+  host: ${LEDGER_API_HOST:localhost}
+  port: ${LEDGER_API_PORT:5001}
+  tls: false  # Local participant doesn't use TLS
+  max-inbound-message-size: 10000000  # 10 MB
+
+# PQS Configuration
+pqs:
+  jdbc-url: ${PQS_JDBC_URL:jdbc:postgresql://pqs.devnet.canton.network:5432/pqs}
+  username: ${PQS_USERNAME:pqs_user}
+  password: ${PQS_PASSWORD:}
+  pool-size: 5
+  sync-timeout-ms: 30000  # 30s max wait for PQS sync
+  stale-retry-max-attempts: 3  # Max retries on stale ACS
+  stale-retry-delay-ms: 1000  # Delay between retries
+
+# Metrics & Observability
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info,metrics
+  endpoint:
+    health:
+      show-details: always
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      app: clearportx
+      env: devnet
+      version: ${APP_VERSION:1.0.1}
+      packageId: ${DAR_PACKAGE_ID:unknown}
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.digitalasset.quickstart: DEBUG
+    com.digitalasset.quickstart.security: DEBUG
+    com.digitalasset.quickstart.config.RateLimiterConfig: DEBUG
+    com.digitalasset.quickstart.service.IdempotencyService: DEBUG
+    org.springframework.security: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} [requestId=%X{requestId}] - %msg%n"
+
+# Application-Specific Configuration
+clearportx:
+  amm:
+    default-slippage-bps: 50  # 0.5% default slippage tolerance
+    max-slippage-bps: 1000  # 10% maximum allowed slippage
+    default-deadline-seconds: 300  # 5 minutes default deadline
+    scale: 10  # Decimal places for token amounts
+
+  swap:
+    timeout-ms: 10000  # 10s timeout for swap operations
+    enable-atomic-swap: true  # Enable atomic swap endpoint
+
+  fees:
+    total-bps: 30  # 0.3% total fee
+    protocol-share: 0.25  # 25% to protocol
+    lp-share: 0.75  # 75% to LPs
+
+  security:
+    require-request-id: false  # Auto-generate if missing
+    require-idempotency-key: false  # Optional but recommended
+    validate-body-hash: true  # Enable body-hash mismatch detection

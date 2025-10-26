@@ -3,8 +3,8 @@
 
 package com.digitalasset.quickstart.service;
 
-import clearportx_amm.amm.pool.Pool;
-import clearportx_amm.token.token.Token;
+import clearportx_amm_production.amm.pool.Pool;
+import clearportx_amm_production.token.token.Token;
 import com.digitalasset.quickstart.dto.PoolDTO;
 import com.digitalasset.quickstart.dto.TokenDTO;
 import com.digitalasset.quickstart.ledger.LedgerApi;

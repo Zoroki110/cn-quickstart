@@ -1,87 +1,135 @@
-# Copyright (c) 2025, Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
-# SPDX-License-Identifier: 0BSD
+# ClearportX Backend - Devnet Configuration v2.1.0-hardened
 
-#
-# Canton Network Devnet Configuration Profile
-#
-# Activate with: SPRING_PROFILES_ACTIVE=devnet
-#
-# Requirements:
-# - 0.5 TPS rate limit compliance (we use 0.4 TPS safely under limit)
-# - Production-grade security
-# - Observability for monitoring
-#
+spring:
+  application:
+    name: clearportx-backend
 
-server:
-  port: ${BACKEND_PORT:8080}
-  error:
-    # Production error handling (don't leak internals)
-    include-message: never
-    include-binding-errors: never
-    include-stacktrace: never
-    include-path: never
-    include-exception: false
+  # Redis Configuration (Distributed Rate Limiter)
+  redis:
+    host: ${REDIS_HOST:redis-cluster}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    timeout: 2000ms
+    lettuce:
+      pool:
+        max-active: 20
+        max-idle: 10
+        min-idle: 2
 
-logging:
-  level:
-    root: INFO
-    com.digitalasset.quickstart: INFO
-    org.springframework: WARN
-    org.springframework.security: INFO
+# Rate Limiter Configuration
+rate-limiter:
+  distributed: false  # Disable Redis for initial testing
+  global-max-per-5s: 2  # 0.4 TPS global limit
+  party-max-per-min: 10  # 10 requests per minute per party
+  redis-key-ttl: 6  # Redis key TTL in seconds (must be > 5s window)
 
+# Scheduled Tasks
+scheduled:
+  pool-metrics-interval-ms: 10000  # Update active pools gauge every 10s
+  pool-metrics-timeout-ms: 500  # ACS query timeout for gauge update
+
+# Health Endpoint Configuration
+health:
+  pqs-timeout-ms: 200  # PQS offset query timeout (best-effort)
+  ledger-timeout-ms: 5000  # Ledger connection check timeout
+
+# Idempotency Configuration
+idempotency:
+  cache-ttl-minutes: 15  # Idempotency key TTL
+  cleanup-interval-ms: 300000  # Clean expired entries every 5 minutes
+  never-cache-5xx: true  # Never cache 5xx server errors
+
+# CORS Configuration
+# NOTE: Spring profiles override the main application.yml CORS config
+# IMPORTANT: WebSecurityConfig expects comma-separated strings, NOT YAML lists
+# Add exact ngrok URL here (no wildcards like *.ngrok-free.dev)
+cors:
+  allowed-origins: https://app.clearportx.com,https://clearportx-dex.netlify.app,https://clearportx-staging.netlify.app,https://nonexplicable-lacily-leesa.ngrok-free.dev,http://localhost:3000,http://localhost:3001,http://localhost:4001
+  allowed-methods: GET,POST,PUT,DELETE,OPTIONS,HEAD
+  allowed-headers: Authorization,Content-Type,X-Idempotency-Key,X-Request-ID
+  exposed-headers: Retry-After,X-Request-ID,Authorization,X-Total-Count,X-Rate-Limit-Remaining
+  allow-credentials: true
+  max-age: 3600
+
+# OAuth2 Resource Server (DevNet)
+security:
+  oauth2:
+    resourceserver:
+      jwt:
+        issuer-uri: ${OAUTH_ISSUER:https://auth.canton.network/realms/AppProvider}
+        jwk-set-uri: ${OAUTH_JWKS:https://auth.canton.network/realms/AppProvider/protocol/openid-connect/certs}
+    audience: ${OAUTH_AUDIENCE:app-provider-unsafe}
+  canton:
+    static-party: ${CANTON_PARTY:Alice-9cefe94d}
+
+# Ledger API Configuration (Local DevNet Validator)
+ledger:
+  host: ${LEDGER_API_HOST:localhost}
+  port: ${LEDGER_API_PORT:5001}
+  tls: false  # Local participant doesn't use TLS
+  max-inbound-message-size: 10000000  # 10 MB
+
+# PQS Configuration
+pqs:
+  jdbc-url: ${PQS_JDBC_URL:jdbc:postgresql://pqs.devnet.canton.network:5432/pqs}
+  username: ${PQS_USERNAME:pqs_user}
+  password: ${PQS_PASSWORD:}
+  pool-size: 5
+  sync-timeout-ms: 30000  # 30s max wait for PQS sync
+  stale-retry-max-attempts: 3  # Max retries on stale ACS
+  stale-retry-delay-ms: 1000  # Delay between retries
+
+# Metrics & Observability
 management:
   endpoints:
     web:
       exposure:
-        # Expose only health and metrics (actuator protected by Basic Auth)
-        include: 'health,prometheus,metrics,info'
+        include: health,prometheus,info,metrics
   endpoint:
     health:
-      show-details: when-authorized
+      show-details: always
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      app: clearportx
+      env: devnet
+      version: ${APP_VERSION:1.0.1}
+      packageId: ${DAR_PACKAGE_ID:unknown}
 
-# Rate Limiter Configuration (CRITICAL for devnet compliance)
-rate-limiter:
-  enabled: true
-  global-tps: 0.4  # 0.4 TPS = safely under 0.5 TPS devnet requirement
-  per-party-rpm: 10  # 10 requests per minute per party
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.digitalasset.quickstart: DEBUG
+    com.digitalasset.quickstart.security: DEBUG
+    com.digitalasset.quickstart.config.RateLimiterConfig: DEBUG
+    com.digitalasset.quickstart.service.IdempotencyService: DEBUG
+    org.springframework.security: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} [requestId=%X{requestId}] - %msg%n"
 
-# CORS Configuration for Frontend
-cors:
-  # TODO: Update with actual canton-website domain after deployment
-  allowed-origins: ${FRONTEND_URL:https://canton.clearportx.com}
-  allowed-methods: GET,POST,PUT,DELETE,OPTIONS
-  allowed-headers: '*'
-  allow-credentials: true
+# Application-Specific Configuration
+clearportx:
+  amm:
+    default-slippage-bps: 50  # 0.5% default slippage tolerance
+    max-slippage-bps: 1000  # 10% maximum allowed slippage
+    default-deadline-seconds: 300  # 5 minutes default deadline
+    scale: 10  # Decimal places for token amounts
 
-# Security Configuration
-security:
-  # Basic Auth for actuator endpoints
-  actuator:
-    username: ${ACTUATOR_USERNAME:admin}
-    password: ${ACTUATOR_PASSWORD}  # MUST be set via environment variable
+  swap:
+    timeout-ms: 10000  # 10s timeout for swap operations
+    enable-atomic-swap: true  # Enable atomic swap endpoint
 
-# Ledger Configuration
-ledger:
-  application-id: ${AUTH_APP_PROVIDER_BACKEND_USER_ID:ClearportX-Devnet}
-  # TODO: Update with actual Canton Network devnet participant endpoint
-  # Will be provided by Canton Network team after IP whitelist approval
-  registry-base-uri: ${REGISTRY_BASE_URI:https://TBD_DEVNET_PARTICIPANT_ENDPOINT}
+  fees:
+    total-bps: 30  # 0.3% total fee
+    protocol-share: 0.25  # 25% to protocol
+    lp-share: 0.75  # 75% to LPs
 
-# Application Tenants
-application:
-  tenants:
-    AppProvider:
-      tenantId: AppProvider
-      partyId: ${APP_PROVIDER_PARTY}
-      internal: true
-
-# OAuth2 Configuration
-# TODO: Update with Canton Network devnet Keycloak realm
-# Waiting for Canton Network team to provide devnet Keycloak configuration
-spring:
   security:
-    oauth2:
-      resourceserver:
-        jwt:
-          issuer-uri: ${KEYCLOAK_ISSUER_URI:https://TBD_DEVNET_KEYCLOAK/realms/AppProvider}
-          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:https://TBD_DEVNET_KEYCLOAK/realms/AppProvider/protocol/openid-connect/certs}
+    require-request-id: false  # Auto-generate if missing
+    require-idempotency-key: false  # Optional but recommended
+    validate-body-hash: true  # Enable body-hash mismatch detection

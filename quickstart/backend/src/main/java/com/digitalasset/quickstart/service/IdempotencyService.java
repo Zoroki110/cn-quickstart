@@ -77,23 +77,85 @@ public class IdempotencyService {
     }
 
     /**
+     * Check idempotency with body-hash validation.
+     *
+     * Same key + same hash → return cached response
+     * Same key + different hash → throw IDEMPOTENCY_KEY_BODY_MISMATCH exception
+     *
+     * @param baseKey base idempotency key (from header)
+     * @param bodyHash SHA-256 hash of request body
+     * @return cached response if exists with matching hash, null if first request
+     * @throws ResponseStatusException if same key with different body hash
+     */
+    public Object checkIdempotencyWithBodyHash(String baseKey, String bodyHash) {
+        if (baseKey == null || baseKey.trim().isEmpty()) {
+            return null;  // No idempotency key provided
+        }
+
+        // Check if base key exists in cache with ANY body hash
+        String fullKey = baseKey + ":" + bodyHash;
+        IdempotencyEntry entry = cache.get(fullKey);
+
+        if (entry != null) {
+            if (entry.isExpired()) {
+                cache.remove(fullKey);
+                logger.debug("Idempotency key expired and removed: {}", fullKey);
+                return null;
+            }
+            logger.info("Idempotent request detected - returning cached response for key: {}", fullKey);
+            return entry.response;
+        }
+
+        // Check if base key exists with DIFFERENT body hash
+        for (String cachedKey : cache.keySet()) {
+            if (cachedKey.startsWith(baseKey + ":") && !cachedKey.equals(fullKey)) {
+                IdempotencyEntry existingEntry = cache.get(cachedKey);
+                if (existingEntry != null && !existingEntry.isExpired()) {
+                    logger.error("Idempotency key body mismatch - same key with different body: {} vs {}",
+                        fullKey, cachedKey);
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "IDEMPOTENCY_KEY_BODY_MISMATCH: Same idempotency key used with different request body");
+                }
+            }
+        }
+
+        return null;  // First request with this key
+    }
+
+    /**
      * Register successful operation with idempotency key.
+     *
+     * Never cache 5xx responses.
      *
      * @param idempotencyKey unique key from client
      * @param commandId Canton command ID
      * @param transactionId Canton transaction ID (if available)
      * @param response response to cache
+     * @param statusCode HTTP status code
      */
-    public void registerSuccess(String idempotencyKey, String commandId, String transactionId, Object response) {
+    public void registerSuccess(String idempotencyKey, String commandId, String transactionId, Object response, int statusCode) {
         if (idempotencyKey == null || idempotencyKey.trim().isEmpty()) {
             return;  // No idempotency tracking without key
+        }
+
+        // Never cache 5xx responses
+        if (statusCode >= 500) {
+            logger.debug("Skipping cache for 5xx response: {} (status={})", idempotencyKey, statusCode);
+            return;
         }
 
         IdempotencyEntry entry = new IdempotencyEntry(commandId, transactionId, response);
         cache.put(idempotencyKey, entry);
 
-        logger.info("Registered idempotency key: {} → commandId: {}, txId: {}",
-            idempotencyKey, commandId, transactionId != null ? transactionId : "N/A");
+        logger.info("Registered idempotency key: {} → commandId: {}, txId: {}, status: {}",
+            idempotencyKey, commandId, transactionId != null ? transactionId : "N/A", statusCode);
+    }
+
+    /**
+     * Backward compatibility - assumes 2xx status.
+     */
+    public void registerSuccess(String idempotencyKey, String commandId, String transactionId, Object response) {
+        registerSuccess(idempotencyKey, commandId, transactionId, response, 200);
     }
 
     /**

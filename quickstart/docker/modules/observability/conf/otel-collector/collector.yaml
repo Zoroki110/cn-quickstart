@@ -7,6 +7,8 @@ receivers:
     protocols:
       grpc:
         endpoint: "0.0.0.0:${env:OTLP_LISTEN_PORT}"
+      http:
+        endpoint: "0.0.0.0:4318"
 
   # Logs (non-OTLP)
   fluentforward:
@@ -37,6 +39,10 @@ receivers:
         - job_name: postgres
           static_configs:
             - targets: [ "postgres-metrics:${env:POSTGRES_EXPORTER_METRICS_PORT}" ]
+        - job_name: backend-service
+          metrics_path: /api/actuator/prometheus
+          static_configs:
+            - targets: [ "backend-service:8080" ]
 
 processors:
   batch:

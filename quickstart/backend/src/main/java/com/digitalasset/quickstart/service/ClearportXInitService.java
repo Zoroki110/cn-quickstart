@@ -3,9 +3,9 @@
 
 package com.digitalasset.quickstart.service;
 
-import clearportx_amm.amm.pool.Pool;
-import clearportx_amm.lptoken.lptoken.LPToken;
-import clearportx_amm.token.token.Token;
+import clearportx_amm_production.amm.pool.Pool;
+import clearportx_amm_production.lptoken.lptoken.LPToken;
+import clearportx_amm_production.token.token.Token;
 import com.daml.ledger.api.v2.CommandsOuterClass;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 import com.digitalasset.quickstart.pqs.Contract;

@@ -1,0 +1,42 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Spring Boot Backend Metrics
+  - job_name: 'clearportx-backend'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: '(jvm_.*|process_.*|http_server_requests_.*|pool_.*|swap_.*|liquidity_.*)'
+        action: keep
+
+  # Canton Custom Metrics
+  - job_name: 'canton-metrics'
+    static_configs:
+      - targets: ['canton-metrics:9200']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: '(canton_.*|pool_.*|swap_.*|transaction_.*)'
+        action: keep
+
+  # Node Metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+# Alerting rules
+rule_files:
+  - 'alerts.yml'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []

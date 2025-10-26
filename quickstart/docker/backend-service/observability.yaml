@@ -11,3 +11,7 @@ services:
       OTEL_METRIC_EXPORT_INTERVAL: 5000
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:${OTEL_COLLECTOR_OTLP_PORT}"
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      # Micrometer OTLP registry configuration
+      MANAGEMENT_METRICS_EXPORT_OTLP_URL: "http://otel-collector:4318/v1/metrics"
+      MANAGEMENT_METRICS_EXPORT_OTLP_ENABLED: "true"
+      MANAGEMENT_METRICS_EXPORT_OTLP_STEP: "10s"

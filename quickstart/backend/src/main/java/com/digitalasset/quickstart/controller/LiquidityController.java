@@ -3,9 +3,9 @@
 
 package com.digitalasset.quickstart.controller;
 
-import clearportx_amm.amm.pool.Pool;
-import clearportx_amm.token.token.Token;
-import clearportx_amm.lptoken.lptoken.LPToken;
+import clearportx_amm_production.amm.pool.Pool;
+import clearportx_amm_production.token.token.Token;
+import clearportx_amm_production.lptoken.lptoken.LPToken;
 import com.digitalasset.transcode.java.ContractId;
 import com.digitalasset.transcode.java.Party;
 import com.digitalasset.quickstart.dto.AddLiquidityRequest;

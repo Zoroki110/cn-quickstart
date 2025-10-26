@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: 'ClearportX AMM Dashboards'
+    orgId: 1
+    folder: 'AMM DEX'
+    folderUid: 'amm-dex'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

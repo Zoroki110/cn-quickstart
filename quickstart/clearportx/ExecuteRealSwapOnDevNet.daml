@@ -1,0 +1,77 @@
+module ExecuteRealSwapOnDevNet where
+
+import Daml.Script
+import qualified AMM.Pool as P
+import qualified AMM.SwapRequest as SR
+import qualified AMM.AtomicSwap as AS
+import qualified Token.Token as T
+import DA.Time (hours)
+import DA.List (head)
+
+-- REAL SWAP ON DEVNET - Not a test!
+executeRealSwap : Script ()
+executeRealSwap = script do
+  debug "=== EXECUTING REAL SWAP ON CANTON DEVNET ==="
+  
+  -- 1. Get real parties from DevNet
+  parties <- listKnownParties
+  let appProvider = case find (\p -> "app-provider" `isInfixOf` show p.party) parties of
+        Some p -> p.party
+        None -> error "app-provider not found on DevNet"
+  
+  debug $ "Using DevNet party: " <> show appProvider
+  
+  -- 2. Find real pool on DevNet
+  pools <- query @P.Pool appProvider
+  case pools of
+    [] -> debug "No pools found on DevNet"
+    (poolCid, pool) :: _ -> do
+      debug "✅ FOUND REAL POOL ON DEVNET:"
+      debug $ "   Pool ID: " <> pool.poolId
+      debug $ "   Reserves: " <> show pool.reserveA <> " " <> pool.symbolA 
+      debug $ "   Reserves: " <> show pool.reserveB <> " " <> pool.symbolB
+      debug $ "   This is a REAL pool on Canton DevNet!"
+      
+      -- 3. Create a trader party
+      trader <- allocateParty "RealTrader"
+      debug $ "Created trader party: " <> show trader
+      
+      -- 4. Give trader some ETH (in real scenario, would come from elsewhere)
+      ethToken <- submit pool.issuerA do
+        createCmd T.Token with
+          issuer = pool.issuerA
+          owner = trader
+          symbol = "ETH"
+          amount = 1.0
+      
+      debug "✅ Trader has 1 ETH token on DevNet"
+      
+      -- 5. Create REAL swap request on DevNet
+      swapRequest <- submit trader do
+        createCmd SR.SwapRequest with
+          requester = trader
+          operator = pool.poolOperator
+          poolCid = poolCid
+          tokenInCid = ethToken
+          amountIn = 1.0
+          symbolOut = "USDC"
+          minAmountOut = 1900.0  -- Expect ~1974 USDC
+          deadline = hours 1
+      
+      debug "✅ REAL Swap Request created on DevNet ledger"
+      
+      -- 6. Execute the swap (would need pool operator authorization)
+      debug "⚠️  To execute: Pool operator must run AS.ExecuteSwap"
+      debug $ "   Contract ID: " <> show swapRequest
+      
+      debug "\n🚀 THIS IS A REAL TRANSACTION ON CANTON DEVNET!"
+      debug "   Not a test - this affects the real DevNet ledger state"
+      
+  where
+    isInfixOf needle haystack = 
+      needle == take (length needle) haystack || 
+      (length haystack > length needle && isInfixOf needle (drop 1 haystack))
+    length t = if t == "" then 0 else 1 + length (drop 1 t)
+    take n t = if n <= 0 || t == "" then "" else implode [head (explode t)] <> take (n-1) (drop 1 t)
+    head (x::_) = x
+    head [] = error "empty"

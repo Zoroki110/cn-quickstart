@@ -17,9 +17,11 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.config.Customizer;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.http.HttpMethod;
 
 import java.util.Arrays;
 import java.util.List;
@@ -45,7 +47,7 @@ public class WebSecurityConfig {
     @Value("${security.actuator.password}")
     private String actuatorPassword;
 
-    @Value("${cors.allowed-origins:http://localhost:3000,http://localhost:3001}")
+    @Value("${cors.allowed-origins:http://localhost:3000,http://localhost:3001,http://localhost:4001}")
     private String allowedOrigins;
 
     @Value("${cors.allowed-methods:GET,POST,PUT,DELETE,OPTIONS}")
@@ -75,9 +77,8 @@ public class WebSecurityConfig {
             .authorizeHttpRequests(authz -> authz
                 .anyRequest().authenticated()
             )
-            .httpBasic()
-            .and()
-            .csrf().disable();  // Actuator endpoints don't need CSRF
+            .httpBasic(Customizer.withDefaults())
+            .csrf(csrf -> csrf.disable());  // Actuator endpoints don't need CSRF
 
         return http.build();
     }
@@ -91,20 +92,15 @@ public class WebSecurityConfig {
     public SecurityFilterChain apiSecurityFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/**")
-            .cors()  // Enable CORS for API endpoints
-            .and()
+            .cors(Customizer.withDefaults())  // Enable CORS for API endpoints
             .authorizeHttpRequests(authz -> authz
-                // Public endpoints
-                .requestMatchers("/api/health/**").permitAll()
-                .requestMatchers("/api/pools").permitAll()
-                // Protected endpoints (require OAuth2 JWT)
-                .anyRequest().authenticated()
+                // TEMPORARILY: Allow ALL requests for Netlify testing
+                // TODO: Re-enable OAuth2 JWT authentication after CORS is working
+                .anyRequest().permitAll()
             )
-            .oauth2ResourceServer()
-                .jwt()
-            .and()
-            .and()
-            .csrf().disable();  // API uses JWT, not session-based auth
+            // TEMPORARILY DISABLED FOR DEBUGGING:
+            // .oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults()))
+            .csrf(csrf -> csrf.disable());  // API uses JWT, not session-based auth
 
         return http.build();
     }

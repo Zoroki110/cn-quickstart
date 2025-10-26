@@ -1,0 +1,21 @@
+module TestSwapDevNet where
+
+import Daml.Script
+import AMM.Pool
+import Token.Token
+
+-- Test a swap on Canton Network DevNet
+testSwap : Script ()
+testSwap = script do
+  alice <- allocatePartyWithHint "Alice" (PartyIdHint "Alice")
+  
+  debug "🔍 Looking for ETH-USDC pool on DevNet..."
+  pools <- queryFilter @Pool alice (\p -> True)
+  debug $ "Found " <> show (length pools) <> " pools"
+  
+  case pools of
+    [] -> debug "❌ No pools found!"
+    (poolCid, pool) :: _ -> do
+      debug $ "✅ Pool found: " <> pool.tokenASymbol <> "-" <> pool.tokenBSymbol
+      debug $ "   Reserves: " <> show pool.reserveA <> " " <> pool.tokenASymbol <> " + " <> show pool.reserveB <> " " <> pool.tokenBSymbol
+      pure ()

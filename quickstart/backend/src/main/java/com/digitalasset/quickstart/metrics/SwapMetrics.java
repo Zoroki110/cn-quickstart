@@ -35,9 +35,6 @@ public class SwapMetrics {
     private static final Logger logger = LoggerFactory.getLogger(SwapMetrics.class);
 
     private final MeterRegistry meterRegistry;
-    private final Counter swapsPrepared;
-    private final Counter swapsExecuted;
-    private final Counter swapsFailed;
     private final DistributionSummary swapInputAmounts;
     private final DistributionSummary swapOutputAmounts;
     private final DistributionSummary priceImpact;
@@ -57,19 +54,9 @@ public class SwapMetrics {
         this.meterRegistry = meterRegistry;
 
         // Counter: Total swaps prepared
-        this.swapsPrepared = Counter.builder("clearportx.swap.prepared.total")
-            .description("Total number of swaps prepared")
-            .register(meterRegistry);
-
-        // Counter: Total swaps executed successfully
-        this.swapsExecuted = Counter.builder("clearportx.swap.executed.total")
-            .description("Total number of swaps executed successfully")
-            .register(meterRegistry);
-
-        // Counter: Total swaps failed
-        this.swapsFailed = Counter.builder("clearportx.swap.failed.total")
-            .description("Total number of swaps that failed")
-            .register(meterRegistry);
+        // NOTE: We don't register global counters here anymore.
+        // All swap counters are created dynamically with tags in recordSwap*() methods
+        // to avoid Prometheus "tag keys mismatch" errors.
 
         // Distribution: Swap input amounts
         this.swapInputAmounts = DistributionSummary.builder("clearportx.swap.input.amount")
@@ -104,10 +91,8 @@ public class SwapMetrics {
      * Record a swap preparation.
      */
     public void recordSwapPrepared(String inputSymbol, String outputSymbol) {
-        swapsPrepared.increment();
-
         // Tagged counter for specific token pairs
-        meterRegistry.counter("clearportx.swap.prepared.by_pair",
+        meterRegistry.counter("clearportx.swap.prepared.total",
             "pair", normalizePair(inputSymbol, outputSymbol)).increment();
     }
 
@@ -120,12 +105,7 @@ public class SwapMetrics {
         // Use same metric name with pair tag for better PromQL queries
         String pair = normalizePair(inputSymbol, outputSymbol);
         meterRegistry.counter("clearportx.swap.executed.total",
-            "pair", pair,
-            "inputSymbol", inputSymbol,
-            "outputSymbol", outputSymbol).increment();
-
-        // Also increment global counter (no tags)
-        swapsExecuted.increment();
+            "pair", pair).increment();
 
         // Record amounts
         swapInputAmounts.record(inputAmount.doubleValue());
@@ -144,11 +124,9 @@ public class SwapMetrics {
      * Record a failed swap.
      */
     public void recordSwapFailed(String inputSymbol, String outputSymbol, String reason) {
-        swapsFailed.increment();
-
         // Tagged counter for failure reasons (limit reason cardinality)
         String normalizedReason = normalizeReason(reason);
-        meterRegistry.counter("clearportx.swap.failed.by_reason",
+        meterRegistry.counter("clearportx.swap.failed.total",
             "reason", normalizedReason,
             "pair", normalizePair(inputSymbol, outputSymbol)).increment();
     }

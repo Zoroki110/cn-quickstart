@@ -10,6 +10,7 @@ import com.digitalasset.quickstart.service.LedgerReader;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
@@ -56,12 +57,27 @@ public class LedgerController {
     }
 
     /**
+     * GET /api/tokens/{party} - Get tokens for a specific party (public for testing)
+     * TEMPORARY: Public endpoint for frontend testing without OAuth
+     * TODO: Remove in production, use authenticated /api/tokens instead
+     */
+    @GetMapping("/tokens/{party}")
+    @WithSpan
+    @PreAuthorize("permitAll()")
+    public CompletableFuture<List<TokenDTO>> tokensForParty(@PathVariable String party) {
+        logger.info("GET /api/tokens/{} - public access (TESTING ONLY)", party);
+        return reader.tokensForParty(party);
+    }
+
+    /**
      * GET /api/pools - Get all active liquidity pools
+     * Public endpoint - no authentication required
      */
     @GetMapping("/pools")
     @WithSpan
+    @PreAuthorize("permitAll()")
     public CompletableFuture<List<PoolDTO>> pools() {
-        logger.info("GET /api/pools");
+        logger.info("GET /api/pools - public access");
         return reader.pools();
     }
 }

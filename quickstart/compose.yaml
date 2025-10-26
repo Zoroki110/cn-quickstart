@@ -1,5 +1,5 @@
 # Copyright (c) 2023, Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License47-Identifier: Apache-2.0
 
 services:
   backend-service:
@@ -59,5 +59,6 @@ services:
     volumes:
       - ./docker/backend-service/onboarding/onboarding.sh:/app/scripts/on/backend-service.sh
       - ./daml/licensing/.daml/dist/quickstart-licensing-0.0.1.dar:/canton/dars/quickstart-licensing-0.0.1.dar
+      - ./clearportx/.daml/dist/clearportx-amm-1.0.1.dar:/canton/dars/clearportx-amm-1.0.1.dar
       - ./integration-test/env-init.sh:/app/scripts/on/integration-tests-environment-init.sh
       - ./integration-test:/integration-test

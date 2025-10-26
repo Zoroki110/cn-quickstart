@@ -1,0 +1,49 @@
+module PoolSetup where
+
+import Daml.Script
+import AMM.Pool
+import Token.Token
+
+data PoolConfig = PoolConfig
+  { operator : Party
+  , poolParty : Party
+  , ethIssuer : Party
+  , usdcIssuer : Party
+  , lpIssuer : Party
+  , feeReceiver : Party
+  }
+
+setupPool : PoolConfig -> Script ()
+setupPool config = do
+  debug "Creating ETH token..."
+  ethTokenCid <- submit config.ethIssuer do
+    createCmd Token with
+      issuer = config.ethIssuer
+      owner = config.operator
+      symbol = "ETH"
+      amount = 100.0
+      
+  debug "Creating USDC token..."
+  usdcTokenCid <- submit config.usdcIssuer do
+    createCmd Token with
+      issuer = config.usdcIssuer
+      owner = config.operator
+      symbol = "USDC"
+      amount = 200000.0
+      
+  debug "Creating pool..."
+  poolCid <- submitMulti [config.operator, config.poolParty] [] do
+    createCmd Pool with
+      operator = config.operator
+      poolParty = config.poolParty
+      poolId = "eth-usdc-direct"
+      tokenACid = ethTokenCid
+      tokenBCid = usdcTokenCid
+      reserveA = 0.0
+      reserveB = 0.0
+      lpTokenIssuer = config.lpIssuer
+      feeRate = 0.003
+      feeReceiver = config.feeReceiver
+      
+  debug "Pool created successfully!"
+  pure ()

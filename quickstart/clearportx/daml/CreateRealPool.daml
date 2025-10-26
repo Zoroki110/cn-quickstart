@@ -1,0 +1,67 @@
+
+module CreateRealPool where
+
+import Daml.Script
+import AMM.Pool
+import Token.Token
+import DA.Time (hours)
+
+createRealPool : Script ()
+createRealPool = do
+  -- Create unique parties for this run
+  let suffix = "REAL_" <> show (hours 1)
+  
+  operator <- allocateParty $ "OP_REAL"
+  poolParty <- allocateParty $ "POOL_REAL"
+  ethIssuer <- allocateParty $ "ETH_REAL"
+  usdcIssuer <- allocateParty $ "USDC_REAL"
+  lpIssuer <- allocateParty $ "LP_REAL"
+  feeReceiver <- allocateParty $ "FEE_REAL"
+  
+  debug $ "Operator: " <> show operator
+  debug $ "Pool Party: " <> show poolParty
+  
+  -- Create tokens
+  ethTokenCid <- submit ethIssuer do
+    createCmd Token with
+      issuer = ethIssuer
+      owner = operator
+      symbol = "ETH"
+      amount = 1000.0
+      
+  usdcTokenCid <- submit usdcIssuer do
+    createCmd Token with
+      issuer = usdcIssuer
+      owner = operator  
+      symbol = "USDC"
+      amount = 2000000.0
+      
+  -- Create the AMM pool
+  poolCid <- submitMulti [operator, poolParty] [] do
+    createCmd Pool with
+      poolOperator = operator
+      poolParty = poolParty
+      lpIssuer = lpIssuer
+      issuerA = ethIssuer
+      issuerB = usdcIssuer
+      symbolA = "ETH"
+      symbolB = "USDC"
+      feeBps = 30  -- 0.3%
+      poolId = "real-eth-usdc-pool"
+      maxTTL = hours 24
+      totalLPSupply = 0.0
+      reserveA = 0.0
+      reserveB = 0.0
+      tokenACid = Some ethTokenCid
+      tokenBCid = Some usdcTokenCid
+      protocolFeeReceiver = feeReceiver
+      maxInBps = 10000  -- 100%
+      maxOutBps = 5000   -- 50%
+      
+  debug $ "POOL CREATED: " <> show poolCid
+  
+  -- Verify by querying
+  pools <- query @Pool operator
+  debug $ "Pools visible to operator: " <> show (length pools)
+  
+  pure ()

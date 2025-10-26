@@ -1,7 +1,7 @@
 sdk-version: 3.3.0-snapshot.20250502.13767.0.v2fc6c7e2
-name: clearportx-amm
+name: clearportx-amm-production
 source: daml
-version: 1.0.1
+version: 1.0.0
 parties:
   - PoolOperator
   - PoolParty

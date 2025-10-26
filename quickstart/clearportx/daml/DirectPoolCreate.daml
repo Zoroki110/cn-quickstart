@@ -1,0 +1,80 @@
+module DirectPoolCreate where
+
+import Daml.Script
+import DA.Time
+import qualified Token.Token as T
+import qualified AMM.Pool as P
+
+directCreate : Script ()
+directCreate = script do
+  debug "=== STARTING POOL CREATION ==="
+
+  -- Allocate unique parties (will fail if already exist, that's OK)
+  debug "Step 1: Allocating parties..."
+  poolOp <- allocateParty "DIRECT_OP"
+  debug $ "  Created poolOp: " <> show poolOp
+
+  poolParty <- allocateParty "DIRECT_POOL"
+  debug $ "  Created poolParty: " <> show poolParty
+
+  ethIss <- allocateParty "DIRECT_ETH"
+  debug $ "  Created ethIss: " <> show ethIss
+
+  usdcIss <- allocateParty "DIRECT_USDC"
+  debug $ "  Created usdcIss: " <> show usdcIss
+
+  lpIss <- allocateParty "DIRECT_LP"
+  debug $ "  Created lpIss: " <> show lpIss
+
+  clx <- allocateParty "DIRECT_CLX"
+  debug $ "  Created clx: " <> show clx
+
+  debug "Step 2: Creating ETH token..."
+  ethCid <- submit ethIss $ createCmd T.Token with
+    issuer = ethIss
+    owner = poolParty
+    symbol = "ETH"
+    amount = 100.0
+  debug $ "  ETH token created: " <> show ethCid
+
+  debug "Step 3: Creating USDC token..."
+  usdcCid <- submit usdcIss $ createCmd T.Token with
+    issuer = usdcIss
+    owner = poolParty
+    symbol = "USDC"
+    amount = 200000.0
+  debug $ "  USDC token created: " <> show usdcCid
+
+  debug "Step 4: Creating POOL with submitMulti..."
+  poolCid <- submitMulti [poolParty, poolOp] [] $ createCmd P.Pool with
+    poolOperator = poolOp
+    poolParty = poolParty
+    lpIssuer = lpIss
+    issuerA = ethIss
+    issuerB = usdcIss
+    symbolA = "ETH"
+    symbolB = "USDC"
+    feeBps = 30
+    poolId = "direct-eth-usdc"
+    maxTTL = hours 24
+    totalLPSupply = 0.0
+    reserveA = 100.0
+    reserveB = 200000.0
+    tokenACid = Some ethCid
+    tokenBCid = Some usdcCid
+    protocolFeeReceiver = clx
+    maxInBps = 10000
+    maxOutBps = 5000
+
+  debug $ "  *** POOL CREATED SUCCESSFULLY: " <> show poolCid <> " ***"
+
+  debug "Step 5: Verifying pool visibility to poolOp..."
+  pools <- query @P.Pool poolOp
+  debug $ "  poolOp sees " <> show (length pools) <> " pools"
+
+  debug "Step 6: Verifying pool visibility to poolParty..."
+  poolsParty <- query @P.Pool poolParty
+  debug $ "  poolParty sees " <> show (length poolsParty) <> " pools"
+
+  debug "=== ✓✓✓ POOL CREATION COMPLETE AND VERIFIED ✓✓✓ ==="
+  pure ()

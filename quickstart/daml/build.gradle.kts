@@ -38,8 +38,16 @@ tasks.register<com.digitalasset.transcode.codegen.java.gradle.JavaCodegenTask>("
     dependsOn("compileDaml")
 }
 
+tasks.register<com.digitalasset.transcode.codegen.java.gradle.JavaCodegenTask>("codeGenClearportX") {
+    dar.from("$rootDir/clearportx/artifacts/devnet/clearportx-amm-production-v1.0.0-frozen.dar")
+    destination = file("$rootDir/backend/build/generated-daml-bindings")
+    // PRODUCTION v1.0.0 - Clean deployment with CreateAllPools and GiveAliceBobTokens scripts
+    // Package name: clearportx-amm-production
+    // Package hash: b52e441a6546c05fe6f3a0856fdda8c6d5f0137439d9cb0cc11097bf8fb7e7c9
+}
+
 tasks.named("build") {
-    dependsOn("codeGen")
+    dependsOn("codeGen", "codeGenClearportX")
 }
 
 // Helper function to compute SDK variables

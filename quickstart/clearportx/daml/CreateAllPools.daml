@@ -1,0 +1,138 @@
+-- Create all 4 pools for ClearportX on Canton Network
+-- Pools: ETH-USDC, CANTON-USDC, CANTON-CBTC, CBTC-USDC
+-- Uses listKnownParties to reference EXISTING app-provider party
+module CreateAllPools where
+
+import Daml.Script
+import qualified AMM.Pool as P
+import DA.Time (days)
+import DA.List (find)
+import DA.Text (isInfixOf)
+
+-- Create all 4 pools with realistic initial reserves
+createAllPools : Script ()
+createAllPools = script do
+  -- Use existing app-provider party
+  parties <- listKnownParties
+  let appProvider = case find (\p -> "app-provider" `isInfixOf` partyToText p.party) parties of
+        Some p -> p.party
+        None -> error "app-provider party not found"
+
+  debug "✅ Using app-provider party:"
+  debug $ "app-provider: " <> show appProvider
+
+  debug ""
+  debug "💰 Creating 4 pools..."
+  debug ""
+
+  -- Pool 1: ETH-USDC (1 ETH = 2000 USDC)
+  debug "[1/4] Creating ETH-USDC pool..."
+  poolETH_USDC <- submit appProvider do
+    createCmd P.Pool with
+      poolOperator = appProvider
+      poolParty = appProvider
+      lpIssuer = appProvider
+      issuerA = appProvider
+      issuerB = appProvider
+      symbolA = "ETH"
+      symbolB = "USDC"
+      feeBps = 30  -- 0.3%
+      poolId = "ETH-USDC-01"
+      maxTTL = days 1
+      totalLPSupply = 0.0
+      reserveA = 100.0      -- 100 ETH
+      reserveB = 200000.0   -- 200,000 USDC (1 ETH = 2000 USDC)
+      tokenACid = None
+      tokenBCid = None
+      protocolFeeReceiver = appProvider
+      maxInBps = 10000  -- 100%
+      maxOutBps = 5000  -- 50%
+
+  debug $ "✅ ETH-USDC pool created: " <> show poolETH_USDC
+
+  -- Pool 2: CANTON-USDC (1 CANTON = 2000 USDC)
+  debug "[2/4] Creating CANTON-USDC pool..."
+  poolCANTON_USDC <- submit appProvider do
+    createCmd P.Pool with
+      poolOperator = appProvider
+      poolParty = appProvider
+      lpIssuer = appProvider
+      issuerA = appProvider
+      issuerB = appProvider
+      symbolA = "CANTON"
+      symbolB = "USDC"
+      feeBps = 30  -- 0.3%
+      poolId = "CANTON-USDC-01"
+      maxTTL = days 1
+      totalLPSupply = 0.0
+      reserveA = 50.0       -- 50 CANTON
+      reserveB = 100000.0   -- 100,000 USDC (1 CANTON = 2000 USDC)
+      tokenACid = None
+      tokenBCid = None
+      protocolFeeReceiver = appProvider
+      maxInBps = 10000  -- 100%
+      maxOutBps = 5000  -- 50%
+
+  debug $ "✅ CANTON-USDC pool created: " <> show poolCANTON_USDC
+
+  -- Pool 3: CANTON-CBTC (1 CANTON = 0.05 CBTC, so 1 CBTC = 20 CANTON)
+  debug "[3/4] Creating CANTON-CBTC pool..."
+  poolCANTON_CBTC <- submit appProvider do
+    createCmd P.Pool with
+      poolOperator = appProvider
+      poolParty = appProvider
+      lpIssuer = appProvider
+      issuerA = appProvider
+      issuerB = appProvider
+      symbolA = "CANTON"
+      symbolB = "CBTC"
+      feeBps = 30  -- 0.3%
+      poolId = "CANTON-CBTC-01"
+      maxTTL = days 1
+      totalLPSupply = 0.0
+      reserveA = 100.0      -- 100 CANTON
+      reserveB = 5.0        -- 5 CBTC (1 CANTON = 0.05 CBTC)
+      tokenACid = None
+      tokenBCid = None
+      protocolFeeReceiver = appProvider
+      maxInBps = 10000  -- 100%
+      maxOutBps = 5000  -- 50%
+
+  debug $ "✅ CANTON-CBTC pool created: " <> show poolCANTON_CBTC
+
+  -- Pool 4: CBTC-USDC (1 CBTC = 40000 USDC)
+  debug "[4/4] Creating CBTC-USDC pool..."
+  poolCBTC_USDC <- submit appProvider do
+    createCmd P.Pool with
+      poolOperator = appProvider
+      poolParty = appProvider
+      lpIssuer = appProvider
+      issuerA = appProvider
+      issuerB = appProvider
+      symbolA = "CBTC"
+      symbolB = "USDC"
+      feeBps = 30  -- 0.3%
+      poolId = "CBTC-USDC-01"
+      maxTTL = days 1
+      totalLPSupply = 0.0
+      reserveA = 5.0        -- 5 CBTC
+      reserveB = 200000.0   -- 200,000 USDC (1 CBTC = 40000 USDC)
+      tokenACid = None
+      tokenBCid = None
+      protocolFeeReceiver = appProvider
+      maxInBps = 10000  -- 100%
+      maxOutBps = 5000  -- 50%
+
+  debug $ "✅ CBTC-USDC pool created: " <> show poolCBTC_USDC
+
+  debug ""
+  debug "🎉 All 4 pools created successfully!"
+  debug ""
+  debug "Pool Summary:"
+  debug "  1. ETH-USDC:     100 ETH + 200,000 USDC  (1 ETH = 2000 USDC)"
+  debug "  2. CANTON-USDC:  50 CANTON + 100,000 USDC (1 CANTON = 2000 USDC)"
+  debug "  3. CANTON-CBTC:  100 CANTON + 5 CBTC      (1 CANTON = 0.05 CBTC)"
+  debug "  4. CBTC-USDC:    5 CBTC + 200,000 USDC    (1 CBTC = 40000 USDC)"
+  debug ""
+
+  return ()

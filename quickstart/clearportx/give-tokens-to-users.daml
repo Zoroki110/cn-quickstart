@@ -1,0 +1,102 @@
+module GiveTokensToUsers where
+
+import Daml.Script
+import qualified Token.Token as T
+
+-- Donne des tokens aux utilisateurs pour tester
+giveTokensToUsers : Script ()
+giveTokensToUsers = script do
+  debug "=== DISTRIBUTION DE TOKENS AUX UTILISATEURS ==="
+  
+  -- Trouver les parties
+  parties <- listKnownParties
+  
+  -- Trouver alice, bob, charlie
+  let findUser name = find (\p -> name `isInfixOf` show p.party) parties
+      alice = findUser "alice@clearportx"
+      bob = findUser "bob@clearportx"
+      charlie = findUser "charlie@clearportx"
+      
+  -- Trouver les issuers
+  let ethIssuer = find (\p -> "ETH" `isInfixOf` show p.party || "eth" `isInfixOf` show p.party) parties
+      usdcIssuer = find (\p -> "USDC" `isInfixOf` show p.party || "usdc" `isInfixOf` show p.party) parties
+  
+  case (ethIssuer, usdcIssuer) of
+    (Some ethParty, Some usdcParty) -> do
+      -- Donner des tokens à Alice
+      case alice of
+        Some a -> do
+          submit ethParty.party do
+            createCmd T.Token with
+              issuer = ethParty.party
+              owner = a.party
+              symbol = "ETH"
+              amount = 100.0
+          submit usdcParty.party do
+            createCmd T.Token with
+              issuer = usdcParty.party
+              owner = a.party
+              symbol = "USDC"
+              amount = 50000.0
+          debug $ "✅ Alice a reçu: 100 ETH + 50,000 USDC"
+        None -> debug "❌ Alice non trouvée"
+      
+      -- Donner des tokens à Bob
+      case bob of
+        Some b -> do
+          submit ethParty.party do
+            createCmd T.Token with
+              issuer = ethParty.party
+              owner = b.party
+              symbol = "ETH"
+              amount = 50.0
+          submit usdcParty.party do
+            createCmd T.Token with
+              issuer = usdcParty.party
+              owner = b.party
+              symbol = "USDC"
+              amount = 100000.0
+          debug $ "✅ Bob a reçu: 50 ETH + 100,000 USDC"
+        None -> debug "❌ Bob non trouvé"
+        
+      -- Donner des tokens à Charlie
+      case charlie of
+        Some c -> do
+          submit ethParty.party do
+            createCmd T.Token with
+              issuer = ethParty.party
+              owner = c.party
+              symbol = "ETH"
+              amount = 200.0
+          submit usdcParty.party do
+            createCmd T.Token with
+              issuer = usdcParty.party
+              owner = c.party
+              symbol = "USDC"
+              amount = 25000.0
+          debug $ "✅ Charlie a reçu: 200 ETH + 25,000 USDC"
+        None -> debug "❌ Charlie non trouvé"
+        
+    _ -> debug "❌ Issuers ETH/USDC non trouvés"
+    
+  debug "\n📊 RÉSUMÉ:"
+  debug "- alice@clearportx: 100 ETH + 50,000 USDC"
+  debug "- bob@clearportx: 50 ETH + 100,000 USDC"
+  debug "- charlie@clearportx: 200 ETH + 25,000 USDC"
+  
+  where
+    isInfixOf needle haystack = 
+      let nStr = explode needle
+          hStr = explode haystack
+      in isSubList nStr hStr
+      
+    isSubList [] _ = True
+    isSubList _ [] = False
+    isSubList xs ys = isPrefixOf xs ys || isSubList xs (tail ys)
+    
+    isPrefixOf [] _ = True
+    isPrefixOf _ [] = False
+    isPrefixOf (x::xs) (y::ys) = x == y && isPrefixOf xs ys
+    
+    tail [] = []
+    tail (_::xs) = xs

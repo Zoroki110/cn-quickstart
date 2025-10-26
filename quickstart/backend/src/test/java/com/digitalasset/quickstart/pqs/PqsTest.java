@@ -3,8 +3,8 @@
 
 package com.digitalasset.quickstart.pqs;
 
-import clearportx_amm.amm.pool.Pool;
-import clearportx_amm.token.token.Token;
+import clearportx_amm_production.amm.pool.Pool;
+import clearportx_amm_production.token.token.Token;
 import com.digitalasset.transcode.java.ContractId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

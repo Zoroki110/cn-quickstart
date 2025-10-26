@@ -4,12 +4,17 @@ module QuickPoolInit where
 import Daml.Script
 import qualified AMM.Pool as P
 import DA.Time (days)
+import DA.List (find)
+import DA.Text (isInfixOf)
 
 -- Create a minimal pool with fake reserves for testing
 quickPoolInit : Script ()
 quickPoolInit = script do
-  -- Use party that already exists
-  poolOperator <- allocatePartyWithHint "app-provider" (PartyIdHint "app-provider")
+  -- Use existing app-provider party
+  parties <- listKnownParties
+  let poolOperator = case find (\p -> "app-provider" `isInfixOf` partyToText p.party) parties of
+        Some p -> p.party
+        None -> error "app-provider party not found"
 
   -- Create one simple pool
   poolCid <- submit poolOperator do

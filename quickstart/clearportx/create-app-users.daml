@@ -1,0 +1,93 @@
+module CreateAppUsers where
+
+import Daml.Script
+import qualified Token.Token as T
+
+createAppUsers : Script ()
+createAppUsers = script do
+  debug "=== CRÉATION DES UTILISATEURS POUR APP.CLEARPORTX.COM ==="
+  
+  -- Créer Alice
+  alice <- allocateParty "alice@clearportx"
+  debug $ "Alice créée: " <> show alice
+  
+  -- Créer Bob  
+  bob <- allocateParty "bob@clearportx"
+  debug $ "Bob créé: " <> show bob
+  
+  -- Créer Charlie
+  charlie <- allocateParty "charlie@clearportx"
+  debug $ "Charlie créé: " <> show charlie
+  
+  -- Get existing issuers
+  parties <- listKnownParties
+  let findIssuer symbol = find (\p -> symbol `isInfixOf` show p.party) parties
+  
+  -- Donner des tokens aux utilisateurs
+  case (findIssuer "ETH", findIssuer "USDC") of
+    (Some ethIssuerDetails, Some usdcIssuerDetails) -> do
+      let ethIssuer = ethIssuerDetails.party
+          usdcIssuer = usdcIssuerDetails.party
+      
+      -- Alice: 100 ETH + 50,000 USDC
+      submit ethIssuer do
+        createCmd T.Token with
+          issuer = ethIssuer
+          owner = alice
+          symbol = "ETH"
+          amount = 100.0
+          
+      submit usdcIssuer do
+        createCmd T.Token with
+          issuer = usdcIssuer
+          owner = alice
+          symbol = "USDC"
+          amount = 50000.0
+      
+      -- Bob: 50 ETH + 100,000 USDC
+      submit ethIssuer do
+        createCmd T.Token with
+          issuer = ethIssuer
+          owner = bob
+          symbol = "ETH"
+          amount = 50.0
+          
+      submit usdcIssuer do
+        createCmd T.Token with
+          issuer = usdcIssuer
+          owner = bob
+          symbol = "USDC"
+          amount = 100000.0
+      
+      -- Charlie: 200 ETH + 25,000 USDC
+      submit ethIssuer do
+        createCmd T.Token with
+          issuer = ethIssuer
+          owner = charlie
+          symbol = "ETH"
+          amount = 200.0
+          
+      submit usdcIssuer do
+        createCmd T.Token with
+          issuer = usdcIssuer
+          owner = charlie
+          symbol = "USDC"
+          amount = 25000.0
+      
+      debug "✅ Tokens distribués à tous les utilisateurs!"
+      
+    _ -> debug "❌ Issuers not found"
+    
+  debug "\n📋 RÉSUMÉ DES UTILISATEURS CRÉÉS:"
+  debug "- alice@clearportx: 100 ETH + 50,000 USDC"
+  debug "- bob@clearportx: 50 ETH + 100,000 USDC"  
+  debug "- charlie@clearportx: 200 ETH + 25,000 USDC"
+  
+  where
+    isInfixOf needle haystack = 
+      needle == take (length needle) haystack || 
+      (length haystack > length needle && isInfixOf needle (drop 1 haystack))
+    length t = if t == "" then 0 else 1 + length (drop 1 t)
+    take n t = if n <= 0 || t == "" then "" else implode [head (explode t)] <> take (n-1) (drop 1 t)
+    head (x::_) = x
+    head [] = error "empty"

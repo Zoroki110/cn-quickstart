@@ -3,12 +3,12 @@
 
 package com.digitalasset.quickstart.controller;
 
-import clearportx_amm.amm.pool.Pool;
-import clearportx_amm.amm.receipt.Receipt;
-import clearportx_amm.amm.swaprequest.SwapReady;
-import clearportx_amm.amm.swaprequest.SwapRequest;
-import clearportx_amm.amm.atomicswap.AtomicSwapProposal;
-import clearportx_amm.token.token.Token;
+import clearportx_amm_production.amm.pool.Pool;
+import clearportx_amm_production.amm.receipt.Receipt;
+import clearportx_amm_production.amm.swaprequest.SwapReady;
+import clearportx_amm_production.amm.swaprequest.SwapRequest;
+import clearportx_amm_production.amm.atomicswap.AtomicSwapProposal;
+import clearportx_amm_production.token.token.Token;
 import com.digitalasset.quickstart.dto.*;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 import com.digitalasset.quickstart.ledger.StaleAcsRetry;
@@ -17,6 +17,7 @@ import com.digitalasset.quickstart.security.PartyMappingService;
 import com.digitalasset.quickstart.metrics.SwapMetrics;
 import com.digitalasset.quickstart.validation.SwapValidator;
 import com.digitalasset.quickstart.service.IdempotencyService;
+import com.digitalasset.quickstart.service.TokenMergeService;
 import com.digitalasset.quickstart.constants.SwapConstants;
 import com.digitalasset.transcode.java.ContractId;
 import com.digitalasset.transcode.java.Party;
@@ -36,8 +37,10 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
  * SwapController - Handles swap preparation and execution
@@ -54,15 +57,18 @@ public class SwapController {
     private final SwapMetrics swapMetrics;
     private final SwapValidator swapValidator;
     private final IdempotencyService idempotencyService;
+    private final TokenMergeService tokenMergeService;
 
     public SwapController(LedgerApi ledger, AuthUtils authUtils, PartyMappingService partyMappingService,
-                          SwapMetrics swapMetrics, SwapValidator swapValidator, IdempotencyService idempotencyService) {
+                          SwapMetrics swapMetrics, SwapValidator swapValidator, IdempotencyService idempotencyService,
+                          TokenMergeService tokenMergeService) {
         this.ledger = ledger;
         this.authUtils = authUtils;
         this.partyMappingService = partyMappingService;
         this.swapMetrics = swapMetrics;
         this.swapValidator = swapValidator;
         this.idempotencyService = idempotencyService;
+        this.tokenMergeService = tokenMergeService;
     }
 
     /**
@@ -506,113 +512,176 @@ public class SwapController {
         long startTime = System.currentTimeMillis();
         swapMetrics.recordSwapPrepared(req.inputSymbol, req.outputSymbol);
 
-        // Step 1: Find pool with positive reserves
-        return ledger.getActiveContracts(Pool.class)
-            .thenCompose(pools -> {
-                // Note: Active pools count is updated by PoolMetricsScheduler (scheduled task)
-                // Not updated here to avoid traffic-dependent metrics
+        // Step 1: Fetch FRESH snapshots (Ledger API gRPC; no app cache, no PQS)
+        CompletableFuture<List<LedgerApi.ActiveContract<Pool>>> poolsFuture =
+            ledger.getActiveContracts(Pool.class);
+        CompletableFuture<List<LedgerApi.ActiveContract<Token>>> tokensFuture =
+            ledger.getActiveContracts(Token.class);
 
-                // Find pool: either by poolId if provided, or by token pair auto-discovery
-                Optional<LedgerApi.ActiveContract<Pool>> maybePool;
-                if (req.poolId != null && !req.poolId.isEmpty()) {
-                    // Exact poolId match
-                    maybePool = pools.stream()
-                        .filter(p -> p.payload.getPoolId.equals(req.poolId))
-                        .filter(p -> p.payload.getReserveA.compareTo(BigDecimal.ZERO) > 0)
-                        .filter(p -> p.payload.getReserveB.compareTo(BigDecimal.ZERO) > 0)
-                        .findFirst();
-                } else {
-                    // Auto-discover pool by token symbols
-                    maybePool = pools.stream()
-                        .filter(p -> (p.payload.getSymbolA.equals(req.inputSymbol) && p.payload.getSymbolB.equals(req.outputSymbol)) ||
-                                     (p.payload.getSymbolA.equals(req.outputSymbol) && p.payload.getSymbolB.equals(req.inputSymbol)))
-                        .filter(p -> p.payload.getReserveA.compareTo(BigDecimal.ZERO) > 0)
-                        .filter(p -> p.payload.getReserveB.compareTo(BigDecimal.ZERO) > 0)
-                        .findFirst();
-                }
+        return poolsFuture.thenCombine(tokensFuture, (pools, tokens) -> {
+            logger.info("🔍 ACS snapshot: {} pools, {} tokens", pools.size(), tokens.size());
 
-                if (maybePool.isEmpty()) {
-                    logger.error("Pool not found or has no liquidity: {}", req.poolId);
-                    throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "Pool not found or has no liquidity: " + req.poolId);
-                }
+            // Build Set of active token CIDs (to validate pool canonicals are alive)
+            Set<ContractId<Token>> activeTokenCids = tokens.stream()
+                .map(t -> t.contractId)
+                .collect(Collectors.toSet());
 
-                LedgerApi.ActiveContract<Pool> pool = maybePool.get();
-                Pool poolPayload = pool.payload;
-                String poolParty = poolPayload.getPoolParty.getParty;
+            logger.info("Active token CIDs in ACS: {}", activeTokenCids.size());
 
-                logger.info("Found pool {} with reserves: {}={}, {}={}",
-                    req.poolId,
-                    poolPayload.getSymbolA, poolPayload.getReserveA,
-                    poolPayload.getSymbolB, poolPayload.getReserveB);
-
-                // Step 2: Find trader's input token
-                return ledger.getActiveContracts(Token.class)
-                    .thenCompose(tokens -> {
-                        Optional<LedgerApi.ActiveContract<Token>> maybeToken = tokens.stream()
-                            .filter(t -> t.payload.getSymbol.equals(req.inputSymbol))
-                            .filter(t -> t.payload.getOwner.getParty.equals(trader))
-                            .filter(t -> t.payload.getAmount.compareTo(inputAmount) >= 0)
-                            .findFirst();
-
-                        if (maybeToken.isEmpty()) {
-                            logger.error("Trader {} has insufficient {} balance for amount {}",
-                                trader, req.inputSymbol, req.inputAmount);
-                            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                "Insufficient " + req.inputSymbol + " balance");
+            // Find pool: either by poolId if provided, or by token pair auto-discovery
+            // CRITICAL: Also validate pool's tokenACid/tokenBCid are ACTIVE (not archived)
+            Optional<LedgerApi.ActiveContract<Pool>> maybePool;
+            if (req.poolId != null && !req.poolId.isEmpty()) {
+                // Exact poolId match
+                maybePool = pools.stream()
+                    .filter(p -> p.payload.getPoolId.equals(req.poolId))
+                    .filter(p -> p.payload.getReserveA.compareTo(BigDecimal.ZERO) > 0)
+                    .filter(p -> p.payload.getReserveB.compareTo(BigDecimal.ZERO) > 0)
+                    .filter(p -> {
+                        // CRITICAL FIX: Validate pool canonicals are present AND active
+                        boolean hasTokenA = p.payload.getTokenACid.isPresent()
+                            && activeTokenCids.contains(p.payload.getTokenACid.get());
+                        boolean hasTokenB = p.payload.getTokenBCid.isPresent()
+                            && activeTokenCids.contains(p.payload.getTokenBCid.get());
+                        if (!hasTokenA || !hasTokenB) {
+                            logger.warn("Pool {} has stale canonicals: tokenACid={}, tokenBCid={}, skipping",
+                                p.payload.getPoolId,
+                                p.payload.getTokenACid.map(Object::toString).orElse("NONE"),
+                                p.payload.getTokenBCid.map(Object::toString).orElse("NONE"));
                         }
+                        return hasTokenA && hasTokenB;
+                    })
+                    .findFirst();
+            } else {
+                // Auto-discover pool by token symbols
+                maybePool = pools.stream()
+                    .filter(p -> (p.payload.getSymbolA.equals(req.inputSymbol) && p.payload.getSymbolB.equals(req.outputSymbol)) ||
+                                 (p.payload.getSymbolA.equals(req.outputSymbol) && p.payload.getSymbolB.equals(req.inputSymbol)))
+                    .filter(p -> p.payload.getReserveA.compareTo(BigDecimal.ZERO) > 0)
+                    .filter(p -> p.payload.getReserveB.compareTo(BigDecimal.ZERO) > 0)
+                    .filter(p -> {
+                        // CRITICAL FIX: Validate pool canonicals are present AND active
+                        boolean hasTokenA = p.payload.getTokenACid.isPresent()
+                            && activeTokenCids.contains(p.payload.getTokenACid.get());
+                        boolean hasTokenB = p.payload.getTokenBCid.isPresent()
+                            && activeTokenCids.contains(p.payload.getTokenBCid.get());
+                        if (!hasTokenA || !hasTokenB) {
+                            logger.warn("Pool {} has stale canonicals: tokenACid={}, tokenBCid={}, skipping",
+                                p.payload.getPoolId,
+                                p.payload.getTokenACid.map(Object::toString).orElse("NONE"),
+                                p.payload.getTokenBCid.map(Object::toString).orElse("NONE"));
+                        }
+                        return hasTokenA && hasTokenB;
+                    })
+                    .findFirst();
+            }
 
-                        LedgerApi.ActiveContract<Token> traderToken = maybeToken.get();
+            if (maybePool.isEmpty()) {
+                logger.error("No valid pool found (all pools have stale/missing canonicals): {}", req.poolId);
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NO_VALID_POOL_CANONICALS - Pool needs liquidity refresh to update token CIDs");
+            }
 
-                        // Step 3: Calculate deadline (5 minutes from now)
-                        Instant deadline = Instant.now().plusSeconds(300);
+            LedgerApi.ActiveContract<Pool> pool = maybePool.get();
+            Pool poolPayload = pool.payload;
+            String poolParty = poolPayload.getPoolParty.getParty;
 
-                        // Step 4: Create AtomicSwapProposal (signed by trader)
-                        AtomicSwapProposal proposalTemplate = new AtomicSwapProposal(
-                            new Party(trader),
-                            pool.contractId,
-                            new Party(poolParty),
-                            new Party(poolPayload.getPoolOperator.getParty),
-                            new Party(poolPayload.getIssuerA.getParty),
-                            new Party(poolPayload.getIssuerB.getParty),
-                            poolPayload.getSymbolA,
-                            poolPayload.getSymbolB,
-                            poolPayload.getFeeBps,
-                            poolPayload.getMaxTTL,
-                            new Party(poolPayload.getProtocolFeeReceiver.getParty),
-                            traderToken.contractId,
-                            req.inputSymbol,
-                            inputAmount,
-                            req.outputSymbol,
-                            minOutput,
-                            (long) req.maxPriceImpactBps,
-                            deadline
-                        );
+            logger.info("✅ Selected pool {} with ACTIVE canonicals: tokenACid={}, tokenBCid={}, reserves: {}={}, {}={}",
+                pool.payload.getPoolId,
+                pool.payload.getTokenACid.map(Object::toString).orElse("NONE"),
+                pool.payload.getTokenBCid.map(Object::toString).orElse("NONE"),
+                poolPayload.getSymbolA, poolPayload.getReserveA,
+                poolPayload.getSymbolB, poolPayload.getReserveB);
 
-                        logger.info("Creating atomic swap proposal - trader: {}, poolParty: {}, {}→{}, amount: {}",
-                            trader, poolParty, req.inputSymbol, req.outputSymbol, inputAmount);
+            return new PoolAndTokens(pool, poolParty, tokens);
+        }).thenCompose(result -> {
+            LedgerApi.ActiveContract<Pool> pool = result.pool;
+            String poolParty = result.poolParty;
+            List<LedgerApi.ActiveContract<Token>> tokens = result.tokens;
+            Pool poolPayload = pool.payload;
 
-                        // Step 5: Create proposal and execute atomically with both parties
-                        return ledger.createAndGetCid(
-                            proposalTemplate,
-                            List.of(trader),
-                            List.of(),
-                            commandId + "-create",
-                            proposalTemplate.TEMPLATE_ID
-                        ).thenCompose(proposalCid -> {
-                            // Execute with both trader and poolParty authorization
-                            AtomicSwapProposal.ExecuteAtomicSwap executeChoice = new AtomicSwapProposal.ExecuteAtomicSwap();
+            // Step 2: Find trader's input token (FRESH from Ledger API - no cache!)
+            logger.info("🔍 Selecting trader input token from {} active tokens", tokens.size());
 
-                            logger.info("Executing atomic swap with both parties - proposalCid: {}", proposalCid.getContractId);
+            // Filter and select best token (largest amount)
+            Optional<LedgerApi.ActiveContract<Token>> maybeToken = tokens.stream()
+                .filter(t -> t.payload.getSymbol.equals(req.inputSymbol))
+                .filter(t -> t.payload.getOwner.getParty.equals(trader))
+                .filter(t -> t.payload.getAmount.compareTo(inputAmount) >= 0)
+                .max((a, b) -> a.payload.getAmount.compareTo(b.payload.getAmount));
 
-                            // Execute choice with both trader and poolParty authorization
-                            return ledger.exerciseAndGetResult(
-                                proposalCid,
-                                executeChoice,
-                                commandId + "-execute"
-                            ).thenCompose(receiptCid -> {
-                                // Fetch receipt to get actual swap details
-                                return ledger.getActiveContracts(Receipt.class)
+            if (maybeToken.isEmpty()) {
+                logger.error("Trader {} has insufficient {} balance for amount {}",
+                    trader, req.inputSymbol, req.inputAmount);
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Insufficient " + req.inputSymbol + " balance");
+            }
+
+            LedgerApi.ActiveContract<Token> traderToken = maybeToken.get();
+
+            // CRITICAL: Log the selected token CID to verify it's fresh
+            logger.info("✅ Selected FRESH trader token: CID={}, symbol={}, amount={}, owner={}",
+                traderToken.contractId,
+                traderToken.payload.getSymbol,
+                traderToken.payload.getAmount,
+                traderToken.payload.getOwner.getParty);
+
+            // Double-check: verify this CID exists in the snapshot
+            boolean cidPresentInSnapshot = tokens.stream()
+                .anyMatch(t -> t.contractId.equals(traderToken.contractId));
+            if (!cidPresentInSnapshot) {
+                throw new IllegalStateException("Selected token disappeared from snapshot!");
+            }
+
+            // Step 3: Calculate deadline (5 minutes from now)
+            Instant deadline = Instant.now().plusSeconds(300);
+
+            // Step 4: Create AtomicSwapProposal (signed by trader)
+            AtomicSwapProposal proposalTemplate = new AtomicSwapProposal(
+                new Party(trader),
+                pool.contractId,
+                new Party(poolParty),
+                new Party(poolPayload.getPoolOperator.getParty),
+                new Party(poolPayload.getIssuerA.getParty),
+                new Party(poolPayload.getIssuerB.getParty),
+                poolPayload.getSymbolA,
+                poolPayload.getSymbolB,
+                poolPayload.getFeeBps,
+                poolPayload.getMaxTTL,
+                new Party(poolPayload.getProtocolFeeReceiver.getParty),
+                traderToken.contractId,
+                req.inputSymbol,
+                inputAmount,
+                req.outputSymbol,
+                minOutput,
+                (long) req.maxPriceImpactBps,
+                deadline
+            );
+
+            logger.info("Creating atomic swap proposal - trader: {}, poolParty: {}, {}→{}, amount: {}",
+                trader, poolParty, req.inputSymbol, req.outputSymbol, inputAmount);
+
+            // Step 5: Create proposal and execute atomically with both parties
+            return ledger.createAndGetCid(
+                proposalTemplate,
+                List.of(trader),
+                List.of(),
+                commandId + "-create",
+                proposalTemplate.TEMPLATE_ID
+            ).thenCompose(proposalCid -> {
+                // Execute with both trader and poolParty authorization
+                AtomicSwapProposal.ExecuteAtomicSwap executeChoice = new AtomicSwapProposal.ExecuteAtomicSwap();
+
+                logger.info("Executing atomic swap with both parties - proposalCid: {}", proposalCid.getContractId);
+
+                // Execute choice with both trader and poolParty authorization
+                return ledger.exerciseAndGetResult(
+                    proposalCid,
+                    executeChoice,
+                    commandId + "-execute"
+                ).thenCompose(receiptCid -> {
+                    // Fetch receipt to get actual swap details
+                    return ledger.getActiveContracts(Receipt.class)
                                     .thenApply(receipts -> {
                                         Optional<LedgerApi.ActiveContract<Receipt>> maybeReceipt = receipts.stream()
                                             .filter(r -> r.contractId.getContractId.equals(receiptCid.getContractId))
@@ -678,11 +747,10 @@ public class SwapController {
 
                                         return response;
                                     });
-                            });
-                        });
-                    });
-            })
-            .exceptionally(ex -> {
+                });
+            });
+        })
+        .exceptionally(ex -> {
                 Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
                 String errorMessage = "Atomic swap failed: " + cause.getMessage();
 
@@ -699,5 +767,18 @@ public class SwapController {
 
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, errorMessage, cause);
             });
+    }
+
+    // Helper class to pass pool and tokens between stages
+    private static class PoolAndTokens {
+        final LedgerApi.ActiveContract<Pool> pool;
+        final String poolParty;
+        final List<LedgerApi.ActiveContract<Token>> tokens;
+
+        PoolAndTokens(LedgerApi.ActiveContract<Pool> pool, String poolParty, List<LedgerApi.ActiveContract<Token>> tokens) {
+            this.pool = pool;
+            this.poolParty = poolParty;
+            this.tokens = tokens;
+        }
     }
 }

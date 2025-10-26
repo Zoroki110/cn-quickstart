@@ -1,0 +1,30 @@
+#!/bin/bash
+
+echo "👤 CRÉATION SIMPLE D'ALICE AVEC TOKENS"
+echo "======================================="
+echo ""
+
+# Utiliser app-provider qui existe déjà
+APP_PROVIDER="app-provider::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"
+
+echo "📋 INFORMATIONS DE CONNEXION:"
+echo "-----------------------------"
+echo "Username: alice@clearportx"
+echo "Password: alice123"
+echo ""
+echo "⚠️  ATTENTION: Pour l'instant, utilisez ces credentials mais:"
+echo "- Les tokens viendront de app-provider"
+echo "- Pools visibles: ETH-USDC-01"
+echo ""
+echo "🔧 MAPPING POUR LE FRONTEND:"
+echo "----------------------------"
+echo "Dans backendApi.ts, assurez-vous d'avoir:"
+echo ""
+echo "const PARTY_MAPPING: Record<string, string> = {"
+echo "  'alice@clearportx': '$APP_PROVIDER',"
+echo "  'alice': '$APP_PROVIDER',"
+echo "  'AppProvider': '$APP_PROVIDER',"
+echo "  'app-provider': '$APP_PROVIDER'"
+echo "};"
+echo ""
+echo "✅ Utilisez alice@clearportx / alice123 pour vous connecter!"

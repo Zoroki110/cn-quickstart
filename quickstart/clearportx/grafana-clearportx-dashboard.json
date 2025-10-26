@@ -115,17 +115,18 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 90
+                "color": "orange",
+                "value": 95
               },
               {
                 "color": "green",
-                "value": 95
+                "value": 98
               }
             ]
           },
           "unit": "percent",
-          "max": 100
+          "max": 100,
+          "min": 0
         }
       },
       "gridPos": {
@@ -134,7 +135,7 @@
         "x": 12,
         "y": 0
       },
-      "id": 2,
+      "id": 15,
       "options": {
         "orientation": "auto",
         "reduceOptions": {
@@ -151,11 +152,11 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "clamp_min(sum(increase(clearportx_swap_executed_total[$__range])) / clamp_min(sum(increase(clearportx_swap_prepared_total[$__range])), 1) * 100, 0)",
+          "expr": "100 * (\n  sum(increase(clearportx_swap_executed_total[5m]))\n  /\n  clamp_min(\n    sum(increase(clearportx_swap_executed_total[5m]))\n    + sum(increase(clearportx_swap_failed_total[5m])),\n    1\n  )\n)",
           "refId": "A"
         }
       ],
-      "title": "Swap Success Rate",
+      "title": "Success Rate (5 min)",
       "type": "gauge"
     },
     {
@@ -189,8 +190,8 @@
       "gridPos": {
         "h": 8,
         "w": 6,
-        "x": 18,
-        "y": 0
+        "x": 0,
+        "y": 8
       },
       "id": 3,
       "options": {
@@ -260,7 +261,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 6,
         "y": 8
       },
       "id": 4,
@@ -347,8 +348,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 8
+        "x": 0,
+        "y": 16
       },
       "id": 5,
       "options": {
@@ -418,7 +419,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 16
       },
       "id": 6,
@@ -493,8 +494,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 16
+        "x": 0,
+        "y": 24
       },
       "id": 7,
       "options": {
@@ -544,8 +545,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 0,
+        "w": 3,
+        "x": 12,
         "y": 24
       },
       "id": 8,
@@ -562,17 +563,16 @@
           "fields": ""
         },
         "text": {},
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(clearportx_fees_lp_collected_total{token=\"ETH\"})",
-          "legendFormat": "LP Fees (75%)",
+          "expr": "clearportx_fees_lp_collected_total{token=\"USDC\"}",
           "refId": "A"
         }
       ],
-      "title": "LP Fees - ETH",
+      "title": "LP Fees (USDC)",
       "type": "stat"
     },
     {
@@ -598,8 +598,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 6,
+        "w": 3,
+        "x": 15,
         "y": 24
       },
       "id": 14,
@@ -616,17 +616,16 @@
           "fields": ""
         },
         "text": {},
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(clearportx_fees_protocol_collected_total{token=\"ETH\"})",
-          "legendFormat": "Protocol Fees (25%)",
+          "expr": "clearportx_fees_protocol_collected_total{token=\"USDC\"}",
           "refId": "A"
         }
       ],
-      "title": "Protocol Fees - ETH",
+      "title": "Protocol Fees (USDC)",
       "type": "stat"
     },
     {
@@ -673,8 +672,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 24
+        "x": 0,
+        "y": 32
       },
       "id": 9,
       "options": {
@@ -731,7 +730,7 @@
       "gridPos": {
         "h": 8,
         "w": 6,
-        "x": 0,
+        "x": 12,
         "y": 32
       },
       "id": 10,
@@ -781,7 +780,7 @@
       "gridPos": {
         "h": 8,
         "w": 6,
-        "x": 6,
+        "x": 18,
         "y": 32
       },
       "id": 11,
@@ -833,8 +832,8 @@
       "gridPos": {
         "h": 8,
         "w": 6,
-        "x": 12,
-        "y": 32
+        "x": 0,
+        "y": 40
       },
       "id": 12,
       "options": {
@@ -893,8 +892,8 @@
       "gridPos": {
         "h": 8,
         "w": 6,
-        "x": 18,
-        "y": 32
+        "x": 6,
+        "y": 40
       },
       "id": 13,
       "options": {
@@ -920,6 +919,110 @@
         }
       ],
       "title": "Slippage Protection Triggers (15m)",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 6,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 3,
+        "x": 18,
+        "y": 24
+      },
+      "id": 16,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "expr": "clearportx_fees_lp_collected_total{token=\"ETH\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "LP Fees (ETH)",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 6,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 3,
+        "x": 21,
+        "y": 24
+      },
+      "id": 17,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "expr": "clearportx_fees_protocol_collected_total{token=\"ETH\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Protocol Fees (ETH)",
       "type": "stat"
     }
   ],
@@ -950,5 +1053,5 @@
   "timezone": "",
   "title": "ClearportX Atomic Swap Metrics",
   "uid": "clearportx-atomic-swap",
-  "version": 1
+  "version": 2
 }

@@ -1,0 +1,15 @@
+{
+  "user": "alice@clearportx",
+  "party": "",
+  "password": "alice123",
+  "tokens": {
+    "ETH": {
+      "amount": 100.0,
+      "issuer": ""
+    },
+    "USDC": {
+      "amount": 50000.0,
+      "issuer": ""
+    }
+  }
+}

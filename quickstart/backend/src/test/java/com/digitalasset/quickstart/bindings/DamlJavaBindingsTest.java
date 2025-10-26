@@ -3,8 +3,8 @@
 
 package com.digitalasset.quickstart.bindings;
 
-import clearportx_amm.amm.pool.Pool;
-import clearportx_amm.token.token.Token;
+import clearportx_amm_production.amm.pool.Pool;
+import clearportx_amm_production.token.token.Token;
 import com.digitalasset.transcode.java.ContractId;
 import com.digitalasset.transcode.java.Party;
 import daml_stdlib_da_time_types.da.time.types.RelTime;

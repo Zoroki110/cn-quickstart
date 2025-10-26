@@ -31,9 +31,11 @@ import java.util.concurrent.CompletableFuture;
 public class LedgerReader {
     private static final Logger logger = LoggerFactory.getLogger(LedgerReader.class);
     private final LedgerApi ledger;
+    private final VolumeMetricsService volumeMetricsService;
 
-    public LedgerReader(LedgerApi ledger) {
+    public LedgerReader(LedgerApi ledger, VolumeMetricsService volumeMetricsService) {
         this.ledger = ledger;
+        this.volumeMetricsService = volumeMetricsService;
     }
 
     /**
@@ -73,15 +75,24 @@ public class LedgerReader {
         logger.info("Fetching all active pools");
         return ledger.getActiveContracts(Pool.class)
                 .thenApply(contracts -> contracts.stream()
-                        .map(c -> c.payload)
-                        .map(p -> new PoolDTO(
-                                p.getSymbolA,
-                                p.getSymbolB,
-                                p.getReserveA.toPlainString(),
-                                p.getReserveB.toPlainString(),
-                                p.getTotalLPSupply.toPlainString(),
-                                convertFeeBpsToRate(p.getFeeBps)
-                        ))
+                        .map(c -> {
+                            // Get 24h volume from metrics
+                            double volume24h = volumeMetricsService.getVolume24h(
+                                c.payload.getSymbolA,
+                                c.payload.getSymbolB
+                            );
+
+                            return new PoolDTO(
+                                    c.payload.getPoolId,  // poolId from Pool contract
+                                    new PoolDTO.TokenInfoDTO(c.payload.getSymbolA, c.payload.getSymbolA, 10),
+                                    new PoolDTO.TokenInfoDTO(c.payload.getSymbolB, c.payload.getSymbolB, 10),
+                                    c.payload.getReserveA.toPlainString(),
+                                    c.payload.getReserveB.toPlainString(),
+                                    c.payload.getTotalLPSupply.toPlainString(),
+                                    convertFeeBpsToRate(c.payload.getFeeBps),
+                                    String.format("%.2f", volume24h)  // 24h volume
+                            );
+                        })
                         .toList())
                 .whenComplete((result, ex) -> {
                     if (ex != null) {

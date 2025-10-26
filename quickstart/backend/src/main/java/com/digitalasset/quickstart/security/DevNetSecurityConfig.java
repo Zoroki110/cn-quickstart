@@ -41,7 +41,7 @@ public class DevNetSecurityConfig {
       "https://nonexplicable-lacily-leesa.ngrok-free.dev"
     ));
     c.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"));
-    c.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Idempotency-Key", "X-Request-ID", "X-Party"));
+    c.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Idempotency-Key", "X-Request-ID", "X-Party", "ngrok-skip-browser-warning"));
     c.setExposedHeaders(List.of("Retry-After", "X-Request-ID", "Authorization", "X-Total-Count", "X-Rate-Limit-Remaining"));
     c.setAllowCredentials(true);
     c.setMaxAge(3600L);

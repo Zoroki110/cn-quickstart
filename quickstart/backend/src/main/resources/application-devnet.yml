@@ -133,3 +133,12 @@ clearportx:
     require-request-id: false  # Auto-generate if missing
     require-idempotency-key: false  # Optional but recommended
     validate-body-hash: true  # Enable body-hash mismatch detection
+
+  # DevNet Authentication Configuration
+  auth:
+    mode: header  # header = simple username in X-User header; oauth = full OAuth2/JWT
+    # User to Canton Party ID mapping
+    user-party-map:
+      alice: "Alice-9cefe94d::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"
+      bob: "Bob-9b3970be::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"
+      app-provider: "app-provider-4f1df03a::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"

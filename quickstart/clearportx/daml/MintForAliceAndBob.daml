@@ -1,0 +1,128 @@
+module MintForAliceAndBob where
+
+import Daml.Script
+import Token.Token
+import DA.List (find)
+import DA.Text (isInfixOf)
+
+-- Mint tokens for Alice and Bob for testing swaps
+-- Each user gets a variety of tokens to test different swap pairs
+mintForAliceAndBob : Script ()
+mintForAliceAndBob = script do
+  parties <- listKnownParties
+
+  -- Find Alice (with hint)
+  let alice = case find (\p -> "Alice-9cefe94d" `isInfixOf` partyToText p.party) parties of
+        Some p -> p.party
+        None -> error "Alice-9cefe94d not found"
+
+  -- Find Bob (with hint)
+  let bob = case find (\p -> "Bob-9b3970be" `isInfixOf` partyToText p.party) parties of
+        Some p -> p.party
+        None -> error "Bob-9b3970be not found"
+
+  debug "💰 Minting test tokens for Alice and Bob..."
+  debug $ "Alice: " <> show alice
+  debug $ "Bob: " <> show bob
+  debug ""
+
+  -- ============================================
+  -- ALICE TOKENS
+  -- ============================================
+  debug "🔹 Minting tokens for Alice..."
+
+  -- Alice: 10 ETH
+  aliceEth <- submit alice do
+    createCmd Token with
+      issuer = alice
+      owner = alice
+      symbol = "ETH"
+      amount = 10.0
+
+  debug $ "✅ Alice: 10 ETH - " <> show aliceEth
+
+  -- Alice: 50,000 USDC
+  aliceUsdc <- submit alice do
+    createCmd Token with
+      issuer = alice
+      owner = alice
+      symbol = "USDC"
+      amount = 50000.0
+
+  debug $ "✅ Alice: 50,000 USDC - " <> show aliceUsdc
+
+  -- Alice: 20 CANTON
+  aliceCanton <- submit alice do
+    createCmd Token with
+      issuer = alice
+      owner = alice
+      symbol = "CANTON"
+      amount = 20.0
+
+  debug $ "✅ Alice: 20 CANTON - " <> show aliceCanton
+
+  -- Alice: 0.5 CBTC
+  aliceCbtc <- submit alice do
+    createCmd Token with
+      issuer = alice
+      owner = alice
+      symbol = "CBTC"
+      amount = 0.5
+
+  debug $ "✅ Alice: 0.5 CBTC - " <> show aliceCbtc
+  debug ""
+
+  -- ============================================
+  -- BOB TOKENS
+  -- ============================================
+  debug "🔸 Minting tokens for Bob..."
+
+  -- Bob: 15 ETH
+  bobEth <- submit bob do
+    createCmd Token with
+      issuer = bob
+      owner = bob
+      symbol = "ETH"
+      amount = 15.0
+
+  debug $ "✅ Bob: 15 ETH - " <> show bobEth
+
+  -- Bob: 30,000 USDC
+  bobUsdc <- submit bob do
+    createCmd Token with
+      issuer = bob
+      owner = bob
+      symbol = "USDC"
+      amount = 30000.0
+
+  debug $ "✅ Bob: 30,000 USDC - " <> show bobUsdc
+
+  -- Bob: 25 CANTON
+  bobCanton <- submit bob do
+    createCmd Token with
+      issuer = bob
+      owner = bob
+      symbol = "CANTON"
+      amount = 25.0
+
+  debug $ "✅ Bob: 25 CANTON - " <> show bobCanton
+
+  -- Bob: 0.3 CBTC
+  bobCbtc <- submit bob do
+    createCmd Token with
+      issuer = bob
+      owner = bob
+      symbol = "CBTC"
+      amount = 0.3
+
+  debug $ "✅ Bob: 0.3 CBTC - " <> show bobCbtc
+  debug ""
+
+  debug "🎉 All tokens minted!"
+  debug "Alice tokens: 10 ETH, 50,000 USDC, 20 CANTON, 0.5 CBTC"
+  debug "Bob tokens: 15 ETH, 30,000 USDC, 25 CANTON, 0.3 CBTC"
+  debug ""
+  debug "Ready to test swaps with real users!"
+  debug "Use 'X-User: alice' or 'X-User: bob' headers"
+
+  return ()

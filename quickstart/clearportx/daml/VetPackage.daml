@@ -1,0 +1,37 @@
+module VetPackage where
+
+import Daml.Script
+import Token.Token
+import DA.List (find)
+import DA.Text (isInfixOf)
+
+-- Vet the clearportx-amm-production package for app-provider party
+-- This allows gRPC queries to return contracts from this package
+vetProduction : Script ()
+vetProduction = script do
+  parties <- listKnownParties
+  let appProvider = case find (\p -> "app-provider" `isInfixOf` partyToText p.party) parties of
+        Some p -> p.party
+        None -> error "app-provider not found"
+
+  debug $ "✅ Using app-provider party: " <> show appProvider
+
+  -- Create and immediately archive a dummy token to vet the package
+  -- This transaction causes Canton Network to record that app-provider has vetted this package
+  tokenCid <- submit appProvider do
+    createCmd Token with
+      issuer = appProvider
+      owner = appProvider
+      symbol = "VET"
+      amount = 1.0
+
+  debug $ "✅ Created vetting token: " <> show tokenCid
+
+  -- Archive it to clean up
+  submit appProvider do
+    archiveCmd tokenCid
+
+  debug "✅ app-provider has now vetted clearportx-amm-production package"
+  debug "✅ Backend gRPC queries should now return the 4 pools"
+
+  return ()

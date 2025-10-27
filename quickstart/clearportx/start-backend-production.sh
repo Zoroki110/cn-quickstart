@@ -30,11 +30,21 @@ sleep 2
 
 # Step 2: Get the correct party ID
 echo "[2/5] Resolving app-provider party ID..."
+# Try app-provider-4f1df03a:: first (DAML script party), fallback to app-provider::
 FULL_PARTY_ID=$(grpcurl -plaintext \
   -d '{}' \
   $LEDGER_HOST:$LEDGER_PORT \
   com.daml.ledger.api.v2.admin.PartyManagementService/ListKnownParties 2>/dev/null | \
-  jq -r '.party_details[] | select(.party | startswith("app-provider::")) | .party' | head -1)
+  jq -r '.party_details[] | select(.party | startswith("app-provider-4f1df03a::")) | .party' | head -1)
+
+if [ -z "$FULL_PARTY_ID" ]; then
+  # Fallback to app-provider:: if -4f1df03a:: not found
+  FULL_PARTY_ID=$(grpcurl -plaintext \
+    -d '{}' \
+    $LEDGER_HOST:$LEDGER_PORT \
+    com.daml.ledger.api.v2.admin.PartyManagementService/ListKnownParties 2>/dev/null | \
+    jq -r '.party_details[] | select(.party | startswith("app-provider::")) | .party' | head -1)
+fi
 
 if [ -z "$FULL_PARTY_ID" ]; then
   echo "❌ ERROR: app-provider party not found on ledger!"
@@ -51,13 +61,13 @@ echo "✅ Found party: $FULL_PARTY_ID"
 # Step 3: Verify package hash
 echo "[3/5] Verifying package hash..."
 cd /root/cn-quickstart/quickstart/clearportx
-if [ -f "artifacts/devnet/clearportx-amm-production-v1.0.0-frozen.dar" ]; then
-  PACKAGE_HASH=$(daml damlc inspect-dar artifacts/devnet/clearportx-amm-production-v1.0.0-frozen.dar --json 2>/dev/null | \
+if [ -f "artifacts/devnet/clearportx-amm-production-v1.0.2-frozen.dar" ]; then
+  PACKAGE_HASH=$(daml damlc inspect-dar artifacts/devnet/clearportx-amm-production-v1.0.2-frozen.dar --json 2>/dev/null | \
     jq -r '.main_package_id' | head -1)
-  echo "✅ Using PRODUCTION v1.0.0 frozen DAR with hash: $PACKAGE_HASH"
+  echo "✅ Using PRODUCTION v1.0.2 frozen DAR with hash: $PACKAGE_HASH"
 else
   echo "❌ ERROR: Production frozen DAR not found!"
-  echo "Expected: artifacts/devnet/clearportx-amm-production-v1.0.0-frozen.dar"
+  echo "Expected: artifacts/devnet/clearportx-amm-production-v1.0.2-frozen.dar"
   exit 1
 fi
 

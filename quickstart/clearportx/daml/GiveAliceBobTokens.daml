@@ -13,17 +13,20 @@ giveTokens = script do
   -- Use existing parties (must already exist on Canton Network)
   parties <- listKnownParties
 
-  let alice = case find (\p -> "Alice" `isInfixOf` partyToText p.party && not ("app" `isInfixOf` partyToText p.party)) parties of
+  -- Find app-provider first (with hint -4f1df03a)
+  let appProvider = case find (\p -> "app-provider-4f1df03a" `isInfixOf` partyToText p.party) parties of
         Some p -> p.party
-        None -> error "Alice party not found"
+        None -> error "app-provider-4f1df03a party not found"
 
-  let bob = case find (\p -> "Bob" `isInfixOf` partyToText p.party) parties of
+  -- Find Alice with same participant hash (1220414f85...)
+  let alice = case find (\p -> "Alice-9cefe94d" `isInfixOf` partyToText p.party) parties of
         Some p -> p.party
-        None -> error "Bob party not found"
+        None -> error "Alice-9cefe94d party not found (must be on same participant as app-provider)"
 
-  let appProvider = case find (\p -> "app-provider" `isInfixOf` partyToText p.party) parties of
+  -- Find Bob with same participant hash (1220414f85...)
+  let bob = case find (\p -> "Bob-9b3970be" `isInfixOf` partyToText p.party) parties of
         Some p -> p.party
-        None -> error "app-provider party not found"
+        None -> error "Bob-9b3970be party not found (must be on same participant as app-provider)"
 
   debug "✅ Using existing parties:"
   debug $ "Alice: " <> show alice

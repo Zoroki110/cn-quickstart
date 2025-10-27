@@ -51,13 +51,13 @@ cors:
   allow-credentials: true
   max-age: 3600
 
-# OAuth2 Resource Server (DevNet)
+# OAuth2 Resource Server (Local Keycloak)
 security:
   oauth2:
     resourceserver:
       jwt:
-        issuer-uri: ${OAUTH_ISSUER:https://auth.canton.network/realms/AppProvider}
-        jwk-set-uri: ${OAUTH_JWKS:https://auth.canton.network/realms/AppProvider/protocol/openid-connect/certs}
+        issuer-uri: ${OAUTH_ISSUER:http://localhost:8082/realms/AppProvider}
+        jwk-set-uri: ${OAUTH_JWKS:http://localhost:8082/realms/AppProvider/protocol/openid-connect/certs}
     audience: ${OAUTH_AUDIENCE:app-provider-unsafe}
   canton:
     static-party: ${CANTON_PARTY:Alice-9cefe94d}
@@ -136,8 +136,8 @@ clearportx:
 
   # DevNet Authentication Configuration
   auth:
-    mode: header  # header = simple username in X-User header; oauth = full OAuth2/JWT
-    # User to Canton Party ID mapping
+    mode: oauth  # oauth = full OAuth2/JWT with Canton Network Keycloak; header = simple username in X-User header
+    # User to Canton Party ID mapping (used for JWT subject → party ID resolution)
     user-party-map:
       alice: "Alice-9cefe94d::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"
       bob: "Bob-9b3970be::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"

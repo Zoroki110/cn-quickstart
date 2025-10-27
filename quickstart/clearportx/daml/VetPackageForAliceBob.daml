@@ -1,0 +1,56 @@
+module VetPackageForAliceBob where
+
+import Daml.Script
+import Token.Token
+import DA.List (find)
+import DA.Text (isInfixOf)
+
+-- Have Alice and Bob vet the clearportx-amm-production package
+-- by creating and immediately archiving dummy tokens
+vetPackage : Script ()
+vetPackage = script do
+  parties <- listKnownParties
+
+  let alice = case find (\p -> "Alice" `isInfixOf` partyToText p.party && not ("app" `isInfixOf` partyToText p.party)) parties of
+        Some p -> p.party
+        None -> error "Alice party not found"
+
+  let bob = case find (\p -> "Bob" `isInfixOf` partyToText p.party) parties of
+        Some p -> p.party
+        None -> error "Bob party not found"
+
+  debug "✅ Found parties:"
+  debug $ "Alice: " <> show alice
+  debug $ "Bob: " <> show bob
+
+  -- Alice creates and archives a dummy token to vet the package
+  debug "🔐 Alice vetting package..."
+  aliceVetToken <- submit alice do
+    createCmd Token with
+      issuer = alice
+      owner = alice
+      symbol = "VET"
+      amount = 1.0
+
+  submit alice do
+    archiveCmd aliceVetToken
+
+  debug "✅ Alice has vetted clearportx-amm-production package"
+
+  -- Bob creates and archives a dummy token to vet the package
+  debug "🔐 Bob vetting package..."
+  bobVetToken <- submit bob do
+    createCmd Token with
+      issuer = bob
+      owner = bob
+      symbol = "VET"
+      amount = 1.0
+
+  submit bob do
+    archiveCmd bobVetToken
+
+  debug "✅ Bob has vetted clearportx-amm-production package"
+  debug ""
+  debug "🎉 Both Alice and Bob can now transact with production package!"
+
+  return ()

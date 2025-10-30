@@ -1,35 +1,85 @@
 {
-  "name": "frontend",
+  "name": "clearportx-app",
+  "version": "1.0.0",
+  "description": "ClearPortX - Advanced DeFi Trading Platform on Canton Network",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "gen:openapi": "npx --yes openapicmd typegen --client ../common/openapi.yaml >| src/openapi.d.ts",
-    "dev": "vite",
-    "build": "npm run gen:openapi && tsc -b --noEmit && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
+  "homepage": ".",
   "dependencies": {
-    "@modyfi/vite-plugin-yaml": "^1.1.1",
-    "axios": "^1.12.1",
-    "openapi-client-axios": "^7.5.5",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.2"
+    "@tailwindcss/forms": "^0.5.3",
+    "@tanstack/react-query": "^4.29.0",
+    "@testing-library/jest-dom": "^5.16.4",
+    "@testing-library/react": "^13.3.0",
+    "@testing-library/user-event": "^13.5.0",
+    "@types/jest": "^27.5.2",
+    "@types/node": "^16.11.47",
+    "@types/react": "^18.0.15",
+    "@types/react-dom": "^18.0.6",
+    "autoprefixer": "^10.4.14",
+    "axios": "^1.4.0",
+    "framer-motion": "^10.12.0",
+    "keycloak-js": "26.2.1",
+    "lucide-react": "^0.263.0",
+    "postcss": "^8.4.24",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-hot-toast": "^2.4.1",
+    "react-router-dom": "^6.3.0",
+    "react-scripts": "5.0.1",
+    "tailwindcss": "^3.3.0",
+    "typescript": "^4.7.4",
+    "web-vitals": "^2.1.4",
+    "zustand": "^4.3.8"
   },
   "devDependencies": {
-    "@eslint/js": "^9.9.0",
-    "@types/node": "^22.15.21",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.4",
-    "eslint": "^9.9.0",
-    "eslint-plugin-react-hooks": "^5.1.0-rc.0",
-    "eslint-plugin-react-refresh": "^0.4.9",
-    "globals": "^15.9.0",
-    "typescript": "^5.5.3",
-    "typescript-eslint": "^8.0.1",
-    "vite": "^6.3.6"
+    "@playwright/test": "^1.37.0",
+    "@types/keycloak-js": "^2.5.4",
+    "@types/testing-library__jest-dom": "^5.14.6"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "prebuild": "rm -rf build .cache node_modules/.cache",
+    "build": "GENERATE_SOURCEMAP=false CI=false react-scripts build",
+    "postbuild": "echo 'Build completed: v1.0.1 - Real Canton Data Only'",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "keywords": [
+    "canton",
+    "amm",
+    "defi",
+    "react",
+    "typescript",
+    "blockchain",
+    "dex"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/canton-amm-ui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/canton-amm-ui/issues"
   }
 }

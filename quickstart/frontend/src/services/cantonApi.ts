@@ -22,7 +22,8 @@ class CantonService {
   async isConnected(): Promise<boolean> {
     try {
       const health = await backendApi.healthCheck();
-      return health.status === 'UP';
+      // Treat OK/SYNCING as connected during DevNet
+      return health.status === 'OK' || health.status === 'SYNCING' || health.synced === true || (health as any).poolsActive > 0;
     } catch {
       return false;
     }

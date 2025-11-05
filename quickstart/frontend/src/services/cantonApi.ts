@@ -11,6 +11,7 @@ export interface CantonConfig {
 class CantonService {
   private initialized = false;
   private config?: CantonConfig;
+  private readonly authDisabled: boolean = (process.env.REACT_APP_AUTH_ENABLED ?? 'false') !== 'true';
 
   initialize(config: CantonConfig) {
     this.initialized = true;
@@ -21,6 +22,7 @@ class CantonService {
 
   async isConnected(): Promise<boolean> {
     try {
+      if (this.authDisabled) return true; // DevNet/no-auth: always enable actions
       const health = await backendApi.healthCheck();
       // Treat OK/SYNCING as connected during DevNet
       return health.status === 'OK' || health.status === 'SYNCING' || health.synced === true || (health as any).poolsActive > 0;

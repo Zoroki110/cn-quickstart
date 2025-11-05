@@ -137,6 +137,11 @@ export class BackendApiService {
     );
   }
 
+  private hasJwt(): boolean {
+    const token = getAccessToken();
+    return !!token && token !== 'devnet-mock-token';
+  }
+
   /**
    * Health check - verify backend is running and synced
    */
@@ -256,10 +261,30 @@ export class BackendApiService {
    */
   async executeAtomicSwap(params: SwapParams): Promise<AtomicSwapResponse> {
     const idempotencyKey = this.generateIdempotencyKey();
+
+    // Use debug endpoint when auth is disabled (no real JWT)
+    if (!this.hasJwt()) {
+      const debugBody = {
+        poolId: params.poolId,
+        inputSymbol: params.inputSymbol,
+        outputSymbol: params.outputSymbol,
+        amountIn: params.inputAmount,
+        minOutput: params.minOutput,
+      } as any;
+      const res = await this.client.post('/api/debug/swap-debug', debugBody);
+      return {
+        receiptCid: res.data?.receiptCid ?? '',
+        trader: getPartyId() || '',
+        inputSymbol: params.inputSymbol,
+        outputSymbol: params.outputSymbol,
+        amountIn: params.inputAmount,
+        amountOut: res.data?.amountOut ?? '0',
+        timestamp: new Date().toISOString(),
+      };
+    }
+
     const res = await this.client.post('/api/swap/atomic', params, {
-      headers: {
-        'X-Idempotency-Key': idempotencyKey
-      },
+      headers: { 'X-Idempotency-Key': idempotencyKey },
     });
     return res.data;
   }
@@ -268,6 +293,18 @@ export class BackendApiService {
    * Add liquidity to a pool
    */
   async addLiquidity(params: AddLiquidityParams): Promise<{ lpTokenCid: string; lpAmount: string }> {
+    // Use debug endpoint when auth is disabled (no real JWT)
+    if (!this.hasJwt()) {
+      const debugBody = {
+        poolId: params.poolId,
+        amountA: Number(params.amountA),
+        amountB: Number(params.amountB),
+        minLPTokens: Number(params.minLPTokens),
+      };
+      const res = await this.client.post('/api/debug/add-liquidity', debugBody);
+      return { lpTokenCid: res.data?.lpTokenCid ?? '', lpAmount: params.minLPTokens };
+    }
+
     const res = await this.client.post('/api/liquidity/add', params);
     return res.data;
   }

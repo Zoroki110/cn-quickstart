@@ -101,7 +101,7 @@ export class BackendApiService {
       const party = getPartyId();
 
       // Public endpoints that don't need JWT authentication
-      const publicEndpoints = ['/api/pools', '/api/health', '/api/tokens/'];
+      const publicEndpoints = ['/api/pools', '/api/health', '/api/tokens/', '/api/debug/'];
       const isPublicEndpoint = publicEndpoints.some(endpoint => config.url?.includes(endpoint));
 
       // Add Authorization header for all protected endpoints (swap, liquidity)

@@ -14,6 +14,7 @@ public class LedgerConfig {
     private int port = 6865;
     private String applicationId;
     private String registryBaseUri;
+    private String grpcAuthority;
 
     public String getHost() {
         return host;
@@ -45,5 +46,13 @@ public class LedgerConfig {
 
     public void setRegistryBaseUri(String registryBaseUri) {
         this.registryBaseUri = registryBaseUri;
+    }
+
+    public String getGrpcAuthority() {
+        return grpcAuthority;
+    }
+
+    public void setGrpcAuthority(String grpcAuthority) {
+        this.grpcAuthority = grpcAuthority;
     }
 }

@@ -21,6 +21,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.client.*;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.InMemoryOAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
@@ -67,14 +68,10 @@ public class OAuth2Config {
     @Value("${cors.max-age:3600}")
     private long maxAge;
 
-    private final OAuth2AuthenticationSuccessHandler authenticationSuccessHandler;
     private final ClientRegistrationRepository clientRegistrationRepository;
-    private final OAuth2AuthorizedClientService authorizedClientService;
 
-    public OAuth2Config(OAuth2AuthenticationSuccessHandler authenticationSuccessHandler, ClientRegistrationRepository clientRegistrationRepository, OAuth2AuthorizedClientService authorizedClientService) {
-        this.authenticationSuccessHandler = authenticationSuccessHandler;
+    public OAuth2Config(ClientRegistrationRepository clientRegistrationRepository) {
         this.clientRegistrationRepository = clientRegistrationRepository;
-        this.authorizedClientService = authorizedClientService;
     }
 
     @Bean
@@ -89,13 +86,14 @@ public class OAuth2Config {
                 .csrf((csrf) -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
-                        .ignoringRequestMatchers("/api/clearportx/**")  // TODO: Add CSRF back with proper token handling
+                        .ignoringRequestMatchers("/api/clearportx/**", "/api/debug/**")  // TEMP: Skip CSRF for debug endpoints
                 )
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.GET, "/user", "/login-links", "/feature-flags", "/oauth2/authorization/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/logout").permitAll()
                         .requestMatchers("/api/health/**").permitAll()  // Health endpoints are public
                         .requestMatchers("/api/actuator/**").permitAll()  // Metrics endpoints are public (Prometheus scraping)
+                        .requestMatchers("/api/debug/**").permitAll()  // TEMP: Public debug endpoints for DevNet validation
                         .requestMatchers("/api/clearportx/**").permitAll()  // TODO: Add proper admin auth after testing
                         .requestMatchers("/api/pools").permitAll()  // Pools endpoint is public (read-only)
                         .requestMatchers("/api/tokens/*").permitAll()  // TEMPORARY: Public tokens for testing (/api/tokens/alice)
@@ -126,10 +124,7 @@ public class OAuth2Config {
                             return null;
                         })
                 )
-                .oauth2Login(oauth2 ->
-                        oauth2.defaultSuccessUrl("/", true)
-                                .successHandler(authenticationSuccessHandler)
-                )
+                .oauth2Login(oauth2 -> oauth2.defaultSuccessUrl("/", true))
                 .logout(logout -> logout
                         .logoutUrl("/logout")
                             .logoutSuccessHandler(oidcLogoutSuccessHandler())
@@ -166,7 +161,7 @@ public class OAuth2Config {
 
     @Bean
     @Primary
-    public OAuth2AuthorizedClientManager multiGrantTypeClientManager() {
+    public OAuth2AuthorizedClientManager multiGrantTypeClientManager(OAuth2AuthorizedClientService authorizedClientService) {
         OAuth2AuthorizedClientProvider authorizedClientProvider =
                 OAuth2AuthorizedClientProviderBuilder.builder()
                         .clientCredentials()
@@ -182,6 +177,12 @@ public class OAuth2Config {
         return authorizedClientManager;
     }
 
+    @Bean
+    @Primary
+    public OAuth2AuthorizedClientService authorizedClientService() {
+        return new InMemoryOAuth2AuthorizedClientService(clientRegistrationRepository);
+    }
+
     /**
      * Custom JWT decoder that accepts multiple issuer URLs.
      * This is needed because Keycloak may issue JWTs with different issuer claims
@@ -189,24 +190,21 @@ public class OAuth2Config {
      */
     @Bean
     public org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder() {
-        // Accept multiple issuer URLs (keycloak, keycloak.localhost, localhost)
-        String keycloakBaseUrl = System.getenv("AUTH_APP_PROVIDER_ISSUER_URL");
-        if (keycloakBaseUrl == null) {
-            keycloakBaseUrl = "http://keycloak:8082/realms/AppProvider";
-        }
+        // Build decoder from the configured issuer (defaults to Splice realm on keycloak.localhost)
+        String issuerFromEnv = System.getProperty(
+            "spring.security.oauth2.resourceserver.jwt.issuer-uri",
+            System.getenv().getOrDefault("SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI",
+                "http://keycloak.localhost:8082/realms/splice")
+        );
 
-        // Create decoder using JWK Set URI (public keys endpoint)
-        // Note: We use keycloak:8082 for the JWK URI since backend runs in Docker network
-        String jwkSetUri = "http://keycloak:8082/realms/AppProvider/protocol/openid-connect/certs";
+        org.springframework.security.oauth2.jwt.NimbusJwtDecoder decoder =
+            (org.springframework.security.oauth2.jwt.NimbusJwtDecoder)
+                org.springframework.security.oauth2.jwt.JwtDecoders.fromIssuerLocation(issuerFromEnv);
 
-        org.springframework.security.oauth2.jwt.NimbusJwtDecoder jwtDecoder =
-            org.springframework.security.oauth2.jwt.NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
-
-        // Custom validator that accepts multiple issuers
+        // Accept common aliases for the same Keycloak realm (localhost vs keycloak.localhost)
         java.util.Set<String> allowedIssuers = new HashSet<>(java.util.Arrays.asList(
-            "http://keycloak:8082/realms/AppProvider",
-            "http://keycloak.localhost:8082/realms/AppProvider",
-            "http://localhost:8082/realms/AppProvider"
+            "http://keycloak.localhost:8082/realms/splice",
+            "http://localhost:8082/realms/splice"
         ));
 
         org.springframework.security.oauth2.core.OAuth2TokenValidator<Jwt> multiIssuerValidator = token -> {
@@ -229,8 +227,8 @@ public class OAuth2Config {
                 multiIssuerValidator
             );
 
-        jwtDecoder.setJwtValidator(validator);
-        return jwtDecoder;
+        decoder.setJwtValidator(validator);
+        return decoder;
     }
 
     /**

@@ -60,6 +60,10 @@ public class LedgerApi {
         ManagedChannelBuilder<?> builder = ManagedChannelBuilder
                 .forAddress(ledgerConfig.getHost(), ledgerConfig.getPort())
                 .usePlaintext();
+        // Support reverse-proxy/vhost routing (e.g., NGINX on :8888) by overriding gRPC authority
+        if (ledgerConfig.getGrpcAuthority() != null && !ledgerConfig.getGrpcAuthority().isBlank()) {
+            builder = builder.overrideAuthority(ledgerConfig.getGrpcAuthority());
+        }
         if (tokenProvider.isEmpty()) {
             throw new IllegalStateException("TokenProvider is required for authentication");
         }
@@ -169,6 +173,7 @@ public class LedgerApi {
             // Build Commands with multi-party actAs and readAs
             CommandsOuterClass.Commands.Builder commandsBuilder = CommandsOuterClass.Commands.newBuilder()
                     .setCommandId(commandId)
+                    .setUserId(appProviderParty)
                     .addAllActAs(actAsParties)      // Multi-party actAs!
                     .addAllReadAs(readAsParties)    // Multi-party readAs!
                     .addCommands(cmdBuilder.build());
@@ -250,6 +255,7 @@ public class LedgerApi {
 
             CommandsOuterClass.Commands.Builder commandsBuilder = CommandsOuterClass.Commands.newBuilder()
                     .setCommandId(commandId)
+                    .setUserId(appProviderParty)
                     .addActAs(appProviderParty)
                     .addReadAs(appProviderParty)
                     .addCommands(cmdBuilder.build());
@@ -315,6 +321,7 @@ public class LedgerApi {
         return trace(ctx, () -> {
             CommandsOuterClass.Commands.Builder commandsBuilder = CommandsOuterClass.Commands.newBuilder()
                     .setCommandId(commandId)
+                    .setUserId(appProviderParty)
                     .addActAs(appProviderParty)
                     .addReadAs(appProviderParty)
                     .addAllCommands(cmds);
@@ -557,6 +564,7 @@ public class LedgerApi {
             // Build Commands with parties
             CommandsOuterClass.Commands.Builder commandsBuilder = CommandsOuterClass.Commands.newBuilder()
                     .setCommandId(commandId)
+                    .setUserId(appProviderParty)
                     .addAllActAs(actAsParties)
                     .addAllReadAs(readAsParties)
                     .addCommands(command.build());

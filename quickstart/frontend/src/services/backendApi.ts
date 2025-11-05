@@ -3,21 +3,29 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { TokenInfo, PoolInfo, SwapQuote } from '../types/canton';
 import { getAccessToken, getPartyId } from './auth';
+import { BUILD_INFO } from '../config/build-info';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_API_URL || 'http://localhost:8080';
+const runtimeBackendUrl = (typeof window !== 'undefined' && (window as any).__BACKEND_URL__) || undefined;
+const BACKEND_URL =
+  process.env.REACT_APP_BACKEND_API_URL ||
+  BUILD_INFO?.features?.backendUrl ||
+  runtimeBackendUrl ||
+  'http://localhost:8080';
 
 /**
  * Map frontend party names to Canton ledger party IDs
  * This allows using friendly names like "alice" in the frontend
  * while using the real Canton party IDs in backend calls
  */
+const DEVNET_PARTY = process.env.REACT_APP_PARTY_ID 
+  || 'ClearportX-DEX-1::122043801dccdfd8c892fa46ebc1dafc901f7992218886840830aeef1cf7eacedd09';
+
 const PARTY_MAPPING: Record<string, string> = {
-  'alice@clearportx': 'app-provider::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388',
-  'alice': 'app-provider::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388',
-  'bob': 'app-provider::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388',
-  'AppProvider': 'app-provider::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388',
-  'app-provider': 'app-provider::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388',
-  // Add other parties here as needed
+  'alice@clearportx': DEVNET_PARTY,
+  'alice': DEVNET_PARTY,
+  'bob': DEVNET_PARTY,
+  'AppProvider': DEVNET_PARTY,
+  'app-provider': DEVNET_PARTY,
 };
 
 /**

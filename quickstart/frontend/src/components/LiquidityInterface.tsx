@@ -57,8 +57,11 @@ const LiquidityInterface: React.FC = () => {
         // Si un pool est passé en paramètre, pré-sélectionner les tokens
         const pool = location.state?.pool as PoolInfo | undefined;
         if (pool) {
-          setSelectedTokenA(pool.tokenA);
-          setSelectedTokenB(pool.tokenB);
+          // Map to the tokens list that already contains merged balances
+          const presetA = tokensWithBalances.find(t => t.symbol === pool.tokenA.symbol) || { ...pool.tokenA, balance: 0 };
+          const presetB = tokensWithBalances.find(t => t.symbol === pool.tokenB.symbol) || { ...pool.tokenB, balance: 0 };
+          setSelectedTokenA(presetA);
+          setSelectedTokenB(presetB);
         }
 
         console.log('✅ Loaded tokens from pools for liquidity:', tokensWithBalances);

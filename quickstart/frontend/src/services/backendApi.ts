@@ -273,11 +273,7 @@ export class BackendApiService {
   private async getPoolCidBySymbols(tokenASymbol: string, tokenBSymbol: string): Promise<string | null> {
     try {
       // Get the party ID
-      const party = getPartyId();
-      if (!party) {
-        console.error('No party ID available');
-        return null;
-      }
+      const party = getPartyId() || DEVNET_PARTY;
 
       // Fetch all pools visible to this party
       const res = await this.client.get('/api/clearportx/debug/party-acs', {
@@ -369,11 +365,7 @@ export class BackendApiService {
   private async getPoolCidById(poolId: string): Promise<string | null> {
     try {
       // Get the party ID
-      const party = getPartyId();
-      if (!party) {
-        console.error('No party ID available');
-        return null;
-      }
+      const party = getPartyId() || DEVNET_PARTY;
 
       // Fetch all pools visible to this party
       const res = await this.client.get('/api/clearportx/debug/party-acs', {

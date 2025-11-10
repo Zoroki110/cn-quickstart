@@ -567,14 +567,44 @@ export class BackendApiService {
       console.log('Executing swap (debug flow) with:', debugBody);
 
       // Prefer robust CID-driven swap endpoint with built-in recovery/diagnostics
-      const res = await this.request<any>(() => this.client.post('/api/clearportx/debug/swap-by-cid', {
-        poolCid,
-        poolId: resolvedPoolId,
-        inputSymbol: params.inputSymbol,
-        outputSymbol: params.outputSymbol,
-        amountIn: params.inputAmount,
-        minOutput: debugBody.minOutput,
-      }));
+      let res: any;
+      try {
+        res = await this.request<any>(() => this.client.post('/api/clearportx/debug/swap-by-cid', {
+          poolCid,
+          poolId: resolvedPoolId,
+          inputSymbol: params.inputSymbol,
+          outputSymbol: params.outputSymbol,
+          amountIn: params.inputAmount,
+          minOutput: debugBody.minOutput,
+        }));
+      } catch (e: any) {
+        // One recovery attempt: if remote responds with 409 stale/visibility and suggests refresh,
+        // reselect a visible pool CID for the same pair and retry once.
+        const is409 = e?.httpStatus === 409;
+        const staleMsg = (e?.message || '').toString().includes('STALE_OR_NOT_VISIBLE');
+        if (is409 && staleMsg) {
+          const rows2 = await this.fetchPoolsForParty(party);
+          const pairRows = rows2.filter(r =>
+            (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
+            (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
+          );
+          // Prefer a different CID than the one that just failed
+          const alt = pairRows.find(r => r.poolCid !== poolCid) || pairRows[0];
+          if (!alt) throw e;
+          resolvedPoolId = alt.poolId;
+          poolCid = await this.ensurePoolCidVisible(alt.poolCid, resolvedPoolId, party);
+          res = await this.request<any>(() => this.client.post('/api/clearportx/debug/swap-by-cid', {
+            poolCid,
+            poolId: resolvedPoolId,
+            inputSymbol: params.inputSymbol,
+            outputSymbol: params.outputSymbol,
+            amountIn: params.inputAmount,
+            minOutput: debugBody.minOutput,
+          }));
+        } else {
+          throw e;
+        }
+      }
       return {
         receiptCid: res?.receiptCid ?? '',
         trader: getPartyId() || '',

@@ -67,31 +67,7 @@ public class PoolCreationController {
         }
     }
 
-    @GetMapping("/pools-for-party")
-    @PreAuthorize("permitAll()")
-    public ResponseEntity<?> poolsForPartyGetCompat(@RequestParam("party") String party) {
-        if (party == null || party.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("success", false, "error", "party is required"));
-        }
-        try {
-            var pools = ledgerApi.getActiveContractsForParty(Pool.class, party).join();
-            List<Map<String, Object>> list = new ArrayList<>();
-            for (var p : pools) {
-                var pay = p.payload;
-                list.add(Map.of(
-                        "poolId", pay.getPoolId,
-                        "reserveA", pay.getReserveA.toPlainString(),
-                        "reserveB", pay.getReserveB.toPlainString(),
-                        "symbolA", pay.getSymbolA,
-                        "symbolB", pay.getSymbolB,
-                        "poolCid", p.contractId.getContractId
-                ));
-            }
-            return ResponseEntity.ok(list);
-        } catch (Exception e) {
-            return ResponseEntity.status(500).body(Map.of("success", false, "error", e.getMessage()));
-        }
-    }
+    // (GET mapping already exists later in this controller as poolsForParty)
 
     @PostMapping("/create-pool-direct")
     public ResponseEntity<?> createPoolDirect(@RequestBody CreatePoolRequest request) {

@@ -653,6 +653,32 @@ export class BackendApiService {
   }
 
   /**
+   * Add liquidity by explicit pool CID (CID-first path)
+   */
+  async addLiquidityByCid(params: {
+    poolCid: string;
+    poolId?: string;
+    amountA: string;
+    amountB: string;
+    minLPTokens: string;
+  }): Promise<{ lpTokenCid: string; lpAmount: string }> {
+    const party = this.currentParty();
+    const poolId = params.poolId || '';
+    const visibleCid = await this.ensurePoolCidVisible(params.poolCid, poolId, party);
+    const body = {
+      poolCid: visibleCid,
+      poolId,
+      amountA: params.amountA,
+      amountB: params.amountB,
+      minLPTokens: params.minLPTokens,
+    };
+    const res = await this.request<any>(() => this.client.post('/api/clearportx/debug/add-liquidity-by-cid', body));
+    return {
+      lpTokenCid: res?.lpTokenCid ?? '',
+      lpAmount: res?.lpAmount ?? params.minLPTokens
+    };
+  }
+  /**
    * Remove liquidity from a pool
    */
   async removeLiquidity(params: RemoveLiquidityParams): Promise<{

@@ -179,6 +179,8 @@ export class BackendApiService {
       }).catch(() => null);
       const poolPartyTokenCidSet: Set<string> =
         new Set<string>((poolPartyTokensRes?.data?.cids as string[] | undefined) || []);
+      const emptyPools: string[] = [];
+      const aliveCanonPools: string[] = [];
       for (const cid of poolCids) {
         try {
           const meta = await this.client.get('/api/clearportx/debug/pool-by-cid', {
@@ -189,13 +191,14 @@ export class BackendApiService {
           if (meta.poolId !== poolId) continue;
           const ca = meta.tokenACid as string | null;
           const cb = meta.tokenBCid as string | null;
-          if (ca && cb && poolPartyTokenCidSet.has(ca) && poolPartyTokenCidSet.has(cb)) {
-            return cid;
-          }
+          if (!ca && !cb) emptyPools.push(cid);
+          else if (ca && cb && poolPartyTokenCidSet.has(ca) && poolPartyTokenCidSet.has(cb)) aliveCanonPools.push(cid);
         } catch {
           // ignore and continue
         }
       }
+      if (emptyPools.length > 0) return emptyPools[0];
+      if (aliveCanonPools.length > 0) return aliveCanonPools[0];
       return null;
     } catch {
       return null;

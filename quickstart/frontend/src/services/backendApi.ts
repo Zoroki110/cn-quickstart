@@ -612,7 +612,12 @@ export class BackendApiService {
           throw domain;
         }
         resolvedPoolId = alt.poolId;
-        const visibleAlt = await this.ensurePoolCidVisible(alt.poolCid, resolvedPoolId, party);
+        // Prefer directory mapping for freshest CID of this poolId if available
+        let freshestCid = await this.getDirectoryLatestCid(resolvedPoolId);
+        if (!freshestCid) freshestCid = alt.poolCid;
+        const visibleAlt = await this.ensurePoolCidVisible(freshestCid, resolvedPoolId, party);
+        // Read-your-write / ACS pacing
+        await this.sleep(3500);
         res = await postSwap(visibleAlt, resolvedPoolId);
       }
       return {

@@ -5,6 +5,12 @@ import { TokenInfo, PoolInfo, SwapQuote } from '../types/canton';
 import { getAccessToken, getPartyId } from './auth';
 import { BUILD_INFO } from '../config/build-info';
 
+type DomainError = {
+  code: string;
+  message: string;
+  retryAfterMs?: number;
+  httpStatus?: number;
+};
 const runtimeBackendUrl = (typeof window !== 'undefined' && (window as any).__BACKEND_URL__) || undefined;
 const BACKEND_URL =
   process.env.REACT_APP_BACKEND_API_URL ||
@@ -127,26 +133,17 @@ export class BackendApiService {
       return config;
     });
 
-    // Retry on 429 (rate limit) and 409 (stale CID) with small backoff
+    // Retry on 429 (rate limit) only; 409 handled by request() wrapper
     this.client.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
         if (error.response?.status === 429) {
-          const retryAfter = parseInt(error.response.headers['retry-after'] || '3');
-          console.log(`⚠️  Rate limited, retrying after ${retryAfter}s...`);
-          await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+          const retryAfter = parseInt((error.response.headers['retry-after'] as string) || '3', 10);
+          const waitMs = isNaN(retryAfter) ? 3000 : retryAfter * 1000;
+          console.log(`⚠️  Rate limited, retrying after ${Math.round(waitMs / 1000)}s...`);
+          await new Promise(resolve => setTimeout(resolve, waitMs));
           // Retry the original request
           return this.client.request(error.config!);
-        }
-        if (error.response?.status === 409) {
-          const cfg: any = error.config || {};
-          cfg.__retry409Count = (cfg.__retry409Count || 0) + 1;
-          if (cfg.__retry409Count <= 2) {
-            console.log(`⚠️  Stale CID (409), retrying attempt ${cfg.__retry409Count} after 250ms...`);
-            await new Promise(resolve => setTimeout(resolve, 250));
-            return this.client.request(cfg);
-          }
-          console.warn('⚠️  Stale CID (409) persisted after retries; surfacing error.');
         }
         throw error;
       }
@@ -214,6 +211,34 @@ export class BackendApiService {
     return getPartyId() || DEVNET_PARTY;
   }
 
+  // Centralized request wrapper with single paced 409 retry
+  private async request<T>(call: () => Promise<{ data: T }>): Promise<T> {
+    try {
+      const res = await call();
+      return res.data;
+    } catch (e: any) {
+      const err = e as AxiosError<any>;
+      const status = err.response?.status;
+      const body = err.response?.data || {};
+      if (status === 409) {
+        const retryMs = typeof body.retry_after_ms === 'number' && body.retry_after_ms > 0
+          ? body.retry_after_ms
+          : 3500;
+        console.log(`⚠️  409 Stale/Visibility, retrying once after ${Math.round(retryMs / 1000)}s...`);
+        await this.sleep(retryMs);
+        const res2 = await call();
+        return res2.data;
+      }
+      const domain: DomainError = {
+        code: body.code || 'INTERNAL',
+        message: body.message || body.error || err.message || 'Internal error',
+        retryAfterMs: body.retry_after_ms,
+        httpStatus: status,
+      };
+      throw domain;
+    }
+  }
+
   // Use backend summary of pools visible to a party (includes poolCid and reserves)
   private async fetchPoolsForParty(party: string): Promise<Array<{ poolId: string; poolCid: string; reserveA: string; reserveB: string; symbolA: string; symbolB: string }>> {
     try {
@@ -238,30 +263,33 @@ export class BackendApiService {
     }
   }
 
-  // Ensure chosen poolCid is visible to acting party; grant if needed
-  private async ensurePoolCidVisible(poolCid: string, poolId: string, party: string): Promise<void> {
+  // Ensure chosen poolCid is visible to acting party; grant if needed; return (possibly) updated CID
+  private async ensurePoolCidVisible(poolCid: string, poolId: string, party: string): Promise<string> {
     try {
-      const probe = await this.client.get('/api/clearportx/debug/pool/fetch-cid', {
+      const probe = await this.request<any>(() => this.client.get('/api/clearportx/debug/pool/fetch-cid', {
         params: { cid: poolCid },
         headers: { 'X-Party': party },
-      }).then(r => r.data);
-      if (probe?.visible === true) return;
+      }));
+      if (probe?.visible === true) return poolCid;
     } catch {
       // fall through to grant
     }
     try {
-      await this.client.post('/api/clearportx/debug/pool/grant-visibility', {
+      const grant = await this.request<any>(() => this.client.post('/api/clearportx/debug/pool/grant-visibility', {
         poolCid,
         newObserver: party,
         poolId,
       }, {
         headers: { 'X-Party': party },
-      });
+      }));
       // DevNet pacing to allow ACS to reflect observer update
       await this.sleep(3500);
+      const updatedCid = grant?.newPoolCid || poolCid;
+      return updatedCid;
     } catch {
       // Ignore; subsequent actions may still succeed if already visible
     }
+    return poolCid;
   }
 
   // Choose pool CID for a poolId: prefer empty pool (0/0) for first add; else pick highest TVL
@@ -475,7 +503,7 @@ export class BackendApiService {
           poolCid = poolCidBySymbols;
         }
       }
-      await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
+      poolCid = await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
 
       const debugBody = {
         poolId: resolvedPoolId,
@@ -488,21 +516,21 @@ export class BackendApiService {
       console.log('Executing swap (debug flow) with:', debugBody);
 
       // Prefer robust CID-driven swap endpoint with built-in recovery/diagnostics
-      const res = await this.client.post('/api/clearportx/debug/swap-by-cid', {
+      const res = await this.request<any>(() => this.client.post('/api/clearportx/debug/swap-by-cid', {
         poolCid,
         poolId: resolvedPoolId,
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
         minOutput: params.minOutput || '0.001',
-      });
+      }));
       return {
-        receiptCid: res.data?.receiptCid ?? '',
+        receiptCid: res?.receiptCid ?? '',
         trader: getPartyId() || '',
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
-        amountOut: res.data?.amountOut ?? '0',
+        amountOut: res?.amountOut ?? '0',
         timestamp: new Date().toISOString(),
       };
     }
@@ -600,7 +628,7 @@ export class BackendApiService {
         }
       }
 
-      await this.ensurePoolCidVisible(poolCid, params.poolId, party);
+      poolCid = await this.ensurePoolCidVisible(poolCid, params.poolId, party);
 
       const byCid = {
         poolCid,
@@ -612,28 +640,12 @@ export class BackendApiService {
 
       console.log('Adding liquidity (by-cid) with:', byCid);
 
-      try {
-        // Prefer CID-driven endpoint
-        const res = await this.client.post('/api/clearportx/debug/add-liquidity-by-cid', byCid);
-        return {
-          lpTokenCid: res.data?.lpTokenCid ?? '',
-          lpAmount: res.data?.lpAmount ?? params.minLPTokens
-        };
-      } catch (e) {
-        // Fallback to party-scoped flow if CID-driven fails
-        const forParty = {
-          poolId: params.poolId,
-          amountA: params.amountA.toString(),
-          amountB: params.amountB.toString(),
-          minLPTokens: params.minLPTokens.toString(),
-        };
-        console.warn('Add-liquidity by-cid failed; fallback to for-party with:', forParty);
-        const res2 = await this.client.post('/api/debug/add-liquidity-for-party', forParty);
-        return {
-          lpTokenCid: res2.data?.lpTokenCid ?? '',
-          lpAmount: res2.data?.lpAmount ?? params.minLPTokens
-        };
-      }
+      // CID-first endpoint with single paced retry inside request()
+      const res = await this.request<any>(() => this.client.post('/api/clearportx/debug/add-liquidity-by-cid', byCid));
+      return {
+        lpTokenCid: res?.lpTokenCid ?? '',
+        lpAmount: res?.lpAmount ?? params.minLPTokens
+      };
     }
 
     const res = await this.client.post('/api/liquidity/add', params);

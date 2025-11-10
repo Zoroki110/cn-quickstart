@@ -489,32 +489,54 @@ export class BackendApiService {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       const party = this.currentParty();
-      // Prefer directory mapping if poolId provided
+      // Always prefer freshest party-scoped pool by pair; fallback to directory mapping only if none
       let resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
-      let poolCid = resolvedPoolId ? await this.getDirectoryLatestCid(resolvedPoolId) : null;
-      if (!poolCid) {
-        // Resolve a pool with reserves for the token pair
-        const rows = await this.fetchPoolsForParty(party);
-        const byPair = rows.filter(r =>
-          (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
-          (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
-        );
-        const withReserves = byPair.filter(r => parseFloat(r.reserveA) > 0 && parseFloat(r.reserveB) > 0);
-        const chosen = withReserves.sort((a, b) => (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB)))[0];
-        if (chosen) {
-          resolvedPoolId = chosen.poolId;
-          poolCid = chosen.poolCid;
-        }
-        if (!poolCid) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
+      const rows = await this.fetchPoolsForParty(party);
+      const byPair = rows.filter(r =>
+        (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
+        (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
+      );
+      const withReserves = byPair.filter(r => parseFloat(r.reserveA) > 0 && parseFloat(r.reserveB) > 0);
+      const chosen = withReserves.sort((a, b) => (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB)))[0];
+      let poolCid: string | null = null;
+      if (chosen) {
+        resolvedPoolId = chosen.poolId;
+        poolCid = chosen.poolCid;
+      } else {
+        poolCid = resolvedPoolId ? await this.getDirectoryLatestCid(resolvedPoolId) : null;
       }
+      if (!poolCid) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
       poolCid = await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
+
+      // Compute a conservative minOutput on the chosen pool to avoid slippage rejections
+      let minOut = params.minOutput;
+      try {
+        if (chosen) {
+          const rin = parseFloat((params.inputSymbol === chosen.symbolA ? chosen.reserveA : chosen.reserveB) as any);
+          const rout = parseFloat((params.inputSymbol === chosen.symbolA ? chosen.reserveB : chosen.reserveA) as any);
+          const input = parseFloat(params.inputAmount);
+          const totalFeeRate = 0.003;           // feeBps = 30
+          const protocolFee = input * totalFeeRate * 0.25;
+          const afterProtocol = input - protocolFee;
+          const feeMul = 1 - totalFeeRate;      // 0.997 pool fee multiplier
+          const ainFee = afterProtocol * feeMul;
+          const denom = rin + ainFee;
+          const aout = (ainFee * rout) / denom;
+          const capped = Math.max(0, aout * 0.99);
+          const userMin = parseFloat(params.minOutput || '0');
+          const finalMin = Math.min(isFinite(userMin) ? userMin : capped, capped);
+          minOut = finalMin.toFixed(10);
+        }
+      } catch {
+        // leave minOut as provided
+      }
 
       const debugBody = {
         poolId: resolvedPoolId,
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
-        minOutput: params.minOutput || '0.001',
+        minOutput: minOut || '0.001',
       };
 
       console.log('Executing swap (debug flow) with:', debugBody);
@@ -526,7 +548,7 @@ export class BackendApiService {
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
-        minOutput: params.minOutput || '0.001',
+        minOutput: debugBody.minOutput,
       }));
       return {
         receiptCid: res?.receiptCid ?? '',

@@ -225,6 +225,19 @@ export class BackendApiService {
     }
   }
 
+  // Directory mapping (poolId -> latest poolCid); maintained by backend on updates
+  private async getDirectoryLatestCid(poolId: string): Promise<string | null> {
+    try {
+      const res = await this.client.get('/api/clearportx/debug/directory');
+      const mapping = res.data?.mapping || {};
+      const entry = mapping[poolId];
+      const cid = entry?.poolCid || null;
+      return cid;
+    } catch {
+      return null;
+    }
+  }
+
   // Ensure chosen poolCid is visible to acting party; grant if needed
   private async ensurePoolCidVisible(poolCid: string, poolId: string, party: string): Promise<void> {
     try {
@@ -441,32 +454,27 @@ export class BackendApiService {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       const party = this.currentParty();
-      // Resolve a pool with reserves for the token pair
-      const rows = await this.fetchPoolsForParty(party);
-      const byPair = rows.filter(r =>
-        (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
-        (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
-      );
-      // choose highest TVL among non-empty pools
-      const withReserves = byPair.filter(r => parseFloat(r.reserveA) > 0 && parseFloat(r.reserveB) > 0);
-      let chosen = withReserves.sort((a, b) => (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB)))[0];
-      // fallback to any party-visible poolCid by symbols if needed
-      if (!chosen) {
-        const poolCidBySymbols = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
-        if (!poolCidBySymbols) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
-        // best effort to infer poolId via pool-by-cid; if fails, use synthetic
-        let inferredPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
-        try {
-          const meta = await this.client.get('/api/clearportx/debug/pool-by-cid', {
-            params: { cid: poolCidBySymbols },
-            headers: { 'X-Party': party }
-          }).then(r => r.data);
-          if (meta?.success && meta.poolId) inferredPoolId = meta.poolId;
-        } catch { /* ignore */ }
-        chosen = { poolId: inferredPoolId, poolCid: poolCidBySymbols, symbolA: params.inputSymbol, symbolB: params.outputSymbol, reserveA: '0', reserveB: '0' } as any;
+      // Prefer directory mapping if poolId provided
+      let resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
+      let poolCid = resolvedPoolId ? await this.getDirectoryLatestCid(resolvedPoolId) : null;
+      if (!poolCid) {
+        // Resolve a pool with reserves for the token pair
+        const rows = await this.fetchPoolsForParty(party);
+        const byPair = rows.filter(r =>
+          (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
+          (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
+        );
+        const withReserves = byPair.filter(r => parseFloat(r.reserveA) > 0 && parseFloat(r.reserveB) > 0);
+        const chosen = withReserves.sort((a, b) => (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB)))[0];
+        if (chosen) {
+          resolvedPoolId = chosen.poolId;
+          poolCid = chosen.poolCid;
+        } else {
+          const poolCidBySymbols = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
+          if (!poolCidBySymbols) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
+          poolCid = poolCidBySymbols;
+        }
       }
-      const resolvedPoolId = params.poolId || chosen.poolId;
-      const poolCid = chosen.poolCid;
       await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
 
       const debugBody = {
@@ -570,22 +578,26 @@ export class BackendApiService {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       const party = this.currentParty();
-      // Resolve pool CID by party pools list (prefer empty)
-      let poolCid = await this.resolvePoolCidForIdPreferEmpty(params.poolId);
+      // Prefer directory mapping first
+      let poolCid = await this.getDirectoryLatestCid(params.poolId);
 
       if (!poolCid) {
-        // Fallback to symbols scan across visible pools
-        const pools = await this.getPools();
-        const pool = pools.find(p =>
-          p.contractId === params.poolId ||
-          (p.tokenA.symbol && p.tokenB.symbol &&
-           params.poolId.toUpperCase().includes(p.tokenA.symbol) &&
-           params.poolId.toUpperCase().includes(p.tokenB.symbol))
-        );
-        if (!pool) throw new Error(`Pool ${params.poolId} not found or not visible`);
-        const fallbackCid = await this.getPoolCidBySymbols(pool.tokenA.symbol, pool.tokenB.symbol);
-        if (!fallbackCid) throw new Error(`Pool ${params.poolId} not found or not visible`);
-        poolCid = fallbackCid;
+        // Resolve pool CID by party pools list (prefer empty)
+        poolCid = await this.resolvePoolCidForIdPreferEmpty(params.poolId);
+        if (!poolCid) {
+          // Fallback to symbols scan across visible pools
+          const pools = await this.getPools();
+          const pool = pools.find(p =>
+            p.contractId === params.poolId ||
+            (p.tokenA.symbol && p.tokenB.symbol &&
+             params.poolId.toUpperCase().includes(p.tokenA.symbol) &&
+             params.poolId.toUpperCase().includes(p.tokenB.symbol))
+          );
+          if (!pool) throw new Error(`Pool ${params.poolId} not found or not visible`);
+          const fallbackCid = await this.getPoolCidBySymbols(pool.tokenA.symbol, pool.tokenB.symbol);
+          if (!fallbackCid) throw new Error(`Pool ${params.poolId} not found or not visible`);
+          poolCid = fallbackCid;
+        }
       }
 
       await this.ensurePoolCidVisible(poolCid, params.poolId, party);

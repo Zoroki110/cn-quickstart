@@ -98,10 +98,16 @@ export class BackendApiService {
       const token = getAccessToken();
 
       // Get party ID from token or fallback
-      const party = getPartyId();
+      const party = getPartyId() || DEVNET_PARTY;
 
       // Public endpoints that don't need JWT authentication
-      const publicEndpoints = ['/api/pools', '/api/health', '/api/tokens/', '/api/debug/'];
+      const publicEndpoints = [
+        '/api/pools',
+        '/api/health',
+        '/api/tokens/',
+        '/api/debug/',
+        '/api/clearportx/debug/',
+      ];
       const isPublicEndpoint = publicEndpoints.some(endpoint => config.url?.includes(endpoint));
 
       // Add Authorization header for all protected endpoints (swap, liquidity)
@@ -121,7 +127,7 @@ export class BackendApiService {
       return config;
     });
 
-    // Retry on 429 (rate limit)
+    // Retry on 429 (rate limit) and 409 (stale CID) with small backoff
     this.client.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
@@ -130,6 +136,11 @@ export class BackendApiService {
           console.log(`⚠️  Rate limited, retrying after ${retryAfter}s...`);
           await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
           // Retry the original request
+          return this.client.request(error.config!);
+        }
+        if (error.response?.status === 409) {
+          console.log('⚠️  Stale CID (409), retrying after 250ms...');
+          await new Promise(resolve => setTimeout(resolve, 250));
           return this.client.request(error.config!);
         }
         throw error;
@@ -256,6 +267,56 @@ export class BackendApiService {
   }
 
   /**
+   * Get pool CID for a given pool by matching token symbols
+   * Fetches pool CIDs from the backend and finds matching pool
+   */
+  private async getPoolCidBySymbols(tokenASymbol: string, tokenBSymbol: string): Promise<string | null> {
+    try {
+      // Get the party ID
+      const party = getPartyId();
+      if (!party) {
+        console.error('No party ID available');
+        return null;
+      }
+
+      // Fetch all pools visible to this party
+      const res = await this.client.get('/api/clearportx/debug/party-acs', {
+        params: { template: 'AMM.Pool.Pool' },
+        headers: { 'X-Party': party }
+      });
+
+      const poolCids = res.data?.cids || [];
+      console.log(`Found ${poolCids.length} pool CIDs for party`);
+
+      // For each pool CID, fetch details to find matching symbols
+      for (const cid of poolCids) {
+        try {
+          const poolRes = await this.client.get('/api/clearportx/debug/pool-by-cid', {
+            params: { cid },
+            headers: { 'X-Party': party }
+          });
+
+          const poolData = poolRes.data;
+          if (poolData.success &&
+              ((poolData.symbolA === tokenASymbol && poolData.symbolB === tokenBSymbol) ||
+               (poolData.symbolA === tokenBSymbol && poolData.symbolB === tokenASymbol))) {
+            console.log(`Found matching pool: ${poolData.poolId} with CID: ${cid}`);
+            return cid;
+          }
+        } catch (error) {
+          console.error(`Error fetching pool details for CID ${cid}:`, error);
+        }
+      }
+
+      console.warn(`No pool found for ${tokenASymbol}/${tokenBSymbol}`);
+      return null;
+    } catch (error) {
+      console.error('Error fetching pool CIDs:', error);
+      return null;
+    }
+  }
+
+  /**
    * Execute atomic swap (PrepareSwap + ExecuteSwap in 1 transaction)
    * This is the recommended endpoint for production use
    */
@@ -264,14 +325,26 @@ export class BackendApiService {
 
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
+      // Get pool CID by matching token symbols
+      const poolCid = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
+
+      if (!poolCid) {
+        throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
+      }
+
       const debugBody = {
-        poolId: params.poolId,
+        poolId: params.poolId || `${params.inputSymbol}-${params.outputSymbol}`,
+        poolCid: poolCid,
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
-        minOutput: params.minOutput,
-      } as any;
-      const res = await this.client.post('/api/debug/swap-debug', debugBody);
+        minOutput: params.minOutput || '0.001',
+      };
+
+      console.log('Executing swap with:', debugBody);
+
+      // Use the correct clearportx debug endpoint
+      const res = await this.client.post('/api/clearportx/debug/swap-by-cid', debugBody);
       return {
         receiptCid: res.data?.receiptCid ?? '',
         trader: getPartyId() || '',
@@ -290,19 +363,126 @@ export class BackendApiService {
   }
 
   /**
+   * Get pool CID for a given pool ID
+   * Fetches pool CIDs from the backend and finds matching pool by ID
+   */
+  private async getPoolCidById(poolId: string): Promise<string | null> {
+    try {
+      // Get the party ID
+      const party = getPartyId();
+      if (!party) {
+        console.error('No party ID available');
+        return null;
+      }
+
+      // Fetch all pools visible to this party
+      const res = await this.client.get('/api/clearportx/debug/party-acs', {
+        params: { template: 'AMM.Pool.Pool' },
+        headers: { 'X-Party': party }
+      });
+
+      const poolCids = res.data?.cids || [];
+      console.log(`Found ${poolCids.length} pool CIDs for party, looking for poolId: ${poolId}`);
+
+      // For each pool CID, fetch details to find matching pool ID
+      for (const cid of poolCids) {
+        try {
+          const poolRes = await this.client.get('/api/clearportx/debug/pool-by-cid', {
+            params: { cid },
+            headers: { 'X-Party': party }
+          });
+
+          const poolData = poolRes.data;
+          // Check if pool ID matches (partial match since frontend may have simplified IDs)
+          if (poolData.success &&
+              (poolData.poolId === poolId ||
+               poolData.poolId.includes(poolId) ||
+               poolId.includes(poolData.poolId))) {
+            console.log(`Found matching pool by ID: ${poolData.poolId} with CID: ${cid}`);
+            return cid;
+          }
+        } catch (error) {
+          console.error(`Error fetching pool details for CID ${cid}:`, error);
+        }
+      }
+
+      // If not found by ID, try by symbols extracted from the pool ID
+      // Pool IDs often have format like "ETH-USDC-01" or "p0-gv-eth-usdc-225946"
+      const symbols = poolId.toUpperCase().match(/([A-Z]+)-([A-Z]+)/);
+      if (symbols && symbols.length >= 3) {
+        const symbolA = symbols[1];
+        const symbolB = symbols[2];
+        console.log(`Trying to find pool by symbols: ${symbolA}/${symbolB}`);
+        return this.getPoolCidBySymbols(symbolA, symbolB);
+      }
+
+      console.warn(`No pool found for poolId: ${poolId}`);
+      return null;
+    } catch (error) {
+      console.error('Error fetching pool CID by ID:', error);
+      return null;
+    }
+  }
+
+  /**
    * Add liquidity to a pool
    */
   async addLiquidity(params: AddLiquidityParams): Promise<{ lpTokenCid: string; lpAmount: string }> {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
+      // Get pool CID by pool ID
+      const poolCid = await this.getPoolCidById(params.poolId);
+
+      if (!poolCid) {
+        // Try to extract symbols from pool data to find the pool
+        const pools = await this.getPools();
+        const pool = pools.find(p =>
+          p.contractId === params.poolId ||
+          (p.tokenA.symbol && p.tokenB.symbol &&
+           params.poolId.toUpperCase().includes(p.tokenA.symbol) &&
+           params.poolId.toUpperCase().includes(p.tokenB.symbol))
+        );
+
+        if (pool) {
+          const fallbackCid = await this.getPoolCidBySymbols(pool.tokenA.symbol, pool.tokenB.symbol);
+          if (!fallbackCid) {
+            throw new Error(`Pool ${params.poolId} not found or not visible`);
+          }
+          const debugBody = {
+            poolId: params.poolId,
+            poolCid: fallbackCid,
+            amountA: params.amountA.toString(),
+            amountB: params.amountB.toString(),
+            minLPTokens: params.minLPTokens.toString(),
+          };
+
+          console.log('Adding liquidity with fallback CID:', debugBody);
+          const res = await this.client.post('/api/clearportx/debug/add-liquidity-by-cid', debugBody);
+          return {
+            lpTokenCid: res.data?.lpTokenCid ?? '',
+            lpAmount: res.data?.lpAmount ?? params.minLPTokens
+          };
+        }
+
+        throw new Error(`Pool ${params.poolId} not found or not visible`);
+      }
+
       const debugBody = {
         poolId: params.poolId,
-        amountA: Number(params.amountA),
-        amountB: Number(params.amountB),
-        minLPTokens: Number(params.minLPTokens),
+        poolCid: poolCid,
+        amountA: params.amountA.toString(),
+        amountB: params.amountB.toString(),
+        minLPTokens: params.minLPTokens.toString(),
       };
-      const res = await this.client.post('/api/debug/add-liquidity', debugBody);
-      return { lpTokenCid: res.data?.lpTokenCid ?? '', lpAmount: params.minLPTokens };
+
+      console.log('Adding liquidity with:', debugBody);
+
+      // Use the correct clearportx debug endpoint
+      const res = await this.client.post('/api/clearportx/debug/add-liquidity-by-cid', debugBody);
+      return {
+        lpTokenCid: res.data?.lpTokenCid ?? '',
+        lpAmount: res.data?.lpAmount ?? params.minLPTokens
+      };
     }
 
     const res = await this.client.post('/api/liquidity/add', params);

@@ -14,6 +14,7 @@ echo "=============================================="
 LEDGER_HOST="${CANTON_LEDGER_HOST:-localhost}"
 LEDGER_PORT="${CANTON_LEDGER_PORT:-5001}"
 BACKEND_PORT="${BACKEND_PORT:-8080}"
+SERVER_BIND_ADDRESS="${SERVER_BIND_ADDRESS:-0.0.0.0}"
 # Force oauth2 profile for production startup
 ENVIRONMENT="oauth2"
 
@@ -21,6 +22,7 @@ echo ""
 echo "Configuration:"
 echo "- Ledger: $LEDGER_HOST:$LEDGER_PORT"
 echo "- Backend Port: $BACKEND_PORT"
+echo "- Bind Address: $SERVER_BIND_ADDRESS"
 echo "- Environment: $ENVIRONMENT"
 echo ""
 
@@ -68,18 +70,9 @@ else
   echo "✅ Found party: $FULL_PARTY_ID"
 fi
 
-# Step 3: Verify package hash
-echo "[3/5] Verifying package hash..."
+# Step 3: Skip local DAR pin (runtime uses ledger-installed packages)
+echo "[3/5] Skipping local DAR pinning (using ledger packages)"
 cd /root/cn-quickstart/quickstart/clearportx
-if [ -f "artifacts/devnet/clearportx-amm-production-v1.0.2-frozen.dar" ]; then
-  PACKAGE_HASH=$(daml damlc inspect-dar artifacts/devnet/clearportx-amm-production-v1.0.2-frozen.dar --json 2>/dev/null | \
-    jq -r '.main_package_id' | head -1)
-  echo "✅ Using PRODUCTION v1.0.2 frozen DAR with hash: $PACKAGE_HASH"
-else
-  echo "❌ ERROR: Production frozen DAR not found!"
-  echo "Expected: artifacts/devnet/clearportx-amm-production-v1.0.2-frozen.dar"
-  exit 1
-fi
 
 # Step 4: Set environment variables
 echo "[4/5] Setting environment variables..."
@@ -189,7 +182,7 @@ nohup env SPRING_PROFILES_ACTIVE="$ENVIRONMENT" SPRING_MAIN_ALLOW_BEAN_DEFINITIO
   SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_APPPROVIDER_ISSUER_URI="$SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_APPPROVIDER_ISSUER_URI" \
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI="$SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI" \
   LEDGER_GRPC_AUTHORITY="$LEDGER_GRPC_AUTHORITY" \
-  JAVA_TOOL_OPTIONS="-Dspring.security.oauth2.client.provider.appprovider.issuer-uri=$SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_APPPROVIDER_ISSUER_URI -Dspring.security.oauth2.resourceserver.jwt.issuer-uri=$SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI -Dspring.main.allow-circular-references=true ${LEDGER_GRPC_AUTHORITY:+-Dledger.grpc-authority=$LEDGER_GRPC_AUTHORITY}" \
+  JAVA_TOOL_OPTIONS="-Dserver.port=$BACKEND_PORT -Dserver.address=$SERVER_BIND_ADDRESS -Dspring.security.oauth2.client.provider.appprovider.issuer-uri=$SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_APPPROVIDER_ISSUER_URI -Dspring.security.oauth2.resourceserver.jwt.issuer-uri=$SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI -Dspring.main.allow-circular-references=true ${LEDGER_GRPC_AUTHORITY:+-Dledger.grpc-authority=$LEDGER_GRPC_AUTHORITY}" \
   ../gradlew clean bootRun > /tmp/backend-production.log 2>&1 &
 BACKEND_PID=$!
 echo "Backend PID: $BACKEND_PID"

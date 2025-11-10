@@ -205,6 +205,69 @@ export class BackendApiService {
     }
   }
 
+  // Sleep helper for pacing (DevNet-friendly)
+  private async sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private currentParty(): string {
+    return getPartyId() || DEVNET_PARTY;
+  }
+
+  // Use backend summary of pools visible to a party (includes poolCid and reserves)
+  private async fetchPoolsForParty(party: string): Promise<Array<{ poolId: string; poolCid: string; reserveA: string; reserveB: string; symbolA: string; symbolB: string }>> {
+    try {
+      const res = await this.client.get('/api/debug/pools-for-party', { params: { party } });
+      const list = Array.isArray(res.data) ? res.data : [];
+      return list as any[];
+    } catch {
+      return [];
+    }
+  }
+
+  // Ensure chosen poolCid is visible to acting party; grant if needed
+  private async ensurePoolCidVisible(poolCid: string, poolId: string, party: string): Promise<void> {
+    try {
+      const probe = await this.client.get('/api/clearportx/debug/pool/fetch-cid', {
+        params: { cid: poolCid },
+        headers: { 'X-Party': party },
+      }).then(r => r.data);
+      if (probe?.visible === true) return;
+    } catch {
+      // fall through to grant
+    }
+    try {
+      await this.client.post('/api/clearportx/debug/pool/grant-visibility', {
+        poolCid,
+        newObserver: party,
+        poolId,
+      }, {
+        headers: { 'X-Party': party },
+      });
+      // DevNet pacing to allow ACS to reflect observer update
+      await this.sleep(3500);
+    } catch {
+      // Ignore; subsequent actions may still succeed if already visible
+    }
+  }
+
+  // Choose pool CID for a poolId: prefer empty pool (0/0) for first add; else pick highest TVL
+  private async resolvePoolCidForIdPreferEmpty(poolId: string): Promise<string | null> {
+    const party = this.currentParty();
+    const pools = await this.fetchPoolsForParty(party);
+    const forId = pools.filter(p => p.poolId === poolId);
+    if (forId.length === 0) return null;
+    const empties = forId.filter(p => parseFloat(p.reserveA) === 0 && parseFloat(p.reserveB) === 0);
+    if (empties.length > 0) return empties[0].poolCid;
+    // pick by TVL proxy (reserveA*reserveB) descending
+    const sorted = [...forId].sort((a, b) => {
+      const ta = parseFloat(a.reserveA) * parseFloat(a.reserveB);
+      const tb = parseFloat(b.reserveA) * parseFloat(b.reserveB);
+      return tb - ta;
+    });
+    return sorted[0].poolCid;
+  }
+
   /**
    * Health check - verify backend is running and synced
    */
@@ -373,23 +436,16 @@ export class BackendApiService {
 
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
-      // Resolve pool by symbols then ensure freshness of canonical tokens
-      let poolCid = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
-
+      const party = this.currentParty();
+      // Prefer resolving by poolId from caller when present; otherwise by symbols -> party pools list
+      let resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
+      let poolCid = await this.resolvePoolCidForIdPreferEmpty(resolvedPoolId);
       if (!poolCid) {
-        throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
+        // fallback to symbols-based resolution across visible pools
+        poolCid = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
+        if (!poolCid) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
       }
-
-      // Fetch pool details to obtain canonical poolId
-      const party = getPartyId() || DEVNET_PARTY;
-      const poolMeta = await this.client.get('/api/clearportx/debug/pool-by-cid', {
-        params: { cid: poolCid },
-        headers: { 'X-Party': party }
-      }).then(r => r.data).catch(() => ({}));
-      const resolvedPoolId = params.poolId || poolMeta?.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
-      // Ensure we use a fresh pool CID whose canonicals are alive
-      const fresh = await this.resolveFreshPoolCidById(resolvedPoolId);
-      if (fresh) poolCid = fresh;
+      await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
 
       const debugBody = {
         poolId: resolvedPoolId,
@@ -491,11 +547,12 @@ export class BackendApiService {
   async addLiquidity(params: AddLiquidityParams): Promise<{ lpTokenCid: string; lpAmount: string }> {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
-      // Get pool CID by pool ID
-      let poolCid = await this.getPoolCidById(params.poolId);
+      const party = this.currentParty();
+      // Resolve pool CID by party pools list (prefer empty)
+      let poolCid = await this.resolvePoolCidForIdPreferEmpty(params.poolId);
 
       if (!poolCid) {
-        // Try to extract symbols from pool data to find the pool
+        // Fallback to symbols scan across visible pools
         const pools = await this.getPools();
         const pool = pools.find(p =>
           p.contractId === params.poolId ||
@@ -503,60 +560,41 @@ export class BackendApiService {
            params.poolId.toUpperCase().includes(p.tokenA.symbol) &&
            params.poolId.toUpperCase().includes(p.tokenB.symbol))
         );
-
-        if (pool) {
-          const fallbackCid = await this.getPoolCidBySymbols(pool.tokenA.symbol, pool.tokenB.symbol);
-          if (!fallbackCid) {
-            throw new Error(`Pool ${params.poolId} not found or not visible`);
-          }
-          const body = {
-            poolId: params.poolId,
-            amountA: params.amountA.toString(),
-            amountB: params.amountB.toString(),
-            minLPTokens: params.minLPTokens.toString(),
-          };
-
-          console.log('Adding liquidity (for-party) with:', body);
-          const res = await this.client.post('/api/debug/add-liquidity-for-party', body);
-          return {
-            lpTokenCid: res.data?.lpTokenCid ?? '',
-            lpAmount: res.data?.lpAmount ?? params.minLPTokens
-          };
-        }
-
-        throw new Error(`Pool ${params.poolId} not found or not visible`);
+        if (!pool) throw new Error(`Pool ${params.poolId} not found or not visible`);
+        const fallbackCid = await this.getPoolCidBySymbols(pool.tokenA.symbol, pool.tokenB.symbol);
+        if (!fallbackCid) throw new Error(`Pool ${params.poolId} not found or not visible`);
+        poolCid = fallbackCid;
       }
 
-      // Ensure freshness of pool CID before proceeding
-      const fresh = await this.resolveFreshPoolCidById(params.poolId);
-      if (fresh) poolCid = fresh;
+      await this.ensurePoolCidVisible(poolCid, params.poolId, party);
 
-      const body = {
+      const byCid = {
+        poolCid,
         poolId: params.poolId,
         amountA: params.amountA.toString(),
         amountB: params.amountB.toString(),
         minLPTokens: params.minLPTokens.toString(),
       };
 
-      console.log('Adding liquidity (for-party) with:', body);
+      console.log('Adding liquidity (by-cid) with:', byCid);
 
-      // Use the robust party-scoped add-liquidity flow with backoff
       try {
-        const res = await this.client.post('/api/debug/add-liquidity-for-party', body);
+        // Prefer CID-driven endpoint
+        const res = await this.client.post('/api/clearportx/debug/add-liquidity-by-cid', byCid);
         return {
           lpTokenCid: res.data?.lpTokenCid ?? '',
           lpAmount: res.data?.lpAmount ?? params.minLPTokens
         };
       } catch (e) {
-        // Fallback to CID-driven endpoint if party-scoped fails
-        const alt = {
-          poolCid,
+        // Fallback to party-scoped flow if CID-driven fails
+        const forParty = {
+          poolId: params.poolId,
           amountA: params.amountA.toString(),
           amountB: params.amountB.toString(),
           minLPTokens: params.minLPTokens.toString(),
         };
-        console.warn('Add-liquidity for-party failed; fallback to by-cid with:', alt);
-        const res2 = await this.client.post('/api/clearportx/debug/add-liquidity-by-cid', alt);
+        console.warn('Add-liquidity by-cid failed; fallback to for-party with:', forParty);
+        const res2 = await this.client.post('/api/debug/add-liquidity-for-party', forParty);
         return {
           lpTokenCid: res2.data?.lpTokenCid ?? '',
           lpAmount: res2.data?.lpAmount ?? params.minLPTokens

@@ -139,9 +139,14 @@ export class BackendApiService {
           return this.client.request(error.config!);
         }
         if (error.response?.status === 409) {
-          console.log('⚠️  Stale CID (409), retrying after 250ms...');
-          await new Promise(resolve => setTimeout(resolve, 250));
-          return this.client.request(error.config!);
+          const cfg: any = error.config || {};
+          cfg.__retry409Count = (cfg.__retry409Count || 0) + 1;
+          if (cfg.__retry409Count <= 2) {
+            console.log(`⚠️  Stale CID (409), retrying attempt ${cfg.__retry409Count} after 250ms...`);
+            await new Promise(resolve => setTimeout(resolve, 250));
+            return this.client.request(cfg);
+          }
+          console.warn('⚠️  Stale CID (409) persisted after retries; surfacing error.');
         }
         throw error;
       }
@@ -321,26 +326,33 @@ export class BackendApiService {
 
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
-      // Get pool CID by matching token symbols
+      // Resolve pool ID from pool CID to align with backend debug flow
       const poolCid = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
 
       if (!poolCid) {
         throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
       }
 
+      // Fetch pool details to obtain canonical poolId
+      const party = getPartyId() || DEVNET_PARTY;
+      const poolMeta = await this.client.get('/api/clearportx/debug/pool-by-cid', {
+        params: { cid: poolCid },
+        headers: { 'X-Party': party }
+      }).then(r => r.data).catch(() => ({}));
+      const resolvedPoolId = params.poolId || poolMeta?.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
+
       const debugBody = {
-        poolId: params.poolId || `${params.inputSymbol}-${params.outputSymbol}`,
-        poolCid: poolCid,
+        poolId: resolvedPoolId,
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
         minOutput: params.minOutput || '0.001',
       };
 
-      console.log('Executing swap with:', debugBody);
+      console.log('Executing swap (debug flow) with:', debugBody);
 
-      // Use the correct clearportx debug endpoint
-      const res = await this.client.post('/api/clearportx/debug/swap-by-cid', debugBody);
+      // Use backend debug flow that mirrors working backend tests
+      const res = await this.client.post('/api/debug/swap-debug', debugBody);
       return {
         receiptCid: res.data?.receiptCid ?? '',
         trader: getPartyId() || '',
@@ -449,7 +461,7 @@ export class BackendApiService {
           };
 
           console.log('Adding liquidity with fallback CID:', debugBody);
-          const res = await this.client.post('/api/clearportx/debug/add-liquidity-by-cid', debugBody);
+          const res = await this.client.post('/api/debug/add-liquidity-by-cid', debugBody);
           return {
             lpTokenCid: res.data?.lpTokenCid ?? '',
             lpAmount: res.data?.lpAmount ?? params.minLPTokens
@@ -470,7 +482,7 @@ export class BackendApiService {
       console.log('Adding liquidity with:', debugBody);
 
       // Use the correct clearportx debug endpoint
-      const res = await this.client.post('/api/clearportx/debug/add-liquidity-by-cid', debugBody);
+      const res = await this.client.post('/api/debug/add-liquidity-by-cid', debugBody);
       return {
         lpTokenCid: res.data?.lpTokenCid ?? '',
         lpAmount: res.data?.lpAmount ?? params.minLPTokens

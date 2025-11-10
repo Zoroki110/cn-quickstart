@@ -242,8 +242,15 @@ export class BackendApiService {
   // Use backend summary of pools visible to a party (includes poolCid and reserves)
   private async fetchPoolsForParty(party: string): Promise<Array<{ poolId: string; poolCid: string; reserveA: string; reserveB: string; symbolA: string; symbolB: string }>> {
     try {
-      const res = await this.client.get('/api/debug/pools-for-party', { params: { party } });
-      const list = Array.isArray(res.data) ? res.data : [];
+      // Prefer POST to match backend behavior; fallback to GET for compatibility
+      let list: any[] = [];
+      try {
+        const resPost = await this.client.post('/api/debug/pools-for-party', { party });
+        list = Array.isArray(resPost.data) ? resPost.data : [];
+      } catch {
+        const resGet = await this.client.get('/api/debug/pools-for-party', { params: { party } });
+        list = Array.isArray(resGet.data) ? resGet.data : [];
+      }
       return list as any[];
     } catch {
       return [];
@@ -497,11 +504,8 @@ export class BackendApiService {
         if (chosen) {
           resolvedPoolId = chosen.poolId;
           poolCid = chosen.poolCid;
-        } else {
-          const poolCidBySymbols = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
-          if (!poolCidBySymbols) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
-          poolCid = poolCidBySymbols;
         }
+        if (!poolCid) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
       }
       poolCid = await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
 
@@ -612,20 +616,7 @@ export class BackendApiService {
       if (!poolCid) {
         // Resolve pool CID by party pools list (prefer empty)
         poolCid = await this.resolvePoolCidForIdPreferEmpty(params.poolId);
-        if (!poolCid) {
-          // Fallback to symbols scan across visible pools
-          const pools = await this.getPools();
-          const pool = pools.find(p =>
-            p.contractId === params.poolId ||
-            (p.tokenA.symbol && p.tokenB.symbol &&
-             params.poolId.toUpperCase().includes(p.tokenA.symbol) &&
-             params.poolId.toUpperCase().includes(p.tokenB.symbol))
-          );
-          if (!pool) throw new Error(`Pool ${params.poolId} not found or not visible`);
-          const fallbackCid = await this.getPoolCidBySymbols(pool.tokenA.symbol, pool.tokenB.symbol);
-          if (!fallbackCid) throw new Error(`Pool ${params.poolId} not found or not visible`);
-          poolCid = fallbackCid;
-        }
+        if (!poolCid) throw new Error(`Pool ${params.poolId} not found or not visible`);
       }
 
       poolCid = await this.ensurePoolCidVisible(poolCid, params.poolId, party);

@@ -293,8 +293,33 @@ export class BackendApiService {
       await this.sleep(3500);
       const updatedCid = grant?.newPoolCid || poolCid;
       return updatedCid;
-    } catch {
-      // Ignore; subsequent actions may still succeed if already visible
+    } catch (e: any) {
+      // If grant endpoint is disabled (e.g., remote without debug profile),
+      // pick a visible CID for the same poolId (or same pair) from party pools.
+      try {
+        const rows = await this.fetchPoolsForParty(party);
+        const sameId = rows.find(r => r.poolId === poolId);
+        if (sameId) return sameId.poolCid;
+        // fallback by token pair inference from poolId (ETH-USDC in id)
+        const m = (poolId || '').toUpperCase().match(/([A-Z]+)-([A-Z]+)/);
+        if (m && m.length >= 3) {
+          const [_, a, b] = m;
+          const byPair = rows.filter(r =>
+            (r.symbolA === a && r.symbolB === b) || (r.symbolA === b && r.symbolB === a)
+          );
+          if (byPair.length > 0) {
+            // choose highest TVL
+            const chosen = [...byPair].sort((x, y) =>
+              (parseFloat(y.reserveA) * parseFloat(y.reserveB)) - (parseFloat(x.reserveA) * parseFloat(x.reserveB))
+            )[0];
+            return chosen.poolCid;
+          }
+        }
+      } catch {
+        // swallow and fall through
+      }
+      // As last resort, return original CID (caller may retry)
+      return poolCid;
     }
     return poolCid;
   }

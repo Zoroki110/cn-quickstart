@@ -566,44 +566,54 @@ export class BackendApiService {
 
       console.log('Executing swap (debug flow) with:', debugBody);
 
-      // Prefer robust CID-driven swap endpoint with built-in recovery/diagnostics
-      let res: any;
-      try {
-        res = await this.request<any>(() => this.client.post('/api/clearportx/debug/swap-by-cid', {
-          poolCid,
-          poolId: resolvedPoolId,
+      // Prefer robust CID-driven swap endpoint with manual 409 handling (avoid inner 409 retry)
+      const postSwap = async (cid: string, id: string) => {
+        return await this.client.post('/api/clearportx/debug/swap-by-cid', {
+          poolCid: cid,
+          poolId: id,
           inputSymbol: params.inputSymbol,
           outputSymbol: params.outputSymbol,
           amountIn: params.inputAmount,
           minOutput: debugBody.minOutput,
-        }));
-      } catch (e: any) {
-        // One recovery attempt: if remote responds with 409 stale/visibility and suggests refresh,
-        // reselect a visible pool CID for the same pair and retry once.
-        const is409 = e?.httpStatus === 409;
-        const staleMsg = (e?.message || '').toString().includes('STALE_OR_NOT_VISIBLE');
-        if (is409 && staleMsg) {
-          const rows2 = await this.fetchPoolsForParty(party);
-          const pairRows = rows2.filter(r =>
-            (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
-            (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
-          );
-          // Prefer a different CID than the one that just failed
-          const alt = pairRows.find(r => r.poolCid !== poolCid) || pairRows[0];
-          if (!alt) throw e;
-          resolvedPoolId = alt.poolId;
-          poolCid = await this.ensurePoolCidVisible(alt.poolCid, resolvedPoolId, party);
-          res = await this.request<any>(() => this.client.post('/api/clearportx/debug/swap-by-cid', {
-            poolCid,
-            poolId: resolvedPoolId,
-            inputSymbol: params.inputSymbol,
-            outputSymbol: params.outputSymbol,
-            amountIn: params.inputAmount,
-            minOutput: debugBody.minOutput,
-          }));
-        } else {
-          throw e;
+        });
+      };
+      let res: any;
+      try {
+        res = await postSwap(poolCid, resolvedPoolId);
+      } catch (err: any) {
+        const ax = err as import('axios').AxiosError<any>;
+        const status = ax.response?.status;
+        const body = ax.response?.data || {};
+        const stale = status === 409 && ((body.error || '') as string).includes('STALE_OR_NOT_VISIBLE');
+        if (!stale) {
+          const domain: DomainError = {
+            code: body.code || 'INTERNAL',
+            message: body.message || body.error || ax.message || 'Internal error',
+            retryAfterMs: body.retry_after_ms,
+            httpStatus: status,
+          };
+          throw domain;
         }
+        // One recovery: reselect a different party-visible CID for the same pair
+        await this.sleep(typeof body.retry_after_ms === 'number' ? body.retry_after_ms : 2200);
+        const rows2 = await this.fetchPoolsForParty(party);
+        const pairRows = rows2.filter(r =>
+          (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
+          (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
+        );
+        const alt = pairRows.find(r => r.poolCid !== poolCid) || pairRows[0];
+        if (!alt) {
+          const domain: DomainError = {
+            code: 'STALE_OR_NOT_VISIBLE',
+            message: body.error || 'STALE_OR_NOT_VISIBLE',
+            retryAfterMs: body.retry_after_ms,
+            httpStatus: 409,
+          };
+          throw domain;
+        }
+        resolvedPoolId = alt.poolId;
+        const visibleAlt = await this.ensurePoolCidVisible(alt.poolCid, resolvedPoolId, party);
+        res = await postSwap(visibleAlt, resolvedPoolId);
       }
       return {
         receiptCid: res?.receiptCid ?? '',

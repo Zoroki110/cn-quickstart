@@ -158,6 +158,50 @@ export class BackendApiService {
     return !!token && token !== 'devnet-mock-token';
   }
 
+  // Resolve a fresh pool CID for a given poolId by choosing a pool whose canonical token CIDs are alive for poolParty
+  private async resolveFreshPoolCidById(poolId: string): Promise<string | null> {
+    try {
+      const appParty = getPartyId() || DEVNET_PARTY;
+      // Resolve poolParty from poolId
+      const parties = await this.client.post('/api/debug/pool-parties', { poolId }).then(r => r.data?.parties).catch(() => null);
+      const poolParty = parties?.poolParty;
+      if (!poolParty) return null;
+      // Fetch all pools visible to appParty
+      const cidsRes = await this.client.get('/api/clearportx/debug/party-acs', {
+        params: { template: 'AMM.Pool.Pool' },
+        headers: { 'X-Party': appParty },
+      });
+      const poolCids: string[] = cidsRes.data?.cids || [];
+      // Fetch poolParty tokens once
+      const poolPartyTokensRes = await this.client.get('/api/clearportx/debug/party-acs', {
+        params: { template: 'Token.Token.Token' },
+        headers: { 'X-Party': poolParty },
+      }).catch(() => null);
+      const poolPartyTokenCidSet: Set<string> =
+        new Set<string>((poolPartyTokensRes?.data?.cids as string[] | undefined) || []);
+      for (const cid of poolCids) {
+        try {
+          const meta = await this.client.get('/api/clearportx/debug/pool-by-cid', {
+            params: { cid },
+            headers: { 'X-Party': appParty },
+          }).then(r => r.data);
+          if (!meta?.success) continue;
+          if (meta.poolId !== poolId) continue;
+          const ca = meta.tokenACid as string | null;
+          const cb = meta.tokenBCid as string | null;
+          if (ca && cb && poolPartyTokenCidSet.has(ca) && poolPartyTokenCidSet.has(cb)) {
+            return cid;
+          }
+        } catch {
+          // ignore and continue
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Health check - verify backend is running and synced
    */
@@ -326,8 +370,8 @@ export class BackendApiService {
 
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
-      // Resolve pool ID from pool CID to align with backend debug flow
-      const poolCid = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
+      // Resolve pool by symbols then ensure freshness of canonical tokens
+      let poolCid = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
 
       if (!poolCid) {
         throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
@@ -340,6 +384,9 @@ export class BackendApiService {
         headers: { 'X-Party': party }
       }).then(r => r.data).catch(() => ({}));
       const resolvedPoolId = params.poolId || poolMeta?.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
+      // Ensure we use a fresh pool CID whose canonicals are alive
+      const fresh = await this.resolveFreshPoolCidById(resolvedPoolId);
+      if (fresh) poolCid = fresh;
 
       const debugBody = {
         poolId: resolvedPoolId,
@@ -442,7 +489,7 @@ export class BackendApiService {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       // Get pool CID by pool ID
-      const poolCid = await this.getPoolCidById(params.poolId);
+      let poolCid = await this.getPoolCidById(params.poolId);
 
       if (!poolCid) {
         // Try to extract symbols from pool data to find the pool
@@ -477,6 +524,10 @@ export class BackendApiService {
         throw new Error(`Pool ${params.poolId} not found or not visible`);
       }
 
+      // Ensure freshness of pool CID before proceeding
+      const fresh = await this.resolveFreshPoolCidById(params.poolId);
+      if (fresh) poolCid = fresh;
+
       const body = {
         poolId: params.poolId,
         amountA: params.amountA.toString(),
@@ -487,11 +538,27 @@ export class BackendApiService {
       console.log('Adding liquidity (for-party) with:', body);
 
       // Use the robust party-scoped add-liquidity flow with backoff
-      const res = await this.client.post('/api/debug/add-liquidity-for-party', body);
-      return {
-        lpTokenCid: res.data?.lpTokenCid ?? '',
-        lpAmount: res.data?.lpAmount ?? params.minLPTokens
-      };
+      try {
+        const res = await this.client.post('/api/debug/add-liquidity-for-party', body);
+        return {
+          lpTokenCid: res.data?.lpTokenCid ?? '',
+          lpAmount: res.data?.lpAmount ?? params.minLPTokens
+        };
+      } catch (e) {
+        // Fallback to CID-driven endpoint if party-scoped fails
+        const alt = {
+          poolCid,
+          amountA: params.amountA.toString(),
+          amountB: params.amountB.toString(),
+          minLPTokens: params.minLPTokens.toString(),
+        };
+        console.warn('Add-liquidity for-party failed; fallback to by-cid with:', alt);
+        const res2 = await this.client.post('/api/clearportx/debug/add-liquidity-by-cid', alt);
+        return {
+          lpTokenCid: res2.data?.lpTokenCid ?? '',
+          lpAmount: res2.data?.lpAmount ?? params.minLPTokens
+        };
+      }
     }
 
     const res = await this.client.post('/api/liquidity/add', params);

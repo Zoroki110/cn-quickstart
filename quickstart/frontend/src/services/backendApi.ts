@@ -351,8 +351,15 @@ export class BackendApiService {
 
       console.log('Executing swap (debug flow) with:', debugBody);
 
-      // Use backend debug flow that mirrors working backend tests
-      const res = await this.client.post('/api/debug/swap-debug', debugBody);
+      // Prefer robust CID-driven swap endpoint with built-in recovery/diagnostics
+      const res = await this.client.post('/api/clearportx/debug/swap-by-cid', {
+        poolCid,
+        poolId: resolvedPoolId,
+        inputSymbol: params.inputSymbol,
+        outputSymbol: params.outputSymbol,
+        amountIn: params.inputAmount,
+        minOutput: params.minOutput || '0.001',
+      });
       return {
         receiptCid: res.data?.receiptCid ?? '',
         trader: getPartyId() || '',
@@ -452,16 +459,15 @@ export class BackendApiService {
           if (!fallbackCid) {
             throw new Error(`Pool ${params.poolId} not found or not visible`);
           }
-          const debugBody = {
+          const body = {
             poolId: params.poolId,
-            poolCid: fallbackCid,
             amountA: params.amountA.toString(),
             amountB: params.amountB.toString(),
             minLPTokens: params.minLPTokens.toString(),
           };
 
-          console.log('Adding liquidity with fallback CID:', debugBody);
-          const res = await this.client.post('/api/debug/add-liquidity-by-cid', debugBody);
+          console.log('Adding liquidity (for-party) with:', body);
+          const res = await this.client.post('/api/debug/add-liquidity-for-party', body);
           return {
             lpTokenCid: res.data?.lpTokenCid ?? '',
             lpAmount: res.data?.lpAmount ?? params.minLPTokens
@@ -471,18 +477,17 @@ export class BackendApiService {
         throw new Error(`Pool ${params.poolId} not found or not visible`);
       }
 
-      const debugBody = {
+      const body = {
         poolId: params.poolId,
-        poolCid: poolCid,
         amountA: params.amountA.toString(),
         amountB: params.amountB.toString(),
         minLPTokens: params.minLPTokens.toString(),
       };
 
-      console.log('Adding liquidity with:', debugBody);
+      console.log('Adding liquidity (for-party) with:', body);
 
-      // Use the correct clearportx debug endpoint
-      const res = await this.client.post('/api/debug/add-liquidity-by-cid', debugBody);
+      // Use the robust party-scoped add-liquidity flow with backoff
+      const res = await this.client.post('/api/debug/add-liquidity-for-party', body);
       return {
         lpTokenCid: res.data?.lpTokenCid ?? '',
         lpAmount: res.data?.lpAmount ?? params.minLPTokens

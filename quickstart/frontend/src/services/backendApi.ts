@@ -290,46 +290,50 @@ export class BackendApiService {
   }
 
   /**
-   * Get all active pools with liquidity
-   * Filters to show only top 3 unique pools by TVL (Total Value Locked)
+   * Get all active pools (party-scoped if possible; fallback to global)
+   * Returns unique pools by token pair, sorted by TVL proxy
    */
   async getPools(): Promise<PoolInfo[]> {
     try {
-      const res = await this.client.get('/api/pools');
-      
-      // Ensure res.data is an array
-      const poolData = Array.isArray(res.data) ? res.data : [];
-      
-      const allPools = poolData.map((data: any) => this.mapPool(data));
-
-    // Filter pools with significant liquidity (reserveA > 0 and reserveB > 0)
-    const activePools = allPools.filter((pool: PoolInfo) =>
-      pool.reserveA > 0 && pool.reserveB > 0
-    );
-
-    // Remove duplicates based on token pair (keep first occurrence of each pair)
-    const uniquePools: PoolInfo[] = [];
-    const seenPairs = new Set<string>();
-
-    for (const pool of activePools) {
-      // Create a normalized pair key (alphabetically sorted)
-      const pairKey = [pool.tokenA.symbol, pool.tokenB.symbol].sort().join('/');
-
-      if (!seenPairs.has(pairKey)) {
-        seenPairs.add(pairKey);
-        uniquePools.push(pool);
+      // Prefer party-scoped pools for freshness and correct CID instance
+      const party = this.currentParty();
+      const partyRows = await this.fetchPoolsForParty(party);
+      let allPools: PoolInfo[];
+      if (partyRows.length > 0) {
+        allPools = partyRows.map((row: any) => this.mapPartyPool(row));
+      } else {
+        // Fallback to global pools endpoint for public browsing
+        const res = await this.client.get('/api/pools');
+        const poolData = Array.isArray(res.data) ? res.data : [];
+        allPools = poolData.map((data: any) => this.mapPool(data));
       }
-    }
 
-    // Sort by TVL (Total Value Locked) - using reserveA * reserveB as proxy
-    const sortedPools = uniquePools.sort((a: PoolInfo, b: PoolInfo) => {
-      const tvlA = a.reserveA * a.reserveB;
-      const tvlB = b.reserveA * b.reserveB;
-      return tvlB - tvlA; // Descending order
-    });
+      // Filter pools with liquidity (reserveA > 0 and reserveB > 0)
+      const activePools = allPools.filter((pool: PoolInfo) =>
+        pool.reserveA > 0 && pool.reserveB > 0
+      );
 
-    // Return all unique pools (sorted by TVL)
-    return sortedPools;
+      // Remove duplicates by token pair
+      const uniquePools: PoolInfo[] = [];
+      const seenPairs = new Set<string>();
+
+      for (const pool of activePools) {
+        const pairKey = [pool.tokenA.symbol, pool.tokenB.symbol].sort().join('/');
+
+        if (!seenPairs.has(pairKey)) {
+          seenPairs.add(pairKey);
+          uniquePools.push(pool);
+        }
+      }
+
+      // Sort by TVL proxy
+      const sortedPools = uniquePools.sort((a: PoolInfo, b: PoolInfo) => {
+        const tvlA = a.reserveA * a.reserveB;
+        const tvlB = b.reserveA * b.reserveB;
+        return tvlB - tvlA;
+      });
+
+      return sortedPools;
     } catch (error) {
       console.error('Error loading pools:', error);
       return [];
@@ -437,14 +441,32 @@ export class BackendApiService {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       const party = this.currentParty();
-      // Prefer resolving by poolId from caller when present; otherwise by symbols -> party pools list
-      let resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
-      let poolCid = await this.resolvePoolCidForIdPreferEmpty(resolvedPoolId);
-      if (!poolCid) {
-        // fallback to symbols-based resolution across visible pools
-        poolCid = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
-        if (!poolCid) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
+      // Resolve a pool with reserves for the token pair
+      const rows = await this.fetchPoolsForParty(party);
+      const byPair = rows.filter(r =>
+        (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
+        (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
+      );
+      // choose highest TVL among non-empty pools
+      const withReserves = byPair.filter(r => parseFloat(r.reserveA) > 0 && parseFloat(r.reserveB) > 0);
+      let chosen = withReserves.sort((a, b) => (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB)))[0];
+      // fallback to any party-visible poolCid by symbols if needed
+      if (!chosen) {
+        const poolCidBySymbols = await this.getPoolCidBySymbols(params.inputSymbol, params.outputSymbol);
+        if (!poolCidBySymbols) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
+        // best effort to infer poolId via pool-by-cid; if fails, use synthetic
+        let inferredPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
+        try {
+          const meta = await this.client.get('/api/clearportx/debug/pool-by-cid', {
+            params: { cid: poolCidBySymbols },
+            headers: { 'X-Party': party }
+          }).then(r => r.data);
+          if (meta?.success && meta.poolId) inferredPoolId = meta.poolId;
+        } catch { /* ignore */ }
+        chosen = { poolId: inferredPoolId, poolCid: poolCidBySymbols, symbolA: params.inputSymbol, symbolB: params.outputSymbol, reserveA: '0', reserveB: '0' } as any;
       }
+      const resolvedPoolId = params.poolId || chosen.poolId;
+      const poolCid = chosen.poolCid;
       await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
 
       const debugBody = {
@@ -706,6 +728,37 @@ export class BackendApiService {
     };
   }
 
+  // Map party-scoped row to PoolInfo (row contains poolId, poolCid, symbolA/B, reserveA/B)
+  private mapPartyPool(row: any): PoolInfo {
+    const tokenA = { symbol: row.symbolA, name: row.symbolA, decimals: 10 };
+    const tokenB = { symbol: row.symbolB, name: row.symbolB, decimals: 10 };
+    return {
+      // contractId keeps poolId for routing consistency in UI
+      contractId: row.poolId || '',
+      tokenA: {
+        symbol: tokenA.symbol,
+        name: tokenA.name,
+        decimals: tokenA.decimals,
+        balance: 0,
+        contractId: '',
+        logoUrl: this.getTokenLogo(tokenA.symbol),
+      },
+      tokenB: {
+        symbol: tokenB.symbol,
+        name: tokenB.name,
+        decimals: tokenB.decimals,
+        balance: 0,
+        contractId: '',
+        logoUrl: this.getTokenLogo(tokenB.symbol),
+      },
+      reserveA: parseFloat(row.reserveA || '0'),
+      reserveB: parseFloat(row.reserveB || '0'),
+      totalLiquidity: 0, // not provided; optional
+      feeRate: 0.003,
+      apr: 0,
+      volume24h: 0,
+    };
+  }
   // Helper: Map backend token DTO to frontend TokenInfo
   private mapToken(data: any): TokenInfo {
     return {

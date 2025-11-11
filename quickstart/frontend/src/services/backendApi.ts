@@ -239,7 +239,7 @@ export class BackendApiService {
         for (const row of sameId) {
           try {
             const ti = await this.request<any>(() =>
-              this.client.get('/api/clearportx/debug/pool/template-id', {
+              this.client.get('/api/debug/pool/template-id', {
                 params: { cid: row.poolCid }, headers: { 'X-Party': party }
               })
             );

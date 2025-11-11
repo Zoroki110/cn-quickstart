@@ -211,6 +211,17 @@ export class BackendApiService {
     return getPartyId() || DEVNET_PARTY;
   }
 
+  // Always resolve a fresh, party-visible CID for a poolId (server guarantees visibility)
+  private async resolveAndGrant(poolId: string, party: string): Promise<{ poolCid: string; poolId: string }> {
+    const res = await this.request<any>(() =>
+      this.client.post('/api/debug/resolve-and-grant', { poolId, party }, { headers: { 'X-Party': party } })
+    );
+    if (!res?.success || !res?.poolCid) {
+      throw new Error(`Resolver failed for ${poolId}`);
+    }
+    return { poolCid: res.poolCid as string, poolId: res.poolId as string };
+  }
+
   // Centralized request wrapper with single paced 409 retry
   private async request<T>(call: () => Promise<{ data: T }>): Promise<T> {
     try {
@@ -496,144 +507,20 @@ export class BackendApiService {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       const party = this.currentParty();
-      // Prefer party-visible pools only; avoid directory-latest to reduce 409s
-      let resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
-      const rows = await this.fetchPoolsForParty(party);
-      const byPair = rows.filter(r =>
-        (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
-        (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
-      );
-      const withReserves = byPair.filter(r => parseFloat(r.reserveA) > 0 && parseFloat(r.reserveB) > 0);
-      const chosen = withReserves.sort((a, b) => (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB)))[0];
-      let poolCid: string | null = null;
-      if (chosen) {
-        resolvedPoolId = chosen.poolId;
-        poolCid = chosen.poolCid;
-      }
-      if (!poolCid) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
-      poolCid = await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
-
-      // Compute a conservative minOutput on the chosen pool to avoid slippage rejections
-      let minOut = params.minOutput;
-      try {
-        if (chosen) {
-          const rin = parseFloat((params.inputSymbol === chosen.symbolA ? chosen.reserveA : chosen.reserveB) as any);
-          const rout = parseFloat((params.inputSymbol === chosen.symbolA ? chosen.reserveB : chosen.reserveA) as any);
-          const input = parseFloat(params.inputAmount);
-          const totalFeeRate = 0.003;           // feeBps = 30
-          const protocolFee = input * totalFeeRate * 0.25;
-          const afterProtocol = input - protocolFee;
-          const feeMul = 1 - totalFeeRate;      // 0.997 pool fee multiplier
-          const ainFee = afterProtocol * feeMul;
-          const denom = rin + ainFee;
-          const aout = (ainFee * rout) / denom;
-          const capped = Math.max(0, aout * 0.99);
-          const userMin = parseFloat('0'); // override to zero; rely on conservative cap
-          const finalMin = Math.min(isFinite(userMin) ? userMin : capped, capped);
-          minOut = finalMin.toFixed(10);
-        }
-      } catch {
-        // leave minOut as provided
-      }
-
-      const debugBody = {
+      const resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
+      // Always ask server for a fresh, party-visible CID
+      const { poolCid } = await this.resolveAndGrant(resolvedPoolId, party);
+      const body = {
+        poolCid,
         poolId: resolvedPoolId,
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
-        minOutput: minOut || '0.001',
+        minOutput: '0', // lenient floor until quotes bind to this exact CID
       };
-
-      console.log('Executing swap (debug flow) with:', debugBody);
-
-      // Prefer robust CID-driven swap endpoint with manual 409 handling (avoid inner 409 retry)
-      const postSwap = async (cid: string, id: string) => {
-        return await this.client.post('/api/clearportx/debug/swap-by-cid', {
-          poolCid: cid,
-          poolId: id,
-          inputSymbol: params.inputSymbol,
-          outputSymbol: params.outputSymbol,
-          amountIn: params.inputAmount,
-          minOutput: debugBody.minOutput,
-        });
-      };
-      let res: any;
-      try {
-        res = await postSwap(poolCid, resolvedPoolId);
-      } catch (err: any) {
-        const ax = err as import('axios').AxiosError<any>;
-        const status = ax.response?.status;
-        const body = ax.response?.data || {};
-        const stale = status === 409 && ((body.error || '') as string).includes('STALE_OR_NOT_VISIBLE');
-        if (!stale) {
-          const domain: DomainError = {
-            code: body.code || 'INTERNAL',
-            message: body.message || body.error || ax.message || 'Internal error',
-            retryAfterMs: body.retry_after_ms,
-            httpStatus: status,
-          };
-          throw domain;
-        }
-        // One recovery: reselect a different party-visible CID for the same pair
-        await this.sleep(typeof body.retry_after_ms === 'number' ? body.retry_after_ms : 2200);
-        const rows2 = await this.fetchPoolsForParty(party);
-        let pairRows = rows2.filter(r =>
-          (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
-          (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
-        );
-        // Sort by TVL desc to prefer more liquid instance
-        pairRows = [...pairRows].sort((a, b) =>
-          (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB))
-        );
-        // Build candidate CID list: party-visible only
-        const candidates: Array<{ cid: string; id: string }> = [];
-        for (const r of pairRows) {
-          if (r.poolCid !== poolCid) candidates.push({ cid: r.poolCid, id: r.poolId });
-        }
-        if (candidates.length === 0) {
-          const domain: DomainError = {
-            code: 'STALE_OR_NOT_VISIBLE',
-            message: body.error || 'STALE_OR_NOT_VISIBLE',
-            retryAfterMs: body.retry_after_ms,
-            httpStatus: 409,
-          };
-          throw domain;
-        }
-        // Try up to 3 candidates
-        let lastErr: any = null;
-        for (const cand of candidates.slice(0, 3)) {
-          try {
-            resolvedPoolId = cand.id;
-            const visibleAlt = await this.ensurePoolCidVisible(cand.cid, resolvedPoolId, party);
-            await this.sleep(3500);
-            res = await postSwap(visibleAlt, resolvedPoolId);
-            lastErr = null;
-            break;
-          } catch (inner: any) {
-            lastErr = inner;
-            continue;
-          }
-        }
-        if (!res) {
-          if (lastErr && lastErr.response?.data) {
-            const b = lastErr.response.data;
-            const domain: DomainError = {
-              code: 'STALE_OR_NOT_VISIBLE',
-              message: b.message || b.error || 'STALE_OR_NOT_VISIBLE',
-              retryAfterMs: b.retry_after_ms,
-              httpStatus: 409,
-            };
-            throw domain;
-          }
-          const domain: DomainError = {
-            code: 'STALE_OR_NOT_VISIBLE',
-            message: 'STALE_OR_NOT_VISIBLE',
-            retryAfterMs: 2200,
-            httpStatus: 409,
-          };
-          throw domain;
-        }
-      }
+      const res = await this.request<any>(() =>
+        this.client.post('/api/clearportx/debug/swap-by-cid', body, { headers: { 'X-Party': party } })
+      );
       return {
         receiptCid: res?.receiptCid ?? '',
         trader: getPartyId() || '',
@@ -716,16 +603,8 @@ export class BackendApiService {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       const party = this.currentParty();
-      // Prefer directory mapping first
-      let poolCid = await this.getDirectoryLatestCid(params.poolId);
-
-      if (!poolCid) {
-        // Resolve pool CID by party pools list (prefer empty)
-        poolCid = await this.resolvePoolCidForIdPreferEmpty(params.poolId);
-        if (!poolCid) throw new Error(`Pool ${params.poolId} not found or not visible`);
-      }
-
-      poolCid = await this.ensurePoolCidVisible(poolCid, params.poolId, party);
+      // Get a fresh, party-visible CID from server
+      const { poolCid } = await this.resolveAndGrant(params.poolId, party);
 
       const byCid = {
         poolCid,

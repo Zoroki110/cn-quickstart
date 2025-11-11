@@ -515,24 +515,40 @@ export class BackendApiService {
       const resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
       // Always ask server for a fresh, party-visible CID
       const { poolCid } = await this.resolveAndGrant(resolvedPoolId, party);
+
+      // Snapshot balances before swap for accurate delta measurement
+      const beforeTokens = await this.getTokens(party);
+      const beforeMap = new Map<string, number>(beforeTokens.map(t => [t.symbol, t.balance || 0]));
+
+      // Respect caller-provided minOutput (slippage) when available
+      const minOutputStr = params.minOutput ?? '0';
       const body = {
         poolCid,
         poolId: resolvedPoolId,
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
-        minOutput: '0', // lenient floor until quotes bind to this exact CID
+        minOutput: minOutputStr,
       };
       const res = await this.request<any>(() =>
         this.client.post('/api/clearportx/debug/swap-by-cid', body, { headers: { 'X-Party': party } })
       );
+
+      // Give ACS a brief moment to reflect state, then compute delta
+      await this.sleep(1800);
+      const afterTokens = await this.getTokens(party);
+      const afterMap = new Map<string, number>(afterTokens.map(t => [t.symbol, t.balance || 0]));
+      const outBefore = beforeMap.get(params.outputSymbol) || 0;
+      const outAfter = afterMap.get(params.outputSymbol) || 0;
+      const received = Math.max(0, outAfter - outBefore);
+
       return {
         receiptCid: res?.receiptCid ?? '',
         trader: getPartyId() || '',
         inputSymbol: params.inputSymbol,
         outputSymbol: params.outputSymbol,
         amountIn: params.inputAmount,
-        amountOut: res?.amountOut ?? '0',
+        amountOut: received.toString(),
         timestamp: new Date().toISOString(),
       };
     }

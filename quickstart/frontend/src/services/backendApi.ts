@@ -403,7 +403,52 @@ export class BackendApiService {
       const partyRows = await this.fetchPoolsForParty(party);
       let allPools: PoolInfo[];
       if (partyRows.length > 0) {
-        allPools = partyRows.map((row: any) => this.mapPartyPool(row));
+        // Group by token pair and select the preferred package pool if present; else highest TVL
+        const preferredPkgPrefix =
+          (process.env.REACT_APP_AMM_POOL_PACKAGE_ID || '').trim() ||
+          (BUILD_INFO?.features as any)?.ammPackageId ||
+          '';
+        // Build groups
+        const groups = new Map<string, any[]>();
+        for (const row of partyRows) {
+          const key = [String(row.symbolA), String(row.symbolB)].sort().join('/');
+          const arr = groups.get(key) || [];
+          arr.push(row);
+          groups.set(key, arr);
+        }
+        const chosenRows: any[] = [];
+        for (const entry of Array.from(groups.entries())) {
+          const rows = entry[1];
+          // Try to find a row with preferred package
+          let picked: any | null = null;
+          if (preferredPkgPrefix) {
+            for (const r of rows) {
+              try {
+                const ti = await this.request<any>(() =>
+                  this.client.get('/api/debug/pool/template-id', {
+                    params: { cid: r.poolCid }, headers: { 'X-Party': party }
+                  })
+                );
+                const pkg: string = ti?.packageId || '';
+                if (pkg.toLowerCase().startsWith(String(preferredPkgPrefix).toLowerCase())) {
+                  picked = r;
+                  break;
+                }
+              } catch {
+                // ignore and continue
+              }
+            }
+          }
+          if (!picked) {
+            // Fallback to highest TVL (reserveA * reserveB)
+            picked = [...rows].sort((a, b) =>
+              (parseFloat(b.reserveA) * parseFloat(b.reserveB)) -
+              (parseFloat(a.reserveA) * parseFloat(a.reserveB))
+            )[0];
+          }
+          if (picked) chosenRows.push(picked);
+        }
+        allPools = chosenRows.map((row: any) => this.mapPartyPool(row));
       } else {
         // Fallback to global pools endpoint for public browsing
         const res = await this.client.get('/api/pools');

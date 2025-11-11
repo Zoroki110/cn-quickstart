@@ -597,12 +597,26 @@ export class BackendApiService {
         // One recovery: reselect a different party-visible CID for the same pair
         await this.sleep(typeof body.retry_after_ms === 'number' ? body.retry_after_ms : 2200);
         const rows2 = await this.fetchPoolsForParty(party);
-        const pairRows = rows2.filter(r =>
+        let pairRows = rows2.filter(r =>
           (r.symbolA === params.inputSymbol && r.symbolB === params.outputSymbol) ||
           (r.symbolA === params.outputSymbol && r.symbolB === params.inputSymbol)
         );
-        const alt = pairRows.find(r => r.poolCid !== poolCid) || pairRows[0];
-        if (!alt) {
+        // Sort by TVL desc to prefer more liquid instance
+        pairRows = [...pairRows].sort((a, b) =>
+          (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB))
+        );
+        // Build candidate CID list: directory latest for each poolId first, then visible party CIDs
+        const candidates: Array<{ cid: string; id: string }> = [];
+        for (const r of pairRows) {
+          const latest = await this.getDirectoryLatestCid(r.poolId);
+          if (latest && latest !== poolCid) {
+            candidates.push({ cid: latest, id: r.poolId });
+          }
+        }
+        for (const r of pairRows) {
+          if (r.poolCid !== poolCid) candidates.push({ cid: r.poolCid, id: r.poolId });
+        }
+        if (candidates.length === 0) {
           const domain: DomainError = {
             code: 'STALE_OR_NOT_VISIBLE',
             message: body.error || 'STALE_OR_NOT_VISIBLE',
@@ -611,14 +625,40 @@ export class BackendApiService {
           };
           throw domain;
         }
-        resolvedPoolId = alt.poolId;
-        // Prefer directory mapping for freshest CID of this poolId if available
-        let freshestCid = await this.getDirectoryLatestCid(resolvedPoolId);
-        if (!freshestCid) freshestCid = alt.poolCid;
-        const visibleAlt = await this.ensurePoolCidVisible(freshestCid, resolvedPoolId, party);
-        // Read-your-write / ACS pacing
-        await this.sleep(3500);
-        res = await postSwap(visibleAlt, resolvedPoolId);
+        // Try up to 3 candidates
+        let lastErr: any = null;
+        for (const cand of candidates.slice(0, 3)) {
+          try {
+            resolvedPoolId = cand.id;
+            const visibleAlt = await this.ensurePoolCidVisible(cand.cid, resolvedPoolId, party);
+            await this.sleep(3500);
+            res = await postSwap(visibleAlt, resolvedPoolId);
+            lastErr = null;
+            break;
+          } catch (inner: any) {
+            lastErr = inner;
+            continue;
+          }
+        }
+        if (!res) {
+          if (lastErr && lastErr.response?.data) {
+            const b = lastErr.response.data;
+            const domain: DomainError = {
+              code: 'STALE_OR_NOT_VISIBLE',
+              message: b.message || b.error || 'STALE_OR_NOT_VISIBLE',
+              retryAfterMs: b.retry_after_ms,
+              httpStatus: 409,
+            };
+            throw domain;
+          }
+          const domain: DomainError = {
+            code: 'STALE_OR_NOT_VISIBLE',
+            message: 'STALE_OR_NOT_VISIBLE',
+            retryAfterMs: 2200,
+            httpStatus: 409,
+          };
+          throw domain;
+        }
       }
       return {
         receiptCid: res?.receiptCid ?? '',

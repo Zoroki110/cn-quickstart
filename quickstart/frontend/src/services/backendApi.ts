@@ -534,13 +534,21 @@ export class BackendApiService {
         this.client.post('/api/clearportx/debug/swap-by-cid', body, { headers: { 'X-Party': party } })
       );
 
-      // Give ACS a brief moment to reflect state, then compute delta
-      await this.sleep(1800);
-      const afterTokens = await this.getTokens(party);
-      const afterMap = new Map<string, number>(afterTokens.map(t => [t.symbol, t.balance || 0]));
-      const outBefore = beforeMap.get(params.outputSymbol) || 0;
-      const outAfter = afterMap.get(params.outputSymbol) || 0;
-      const received = Math.max(0, outAfter - outBefore);
+      // Poll for ACS propagation and compute balance delta for output symbol
+      const outSym = (params.outputSymbol || '').toUpperCase();
+      const outBefore = beforeMap.get(outSym) ?? beforeMap.get(params.outputSymbol) ?? 0;
+      let received = 0;
+      for (let i = 0; i < 8; i++) { // ~ up to ~4.8s (8 * 600ms)
+        await this.sleep(600);
+        const afterTokens = await this.getTokens(party);
+        const afterMap = new Map<string, number>(afterTokens.map(t => [t.symbol.toUpperCase(), t.balance || 0]));
+        const outAfter = afterMap.get(outSym) ?? 0;
+        const delta = outAfter - outBefore;
+        if (delta > 0) {
+          received = delta;
+          break;
+        }
+      }
 
       return {
         receiptCid: res?.receiptCid ?? '',
@@ -698,42 +706,45 @@ export class BackendApiService {
     outputSymbol: string;
     inputAmount: string;
   }): Promise<SwapQuote> {
-    // For now, we calculate client-side using pool reserves
-    // Backend doesn't have a quote endpoint yet
-    const pools = await this.getPools();
-    const pool = pools.find(p =>
-      (p.tokenA.symbol === params.inputSymbol && p.tokenB.symbol === params.outputSymbol) ||
-      (p.tokenA.symbol === params.outputSymbol && p.tokenB.symbol === params.inputSymbol)
+    // Bind the quote to the exact resolver-selected pool CID to avoid mismatch
+    const party = this.currentParty();
+    const resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
+    const { poolCid } = await this.resolveAndGrant(resolvedPoolId, party);
+    const poolMeta = await this.request<any>(() =>
+      this.client.get('/api/clearportx/debug/pool-by-cid', {
+        params: { cid: poolCid }, headers: { 'X-Party': party }
+      })
     );
-
-    if (!pool) {
-      throw new Error('Pool not found');
+    if (!poolMeta?.success) {
+      throw new Error('Pool not visible for party');
     }
-
+    const symbolA: string = poolMeta.symbolA;
+    const symbolB: string = poolMeta.symbolB;
+    const reserveA = parseFloat(poolMeta.reserveA);
+    const reserveB = parseFloat(poolMeta.reserveB);
+    const isAtoB = (params.inputSymbol === symbolA && params.outputSymbol === symbolB);
+    const isBtoA = (params.inputSymbol === symbolB && params.outputSymbol === symbolA);
+    if (!isAtoB && !isBtoA) {
+      throw new Error('Symbol mismatch for selected pool');
+    }
     const inputAmount = parseFloat(params.inputAmount);
-    const isAtoB = pool.tokenA.symbol === params.inputSymbol;
-    const reserveIn = isAtoB ? pool.reserveA : pool.reserveB;
-    const reserveOut = isAtoB ? pool.reserveB : pool.reserveA;
-
-    // Constant product formula: k = x * y
-    // outputAmount = (inputAfterFee * reserveOut) / (reserveIn + inputAfterFee)
-    const feeBps = pool.feeRate * 10000; // 0.003 → 30 bps
+    const reserveIn = isAtoB ? reserveB /* USDC if A=ETH,B=USDC and input=USDC */ : reserveA;
+    const reserveOut = isAtoB ? reserveA : reserveB;
+    const feeRate = 0.003; // 0.30%
+    const feeBps = feeRate * 10000;
     const feeAmount = (inputAmount * feeBps) / 10000;
     const inputAfterFee = inputAmount - feeAmount;
     const outputAmount = (inputAfterFee * reserveOut) / (reserveIn + inputAfterFee);
-
-    // Price impact
     const priceBefore = reserveOut / reserveIn;
     const priceAfter = (reserveOut - outputAmount) / (reserveIn + inputAmount);
     const priceImpact = Math.abs((priceAfter - priceBefore) / priceBefore) * 100;
-
     return {
-      inputAmount: inputAmount,        // number (parsed above)
-      outputAmount: outputAmount,       // number (calculated)
-      priceImpact: priceImpact,         // number (percentage)
-      fee: feeAmount,                   // number
-      route: [params.inputSymbol, params.outputSymbol],  // string[]
-      slippage: 0.5,                    // default 0.5%
+      inputAmount,
+      outputAmount,
+      priceImpact,
+      fee: feeAmount,
+      route: [params.inputSymbol, params.outputSymbol],
+      slippage: 0.5,
     };
   }
 

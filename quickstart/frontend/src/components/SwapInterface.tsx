@@ -136,11 +136,23 @@ const SwapInterface: React.FC = () => {
 
       toast.success(`Swap successful! Received ${parseFloat(response.amountOut).toFixed(4)} ${response.outputSymbol}`);
 
-      // Wait 2 seconds for PQS to synchronize before reloading tokens
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Recharger les tokens pour mettre à jour les balances (current acting party)
-      const updatedTokens = await backendApi.getTokens(backendApi.getCurrentParty());
+      // Poll for ACS propagation and refresh balances (current acting party)
+      const party = backendApi.getCurrentParty();
+      let updatedTokens = await backendApi.getTokens(party);
+      for (let i = 0; i < 6; i++) { // up to ~3.6s
+        await new Promise(resolve => setTimeout(resolve, 600));
+        const next = await backendApi.getTokens(party);
+        // If either token balance moved, accept
+        const fromBal = next.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
+        const toBal = next.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;
+        const prevFromBal = updatedTokens.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
+        const prevToBal = updatedTokens.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;
+        if (fromBal !== prevFromBal || toBal !== prevToBal) {
+          updatedTokens = next;
+          break;
+        }
+        updatedTokens = next;
+      }
       setTokens(updatedTokens);
       useContractStore.getState().setTokens(updatedTokens);
 

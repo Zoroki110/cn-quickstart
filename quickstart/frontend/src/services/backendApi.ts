@@ -728,8 +728,9 @@ export class BackendApiService {
       throw new Error('Symbol mismatch for selected pool');
     }
     const inputAmount = parseFloat(params.inputAmount);
-    const reserveIn = isAtoB ? reserveB /* USDC if A=ETH,B=USDC and input=USDC */ : reserveA;
-    const reserveOut = isAtoB ? reserveA : reserveB;
+    // Choose reserves based on trade direction (input -> output)
+    const reserveIn = isAtoB ? reserveA : reserveB;
+    const reserveOut = isAtoB ? reserveB : reserveA;
     const feeRate = 0.003; // 0.30%
     const feeBps = feeRate * 10000;
     const feeAmount = (inputAmount * feeBps) / 10000;

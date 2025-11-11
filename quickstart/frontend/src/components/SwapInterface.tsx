@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../stores';
 import { useContractStore } from '../stores/useContractStore';
 import { backendApi } from '../services/backendApi';
-import { TokenInfo, SwapQuote } from '../types/canton';
+import { TokenInfo, SwapQuote, PoolInfo } from '../types/canton';
 import TokenSelector from './TokenSelector';
 import SlippageSettings from './SlippageSettings';
 import toast from 'react-hot-toast';
@@ -20,6 +20,15 @@ const SwapInterface: React.FC = () => {
   const [showFromSelector, setShowFromSelector] = useState(false);
   const [showToSelector, setShowToSelector] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [pools, setPools] = useState<PoolInfo[]>([]);
+  const [volume24h, setVolume24h] = useState<number>(0);
+
+  const formatCurrency = (value: number) => {
+    if (!isFinite(value) || value <= 0) return '$0';
+    if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+    if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
+    return `$${value.toFixed(0)}`;
+  };
 
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
@@ -27,6 +36,7 @@ const SwapInterface: React.FC = () => {
       try {
         // 1. Get all active pools to extract available tokens
         const pools = await backendApi.getPools();
+        setPools(pools);
 
         // 2. Extract unique tokens from pools
         const uniqueTokensMap = new Map<string, TokenInfo>();
@@ -63,6 +73,22 @@ const SwapInterface: React.FC = () => {
 
     loadTokens();
   }, []);
+
+  // Compute 24h volume for selected pair from current pools
+  useEffect(() => {
+    if (!selectedTokens.from || !selectedTokens.to || pools.length === 0) {
+      setVolume24h(0);
+      return;
+    }
+    const a = selectedTokens.from.symbol.toUpperCase();
+    const b = selectedTokens.to.symbol.toUpperCase();
+    const match = pools.find(p => {
+      const pa = p.tokenA.symbol.toUpperCase();
+      const pb = p.tokenB.symbol.toUpperCase();
+      return (pa === a && pb === b) || (pa === b && pb === a);
+    });
+    setVolume24h(match?.volume24h || 0);
+  }, [selectedTokens.from, selectedTokens.to, pools]);
 
   // Calculer le quote quand le montant change
   useEffect(() => {
@@ -421,7 +447,9 @@ const SwapInterface: React.FC = () => {
             <div className="text-success-500 mb-1">
               <span className="body-small font-medium">24h Volume</span>
             </div>
-            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">$2.4M</span>
+            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              {formatCurrency(volume24h)}
+            </span>
           </div>
 
           <div className="text-center">

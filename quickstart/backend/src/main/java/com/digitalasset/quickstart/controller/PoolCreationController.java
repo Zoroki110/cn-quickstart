@@ -638,8 +638,19 @@ public class PoolCreationController {
                 pool.contractId,
                 choice,
                 java.util.UUID.randomUUID().toString(),
-                java.util.List.of(xParty, pay.getPoolParty.getParty, pay.getLpIssuer.getParty),
-                java.util.List.of(pay.getPoolParty.getParty)
+                java.util.List.of(
+                    xParty,
+                    pay.getPoolParty.getParty,
+                    pay.getLpIssuer.getParty,
+                    pay.getIssuerA.getParty,
+                    pay.getIssuerB.getParty
+                ),
+                java.util.List.of(
+                    pay.getPoolParty.getParty,
+                    pay.getLpIssuer.getParty,
+                    pay.getIssuerA.getParty,
+                    pay.getIssuerB.getParty
+                )
             ).join();
 
             return ResponseEntity.ok(java.util.Map.of("success", true));

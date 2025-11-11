@@ -15,8 +15,13 @@ LEDGER_HOST="${CANTON_LEDGER_HOST:-localhost}"
 LEDGER_PORT="${CANTON_LEDGER_PORT:-5001}"
 BACKEND_PORT="${BACKEND_PORT:-8080}"
 SERVER_BIND_ADDRESS="${SERVER_BIND_ADDRESS:-0.0.0.0}"
-# Force oauth2 profile for production startup
-ENVIRONMENT="oauth2"
+# Determine Spring profiles. Default to oauth2,debug to keep debug endpoints available while OAuth2 is active.
+# If SPRING_PROFILES_ACTIVE is provided by the caller, respect it, but ensure 'oauth2' is included so TokenProvider beans are available.
+ENVIRONMENT="${SPRING_PROFILES_ACTIVE:-oauth2,debug}"
+case ",$ENVIRONMENT," in
+  *",oauth2,"*) ;; # already present
+  *) ENVIRONMENT="oauth2,$ENVIRONMENT" ;;
+esac
 
 echo ""
 echo "Configuration:"

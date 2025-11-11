@@ -139,10 +139,43 @@ public class ClearportxDebugController {
             var pool = maybe.get();
             var pay = pool.payload;
 
+            // Pre-flight: if canonical tokens referenced by this Pool are not alive for poolParty,
+            // switch to a visible Pool instance for the same poolId whose canonicals are alive.
+            try {
+                String poolPartyStr = pay.getPoolParty.getParty;
+                List<LedgerApi.ActiveContract<Token>> poolPartyToks = ledgerApi.getActiveContractsForParty(Token.class, poolPartyStr).join();
+                java.util.Set<String> alive = new java.util.HashSet<>();
+                for (var t : poolPartyToks) alive.add(t.contractId.getContractId);
+                boolean aAlive = pay.getTokenACid.map(cid -> alive.contains(cid.getContractId)).orElse(false);
+                boolean bAlive = pay.getTokenBCid.map(cid -> alive.contains(cid.getContractId)).orElse(false);
+                if (!(aAlive && bAlive)) {
+                    List<LedgerApi.ActiveContract<Pool>> visPools = ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
+                    for (var cand : visPools) {
+                        var pp = cand.payload;
+                        if (!pp.getPoolId.equals(pay.getPoolId)) continue;
+                        String ppParty = pp.getPoolParty.getParty;
+                        List<LedgerApi.ActiveContract<Token>> toks = ledgerApi.getActiveContractsForParty(Token.class, ppParty).join();
+                        java.util.Set<String> alive2 = new java.util.HashSet<>();
+                        for (var t : toks) alive2.add(t.contractId.getContractId);
+                        boolean okA = pp.getTokenACid.map(cid -> alive2.contains(cid.getContractId)).orElse(false);
+                        boolean okB = pp.getTokenBCid.map(cid -> alive2.contains(cid.getContractId)).orElse(false);
+                        if (okA && okB) {
+                            pool = cand;
+                            pay = pp;
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception ignore) {
+                // best-effort freshness
+            }
+
             List<LedgerApi.ActiveContract<Token>> tokens = ledgerApi.getActiveContractsForParty(Token.class, xParty).join();
-            var tokA = tokens.stream().filter(t -> t.payload.getSymbol.equals(pay.getSymbolA) && t.payload.getOwner.getParty.equals(xParty))
+            final String symA = pay.getSymbolA;
+            final String symB = pay.getSymbolB;
+            var tokA = tokens.stream().filter(t -> t.payload.getSymbol.equals(symA) && t.payload.getOwner.getParty.equals(xParty))
                     .max(Comparator.comparing(t -> t.payload.getAmount)).orElse(null);
-            var tokB = tokens.stream().filter(t -> t.payload.getSymbol.equals(pay.getSymbolB) && t.payload.getOwner.getParty.equals(xParty))
+            var tokB = tokens.stream().filter(t -> t.payload.getSymbol.equals(symB) && t.payload.getOwner.getParty.equals(xParty))
                     .max(Comparator.comparing(t -> t.payload.getAmount)).orElse(null);
             // Dev fallback: mint fresh tokens if missing or insufficient
             if (tokA == null || (tokA.payload.getAmount.compareTo(amountA) < 0)) {
@@ -174,8 +207,20 @@ public class ClearportxDebugController {
             String cmdIdAdd = UUID.randomUUID().toString();
             txPacer.awaitSlot(2500);
             // Authorize with all controllers for AddLiquidity: provider (xParty), poolParty, lpIssuer
-            var actAs = List.of(xParty, pay.getPoolParty.getParty, pay.getLpIssuer.getParty);
-            var readAs = List.of(xParty, pay.getPoolParty.getParty, pay.getLpIssuer.getParty);
+            var actAs = List.of(
+                    xParty,
+                    pay.getPoolParty.getParty,
+                    pay.getLpIssuer.getParty,
+                    pay.getIssuerA.getParty,
+                    pay.getIssuerB.getParty
+            );
+            var readAs = List.of(
+                    xParty,
+                    pay.getPoolParty.getParty,
+                    pay.getLpIssuer.getParty,
+                    pay.getIssuerA.getParty,
+                    pay.getIssuerB.getParty
+            );
             var txTree = ledgerApi.exerciseAndGetTransactionTree(
                     pool.contractId,
                     choice,
@@ -187,9 +232,10 @@ public class ClearportxDebugController {
             // Attempt to resolve the freshest pool by verifying canonical tokens exist (avoid stale pools)
             // Retry ACS briefly to absorb archive+recreate lag
             List<LedgerApi.ActiveContract<Pool>> poolsNow = null;
+            final String targetPoolId = pay.getPoolId;
             for (int i = 0; i < 8; i++) {
                 poolsNow = ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
-                if (poolsNow.stream().anyMatch(pac -> pac.payload.getPoolId.equals(pay.getPoolId))) break;
+                if (poolsNow.stream().anyMatch(pac -> pac.payload.getPoolId.equals(targetPoolId))) break;
                 sleepQuiet(300);
             }
             // Prefer created AMM.Pool:Pool CID from tx tree if present
@@ -226,11 +272,11 @@ public class ClearportxDebugController {
                 return hasA && hasB;
             };
             var freshest = poolsNow.stream()
-                    .filter(pac -> pac.payload.getPoolId.equals(pay.getPoolId))
+                    .filter(pac -> pac.payload.getPoolId.equals(targetPoolId))
                     .filter(hasAliveCanonicals)
                     .findFirst()
                     .orElse(pool);
-            directory.update(pay.getPoolId, (createdPoolCid != null ? createdPoolCid : freshest.contractId.getContractId), pay.getPoolParty.getParty);
+            directory.update(targetPoolId, (createdPoolCid != null ? createdPoolCid : freshest.contractId.getContractId), pay.getPoolParty.getParty);
             if (!freshest.contractId.getContractId.equals(pool.contractId.getContractId)) {
                 return ResponseEntity.ok(Map.of(
                         "success", true,
@@ -480,13 +526,23 @@ public class ClearportxDebugController {
         try {
             txPacer.awaitSlot(2500);
             String cmdId = UUID.randomUUID().toString();
+            // Resolve poolOperator from visible pool payload
+            String poolOperator;
+            {
+                var pools = ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
+                var match = pools.stream().filter(p -> p.contractId.getContractId.equals(poolCidStr)).findFirst();
+                if (match.isEmpty()) {
+                    return ResponseEntity.status(404).body(Map.of("success", false, "error", "Pool not visible for party"));
+                }
+                poolOperator = match.get().payload.getPoolOperator.getParty;
+            }
             Pool.GrantVisibility choice = new Pool.GrantVisibility(new com.digitalasset.transcode.java.Party(newObserver));
             ContractId<Pool> newCid = ledgerApi.exerciseAndGetResultWithParties(
                     new ContractId<>(poolCidStr),
                     choice,
                     cmdId,
-                    List.of(xParty),      // act as poolOperator (P0 single-party)
-                    List.of(xParty, newObserver) // readAs includes both
+                    List.of(poolOperator),
+                    List.of(poolOperator, newObserver)
             ).join();
             if (poolIdOpt != null && !poolIdOpt.isBlank()) {
                 directory.update(poolIdOpt, newCid.getContractId, xParty);

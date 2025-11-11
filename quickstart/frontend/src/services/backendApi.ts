@@ -403,7 +403,23 @@ export class BackendApiService {
       const partyRows = await this.fetchPoolsForParty(party);
       let allPools: PoolInfo[];
       if (partyRows.length > 0) {
-        // Group by token pair and select the latest instance per pair (directory-latest if available), else highest TVL
+        // Fetch directory mapping ONCE to avoid spamming the endpoint
+        let directoryMap: Record<string, { poolCid: string }> = {};
+        try {
+          const dirRes = await this.client.get('/api/clearportx/debug/directory');
+          directoryMap = (dirRes.data?.mapping as Record<string, { poolCid: string }>) || {};
+        } catch {
+          directoryMap = {};
+        }
+
+        // Group by token pair and select the latest instance per pair:
+        // 1) If preferred package prefix configured, prefer rows with that package
+        // 2) Else prefer directory-latest for each poolId
+        // 3) Else fallback to highest TVL
+        const preferredPkgPrefix =
+          (process.env.REACT_APP_AMM_POOL_PACKAGE_ID || '').trim() ||
+          (BUILD_INFO?.features as any)?.ammPackageId ||
+          '';
         const groups = new Map<string, any[]>();
         for (const row of partyRows) {
           const key = [String(row.symbolA), String(row.symbolB)].sort().join('/');
@@ -414,30 +430,39 @@ export class BackendApiService {
         const chosenRows: any[] = [];
         for (const entry of Array.from(groups.entries())) {
           const rows = entry[1];
-          // Prefer directory-latest poolCid for any poolId within the pair
           let picked: any | null = null;
-          try {
-            // Build a cache of latest cids per poolId for the rows
-            const latestMatches: any[] = [];
+          // 1) Preferred package check (best-effort; minimal calls)
+          if (!picked && preferredPkgPrefix) {
             for (const r of rows) {
               try {
-                const latestCid = await this.getDirectoryLatestCid(r.poolId);
-                if (latestCid && latestCid === r.poolCid) {
-                  latestMatches.push(r);
+                const ti = await this.request<any>(() =>
+                  this.client.get('/api/debug/pool/template-id', {
+                    params: { cid: r.poolCid }, headers: { 'X-Party': party }
+                  })
+                );
+                const pkg: string = ti?.packageId || '';
+                if (pkg.toLowerCase().startsWith(String(preferredPkgPrefix).toLowerCase())) {
+                  picked = r;
+                  break;
                 }
               } catch {
                 // ignore and continue
               }
             }
+          }
+          // 2) Directory-latest match for each poolId
+          if (!picked) {
+            const latestMatches: any[] = [];
+            for (const r of rows) {
+              const latest = directoryMap[r.poolId]?.poolCid;
+              if (latest && latest === r.poolCid) latestMatches.push(r);
+            }
             if (latestMatches.length > 0) {
-              // If multiple, pick the one with larger reserve product to stabilize display
               picked = [...latestMatches].sort((a, b) =>
                 (parseFloat(b.reserveA) * parseFloat(b.reserveB)) -
                 (parseFloat(a.reserveA) * parseFloat(a.reserveB))
               )[0];
             }
-          } catch {
-            // ignore failures; will fallback
           }
           if (!picked) {
             // Fallback to highest TVL (reserveA * reserveB)

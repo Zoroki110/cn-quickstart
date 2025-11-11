@@ -307,13 +307,24 @@ public class ClearportxDebugController {
             {
                 var poolsForParty = ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
                 var match = poolsForParty.stream().filter(p -> p.contractId.getContractId.equals(poolCidStr)).findFirst();
-                if (match.isEmpty()) {
-                    return ResponseEntity.status(404).body(Map.of("success", false, "error", "Pool not visible for party"));
+                if (match.isPresent()) {
+                    var payload = match.get().payload;
+                    poolPartyStr = payload.getPoolParty.getParty;
+                    canonRef[0] = payload.getTokenACid.map(cid -> cid.getContractId).orElse(null);
+                    canonRef[1] = payload.getTokenBCid.map(cid -> cid.getContractId).orElse(null);
+                } else {
+                    // Fallback: resolve via operator (APP_PROVIDER_PARTY) to avoid trader visibility gating
+                    String operator = System.getenv().getOrDefault("APP_PROVIDER_PARTY", xParty);
+                    var poolsForOp = ledgerApi.getActiveContractsForParty(Pool.class, operator).join();
+                    var matchOp = poolsForOp.stream().filter(p -> p.contractId.getContractId.equals(poolCidStr)).findFirst();
+                    if (matchOp.isEmpty()) {
+                        return ResponseEntity.status(404).body(Map.of("success", false, "error", "Pool not found for operator or trader"));
+                    }
+                    var payload = matchOp.get().payload;
+                    poolPartyStr = payload.getPoolParty.getParty;
+                    canonRef[0] = payload.getTokenACid.map(cid -> cid.getContractId).orElse(null);
+                    canonRef[1] = payload.getTokenBCid.map(cid -> cid.getContractId).orElse(null);
                 }
-                var payload = match.get().payload;
-                poolPartyStr = payload.getPoolParty.getParty;
-                canonRef[0] = payload.getTokenACid.map(cid -> cid.getContractId).orElse(null);
-                canonRef[1] = payload.getTokenBCid.map(cid -> cid.getContractId).orElse(null);
             }
 
             var tokens = ledgerApi.getActiveContractsForParty(Token.class, xParty).join();
@@ -526,24 +537,56 @@ public class ClearportxDebugController {
         try {
             txPacer.awaitSlot(2500);
             String cmdId = UUID.randomUUID().toString();
-            // Resolve poolOperator from visible pool payload
-            String poolOperator;
-            {
-                var pools = ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
-                var match = pools.stream().filter(p -> p.contractId.getContractId.equals(poolCidStr)).findFirst();
-                if (match.isEmpty()) {
-                    return ResponseEntity.status(404).body(Map.of("success", false, "error", "Pool not visible for party"));
-                }
-                poolOperator = match.get().payload.getPoolOperator.getParty;
-            }
+            // Resolve poolOperator without requiring trader visibility.
+            // In P0/DevNet, poolOperator == APP_PROVIDER_PARTY.
+            String poolOperator = System.getenv().getOrDefault("APP_PROVIDER_PARTY", xParty);
             Pool.GrantVisibility choice = new Pool.GrantVisibility(new com.digitalasset.transcode.java.Party(newObserver));
-            ContractId<Pool> newCid = ledgerApi.exerciseAndGetResultWithParties(
-                    new ContractId<>(poolCidStr),
-                    choice,
-                    cmdId,
-                    List.of(poolOperator),
-                    List.of(poolOperator, newObserver)
-            ).join();
+            ContractId<Pool> newCid;
+            try {
+                newCid = ledgerApi.exerciseAndGetResultWithParties(
+                        new ContractId<>(poolCidStr),
+                        choice,
+                        cmdId,
+                        List.of(poolOperator),
+                        List.of(poolOperator, newObserver)
+                ).join();
+            } catch (Exception first) {
+                // Retry once by resolving freshest pool for this poolId (if provided)
+                if (poolIdOpt != null && !poolIdOpt.isBlank()) {
+                    var poolsOp = ledgerApi.getActiveContractsForParty(Pool.class, poolOperator).join();
+                    // Prefer candidates with alive canonicals for poolParty
+                    java.util.List<LedgerApi.ActiveContract<Pool>> candidates = new java.util.ArrayList<>();
+                    for (var p : poolsOp) {
+                        if (!p.payload.getPoolId.equals(poolIdOpt)) continue;
+                        candidates.add(p);
+                    }
+                    candidates.sort((a, b) -> b.payload.getReserveA.multiply(b.payload.getReserveB)
+                            .compareTo(a.payload.getReserveA.multiply(a.payload.getReserveB)));
+                    ContractId<Pool> granted = null;
+                    for (var cand : candidates) {
+                        var pay = cand.payload;
+                        String pp = pay.getPoolParty.getParty;
+                        var toks = ledgerApi.getActiveContractsForParty(Token.class, pp).join();
+                        java.util.Set<String> alive = new java.util.HashSet<>();
+                        for (var t : toks) alive.add(t.contractId.getContractId);
+                        boolean aAlive = pay.getTokenACid.map(cid -> alive.contains(cid.getContractId)).orElse(false);
+                        boolean bAlive = pay.getTokenBCid.map(cid -> alive.contains(cid.getContractId)).orElse(false);
+                        if (!(aAlive && bAlive)) continue;
+                        granted = ledgerApi.exerciseAndGetResultWithParties(
+                                cand.contractId,
+                                choice,
+                                UUID.randomUUID().toString(),
+                                List.of(poolOperator),
+                                List.of(poolOperator, newObserver)
+                        ).join();
+                        break;
+                    }
+                    if (granted == null) throw first;
+                    newCid = granted;
+                } else {
+                    throw first;
+                }
+            }
             if (poolIdOpt != null && !poolIdOpt.isBlank()) {
                 directory.update(poolIdOpt, newCid.getContractId, xParty);
             }

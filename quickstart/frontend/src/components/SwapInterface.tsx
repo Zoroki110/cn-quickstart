@@ -37,10 +37,8 @@ const SwapInterface: React.FC = () => {
           }
         });
 
-        // 3. Get user balances for these tokens
-        // TEMPORARY: Use public endpoint (hardcoded 'app-provider')
-        // TODO: Get party from authService.getParty() after OAuth login
-        const userTokens = await backendApi.getTokens('app-provider');
+        // 3. Get user balances for these tokens (using current acting party)
+        const userTokens = await backendApi.getTokens(backendApi.getCurrentParty());
 
         // 4. Merge pool tokens with user balances (default to 0 if user has no balance)
         const tokensWithBalances = Array.from(uniqueTokensMap.values()).map(token => {
@@ -141,10 +139,8 @@ const SwapInterface: React.FC = () => {
       // Wait 2 seconds for PQS to synchronize before reloading tokens
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Recharger les tokens pour mettre à jour les balances
-      // TEMPORARY: Use public endpoint (hardcoded 'alice')
-      // TODO: Get party from authService.getParty() after OAuth login
-      const updatedTokens = await backendApi.getTokens('alice');
+      // Recharger les tokens pour mettre à jour les balances (current acting party)
+      const updatedTokens = await backendApi.getTokens(backendApi.getCurrentParty());
       setTokens(updatedTokens);
       useContractStore.getState().setTokens(updatedTokens);
 

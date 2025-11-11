@@ -211,6 +211,11 @@ export class BackendApiService {
     return getPartyId() || DEVNET_PARTY;
   }
 
+  // Expose current acting party to UI (for consistent token refresh)
+  getCurrentParty(): string {
+    return this.currentParty();
+  }
+
   // Always resolve a fresh, party-visible CID for a poolId (server guarantees visibility)
   private async resolveAndGrant(poolId: string, party: string): Promise<{ poolCid: string; poolId: string }> {
     const res = await this.request<any>(() =>

@@ -534,19 +534,37 @@ export class BackendApiService {
         this.client.post('/api/clearportx/debug/swap-by-cid', body, { headers: { 'X-Party': party } })
       );
 
-      // Poll for ACS propagation and compute balance delta for output symbol
-      const outSym = (params.outputSymbol || '').toUpperCase();
-      const outBefore = beforeMap.get(outSym) ?? beforeMap.get(params.outputSymbol) ?? 0;
+      // Prefer exact output amount via created Token CID if provided
       let received = 0;
-      for (let i = 0; i < 8; i++) { // ~ up to ~4.8s (8 * 600ms)
-        await this.sleep(600);
-        const afterTokens = await this.getTokens(party);
-        const afterMap = new Map<string, number>(afterTokens.map(t => [t.symbol.toUpperCase(), t.balance || 0]));
-        const outAfter = afterMap.get(outSym) ?? 0;
-        const delta = outAfter - outBefore;
-        if (delta > 0) {
-          received = delta;
-          break;
+      const outputTokenCid: string | undefined = res?.outputTokenCid;
+      if (outputTokenCid) {
+        try {
+          const tok = await this.request<any>(() => this.client.get('/api/debug/token-by-cid', {
+            params: { cid: outputTokenCid },
+            headers: { 'X-Party': party },
+          }));
+          const amt = parseFloat(tok?.amount ?? '0');
+          if (!Number.isNaN(amt) && amt > 0) {
+            received = amt;
+          }
+        } catch {
+          // fall back to balance delta if token-by-cid is not visible yet
+        }
+      }
+      // Fallback: poll for ACS propagation and compute balance delta for output symbol
+      if (received <= 0) {
+        const outSym = (params.outputSymbol || '').toUpperCase();
+        const outBefore = beforeMap.get(outSym) ?? beforeMap.get(params.outputSymbol) ?? 0;
+        for (let i = 0; i < 8; i++) { // ~ up to ~4.8s (8 * 600ms)
+          await this.sleep(600);
+          const afterTokens = await this.getTokens(party);
+          const afterMap = new Map<string, number>(afterTokens.map(t => [t.symbol.toUpperCase(), t.balance || 0]));
+          const outAfter = afterMap.get(outSym) ?? 0;
+          const delta = outAfter - outBefore;
+          if (delta > 0) {
+            received = delta;
+            break;
+          }
         }
       }
 

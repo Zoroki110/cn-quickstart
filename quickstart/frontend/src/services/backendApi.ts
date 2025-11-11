@@ -420,7 +420,7 @@ export class BackendApiService {
     console.log(`Getting tokens for ${party} (mapped to ${cantonParty})`);
     
     try {
-      const res = await this.client.get(`/api/tokens/${cantonParty}`);
+      const res = await this.client.get(`/api/wallet/tokens/${cantonParty}`);
       
       // Ensure res.data is an array
       const tokenData = Array.isArray(res.data) ? res.data : [];
@@ -454,6 +454,13 @@ export class BackendApiService {
       console.error('Error loading tokens:', error);
       return [];
     }
+  }
+
+  /**
+   * Wallet-only tokens (exclude pool canonical tokens)
+   */
+  async getWalletTokens(party: string): Promise<TokenInfo[]> {
+    return this.getTokens(party);
   }
 
   /**

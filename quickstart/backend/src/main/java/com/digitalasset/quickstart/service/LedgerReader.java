@@ -3,8 +3,8 @@
 
 package com.digitalasset.quickstart.service;
 
-import clearportx_amm_production.amm.pool.Pool;
-import clearportx_amm_production.token.token.Token;
+import clearportx_amm_production_gv.amm.pool.Pool;
+import clearportx_amm_production_gv.token.token.Token;
 import com.digitalasset.quickstart.dto.PoolDTO;
 import com.digitalasset.quickstart.dto.TokenDTO;
 import com.digitalasset.quickstart.ledger.LedgerApi;
@@ -45,16 +45,17 @@ public class LedgerReader {
     @WithSpan
     public CompletableFuture<List<TokenDTO>> tokensForParty(String party) {
         logger.info("Fetching tokens for party: {}", party);
-        return ledger.getActiveContracts(Token.class)
+        // Use party override to read the caller's authoritative ACS (not just app provider's view)
+        return ledger.getActiveContractsForParty(Token.class, party)
                 .thenApply(contracts -> contracts.stream()
-                        .map(c -> c.payload)
-                        .filter(t -> t.getOwner.getParty.equals(party))
-                        .map(t -> new TokenDTO(
-                                t.getSymbol,
-                                t.getSymbol + " Token",  // Frontend expects a name field
-                                10,  // Standard decimals for demo tokens
-                                t.getAmount.toPlainString(),
-                                t.getOwner.getParty
+                        .filter(c -> c.payload.getOwner.getParty.equals(party))
+                        .map(c -> new TokenDTO(
+                                c.payload.getSymbol,
+                                c.payload.getSymbol + " Token",
+                                10,
+                                c.payload.getAmount.toPlainString(),
+                                c.payload.getOwner.getParty,
+                                c.contractId.getContractId
                         ))
                         .toList())
                 .whenComplete((result, ex) -> {
@@ -64,6 +65,48 @@ public class LedgerReader {
                         logger.info("Fetched {} tokens for party {}", result.size(), party);
                     }
                 });
+    }
+
+    /**
+     * Get wallet-only tokens for a party (excludes pool canonical tokens when party is also pool operator)
+     */
+    @WithSpan
+    public CompletableFuture<List<TokenDTO>> walletTokensForParty(String party) {
+        logger.info("Fetching wallet tokens for party (excluding canonicals): {}", party);
+        // 1) Build set of canonical token CIDs for pools where poolParty == party
+        CompletableFuture<java.util.Set<String>> canonSetFut = ledger.getActiveContractsForParty(Pool.class, party)
+                .thenApply(pools -> {
+                    java.util.Set<String> canon = new java.util.HashSet<>();
+                    for (var pac : pools) {
+                        var pay = pac.payload;
+                        if (party.equals(pay.getPoolParty.getParty)) {
+                            pay.getTokenACid.ifPresent(cid -> canon.add(cid.getContractId));
+                            pay.getTokenBCid.ifPresent(cid -> canon.add(cid.getContractId));
+                        }
+                    }
+                    return canon;
+                });
+        // 2) Fetch party tokens and filter out canonicals
+        return canonSetFut.thenCompose(canon -> ledger.getActiveContractsForParty(Token.class, party)
+                .thenApply(contracts -> contracts.stream()
+                        .filter(c -> c.payload.getOwner.getParty.equals(party))
+                        .filter(c -> !canon.contains(c.contractId.getContractId))
+                        .map(c -> new TokenDTO(
+                                c.payload.getSymbol,
+                                c.payload.getSymbol + " Token",
+                                10,
+                                c.payload.getAmount.toPlainString(),
+                                c.payload.getOwner.getParty,
+                                c.contractId.getContractId
+                        ))
+                        .toList())
+        ).whenComplete((result, ex) -> {
+            if (ex != null) {
+                logger.error("Failed to fetch wallet tokens for party {}: {}", party, ex.getMessage());
+            } else {
+                logger.info("Fetched {} wallet tokens for party {}", result.size(), party);
+            }
+        });
     }
 
     /**

@@ -40,7 +40,7 @@ const SwapInterface: React.FC = () => {
         });
 
         // 3. Get user balances for these tokens (using current acting party)
-        const userTokens = await backendApi.getTokens(backendApi.getCurrentParty());
+        const userTokens = await backendApi.getWalletTokens(backendApi.getCurrentParty());
 
         // 4. Merge pool tokens with user balances (default to 0 if user has no balance)
         const tokensWithBalances = Array.from(uniqueTokensMap.values()).map(token => {
@@ -140,10 +140,10 @@ const SwapInterface: React.FC = () => {
 
       // Poll for ACS propagation and refresh balances (current acting party)
       const party = backendApi.getCurrentParty();
-      let updatedTokens = await backendApi.getTokens(party);
+      let updatedTokens = await backendApi.getWalletTokens(party);
       for (let i = 0; i < 6; i++) { // up to ~3.6s
         await new Promise(resolve => setTimeout(resolve, 600));
-        const next = await backendApi.getTokens(party);
+        const next = await backendApi.getWalletTokens(party);
         // If either token balance moved, accept
         const fromBal = next.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
         const toBal = next.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;

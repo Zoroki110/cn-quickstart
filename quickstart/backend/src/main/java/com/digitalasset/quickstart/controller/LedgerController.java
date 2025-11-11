@@ -70,6 +70,17 @@ public class LedgerController {
     }
 
     /**
+     * GET /api/wallet/tokens/{party} - Wallet-only tokens (exclude pool canonical tokens)
+     * Public endpoint for DevNet testing
+     */
+    @GetMapping("/wallet/tokens/{party}")
+    @WithSpan
+    @PreAuthorize("permitAll()")
+    public CompletableFuture<List<TokenDTO>> walletTokensForParty(@PathVariable String party) {
+        logger.info("GET /api/wallet/tokens/{} - public access (wallet-only)", party);
+        return reader.walletTokensForParty(party);
+    }
+    /**
      * GET /api/pools - Get all active liquidity pools
      * Public endpoint - no authentication required
      */

@@ -162,24 +162,32 @@ const SwapInterface: React.FC = () => {
     } catch (error: any) {
       console.error('Error executing swap:', error);
 
-      // Handle backend error responses
-      if (error.response?.data?.message) {
-        const errorMsg = error.response.data.message;
+      // Normalize error from request() wrapper (DomainError) or Axios
+      const httpStatus: number | undefined =
+        error?.httpStatus ?? error?.response?.status;
+      const code: string | undefined =
+        error?.code ?? error?.response?.data?.error;
+      const message: string =
+        error?.message ??
+        error?.response?.data?.message ??
+        error?.response?.data?.error ??
+        'Unknown error';
 
-        // Special handling for price impact errors
-        if (errorMsg.includes('price impact') || errorMsg.includes('slippage')) {
-          toast.error(`Price impact too high (${slippage}% slippage). Try increasing slippage tolerance in settings ⚙️`);
-        } else {
-          toast.error(`Swap failed: ${errorMsg}`);
-        }
-      } else if (error.response?.status === 429) {
+      if (httpStatus === 422 ||
+          /slippage|price impact|Min output not met/i.test(message) ||
+          code === 'SLIPPAGE_MIN_OUTPUT_NOT_MET' ||
+          code === 'PRICE_IMPACT_TOO_HIGH') {
+        toast.error(`Slippage/price impact too high. Try increasing tolerance in settings ⚙️`);
+      } else if (httpStatus === 429) {
         toast.error('Rate limit exceeded. Please wait and try again.');
-      } else if (error.response?.status === 401) {
+      } else if (httpStatus === 401) {
         toast.error('Authentication required. Please connect your wallet.');
-      } else if (error.response?.status === 400) {
+      } else if (httpStatus === 400) {
         toast.error('Invalid swap parameters. Try reducing amount or increasing slippage ⚙️');
+      } else if (httpStatus === 409) {
+        toast.error('Temporary ledger visibility issue. Please try again.');
       } else {
-        toast.error('An error occurred during swap');
+        toast.error(`Swap failed: ${message}`);
       }
     } finally {
       setLoading(false);

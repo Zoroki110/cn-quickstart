@@ -457,6 +457,14 @@ public class ClearportxDebugController {
                             "retry_after_ms", 2200
                     ));
                 }
+                // Map DAML slippage assertion to 422 (client error)
+                if (msg.contains("Min output not met")) {
+                    return ResponseEntity.status(422).body(Map.of(
+                            "success", false,
+                            "error", "SLIPPAGE_MIN_OUTPUT_NOT_MET",
+                            "message", "Min output not met (slippage)"
+                    ));
+                }
                 if (msg.contains("CONTRACT_NOT_ACTIVE")) {
                     // Diagnostics: capture which CID went inactive and surrounding context
                     String inactiveCid = extractInactiveCid(msg);

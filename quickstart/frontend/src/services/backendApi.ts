@@ -384,27 +384,28 @@ export class BackendApiService {
         pool.reserveA > 0 && pool.reserveB > 0
       );
 
-      // Remove duplicates by token pair
-      const uniquePools: PoolInfo[] = [];
-      const seenPairs = new Set<string>();
-
+      // Group by token pair and select the highest TVL pool per pair
+      const pairToBest: Record<string, PoolInfo> = {};
       for (const pool of activePools) {
         const pairKey = [pool.tokenA.symbol, pool.tokenB.symbol].sort().join('/');
-
-        if (!seenPairs.has(pairKey)) {
-          seenPairs.add(pairKey);
-          uniquePools.push(pool);
+        const tvl = pool.reserveA * pool.reserveB;
+        const cur = pairToBest[pairKey];
+        if (!cur) {
+          pairToBest[pairKey] = pool;
+        } else {
+          const curTvl = cur.reserveA * cur.reserveB;
+          if (tvl > curTvl) pairToBest[pairKey] = pool;
         }
       }
 
-      // Sort by TVL proxy
-      const sortedPools = uniquePools.sort((a: PoolInfo, b: PoolInfo) => {
+      // Sort selected pools by TVL descending
+      const bestPools = Object.values(pairToBest).sort((a, b) => {
         const tvlA = a.reserveA * a.reserveB;
         const tvlB = b.reserveA * b.reserveB;
         return tvlB - tvlA;
       });
 
-      return sortedPools;
+      return bestPools;
     } catch (error) {
       console.error('Error loading pools:', error);
       return [];

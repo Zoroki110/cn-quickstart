@@ -420,7 +420,24 @@ export class BackendApiService {
     console.log(`Getting tokens for ${party} (mapped to ${cantonParty})`);
     
     try {
-      const res = await this.client.get(`/api/wallet/tokens/${cantonParty}`);
+      // Prefer authenticated wallet endpoint; fallback to debug or legacy public tokens
+      let res;
+      try {
+        res = await this.client.get(`/api/wallet/tokens/${cantonParty}`);
+      } catch (e: any) {
+        const status = e?.response?.status;
+        if (status === 401 || status === 403 || status === 404) {
+          // Dev fallback: debug wallet tokens by query param
+          try {
+            res = await this.client.get(`/api/debug/wallet/tokens`, { params: { party: cantonParty } });
+          } catch {
+            // Last resort: legacy tokens (includes canonicals)
+            res = await this.client.get(`/api/tokens/${cantonParty}`);
+          }
+        } else {
+          throw e;
+        }
+      }
       
       // Ensure res.data is an array
       const tokenData = Array.isArray(res.data) ? res.data : [];
@@ -550,41 +567,9 @@ export class BackendApiService {
         this.client.post('/api/clearportx/debug/swap-by-cid', body, { headers: { 'X-Party': party } })
       );
 
-      // Prefer exact output amount via created Token CID if provided
+      // Compute precise output using pool reserve delta first (most robust)
       let received = 0;
-      const outputTokenCid: string | undefined = res?.outputTokenCid;
-      if (outputTokenCid) {
-        try {
-          const tok = await this.request<any>(() => this.client.get('/api/debug/token-by-cid', {
-            params: { cid: outputTokenCid },
-            headers: { 'X-Party': party },
-          }));
-          const amt = parseFloat(tok?.amount ?? '0');
-          if (!Number.isNaN(amt) && amt > 0) {
-            received = amt;
-          }
-        } catch {
-          // fall back to balance delta if token-by-cid is not visible yet
-        }
-      }
-      // Fallback: poll for ACS propagation and compute balance delta for output symbol
-      if (received <= 0) {
-        const outSym = (params.outputSymbol || '').toUpperCase();
-        const outBefore = beforeMap.get(outSym) ?? beforeMap.get(params.outputSymbol) ?? 0;
-        for (let i = 0; i < 8; i++) { // ~ up to ~4.8s (8 * 600ms)
-          await this.sleep(600);
-          const afterTokens = await this.getTokens(party);
-          const afterMap = new Map<string, number>(afterTokens.map(t => [t.symbol.toUpperCase(), t.balance || 0]));
-          const outAfter = afterMap.get(outSym) ?? 0;
-          const delta = outAfter - outBefore;
-          if (delta > 0) {
-            received = delta;
-            break;
-          }
-        }
-      }
-      // Last resort: compute from pool reserve delta if newPoolCid provided (more robust when trader==pool operator)
-      if (received <= 0 && beforePool?.success) {
+      if (beforePool?.success) {
         try {
           const newPoolCid = res?.newPoolCid || poolCid;
           const afterPool = await this.request<any>(() =>
@@ -599,7 +584,6 @@ export class BackendApiService {
             const bAfter = parseFloat(afterPool.reserveB);
             const symA = beforePool.symbolA;
             const symB = beforePool.symbolB;
-            // If input=ETH and output=USDC and pool A=ETH/B=USDC, amountOut = bBefore - bAfter
             if (params.inputSymbol === symA && params.outputSymbol === symB) {
               const deltaOut = bBefore - bAfter;
               if (deltaOut > 0) received = deltaOut;
@@ -609,6 +593,22 @@ export class BackendApiService {
             }
           }
         } catch {}
+      }
+      // If still zero, poll wallet token balance delta for output symbol
+      if (received <= 0) {
+        const outSym = (params.outputSymbol || '').toUpperCase();
+        const outBefore = beforeMap.get(outSym) ?? beforeMap.get(params.outputSymbol) ?? 0;
+        for (let i = 0; i < 8; i++) { // ~ up to ~4.8s (8 * 600ms)
+          await this.sleep(600);
+          const afterTokens = await this.getWalletTokens(party);
+          const afterMap = new Map<string, number>(afterTokens.map(t => [t.symbol.toUpperCase(), t.balance || 0]));
+          const outAfter = afterMap.get(outSym) ?? 0;
+          const delta = outAfter - outBefore;
+          if (delta > 0) {
+            received = delta;
+            break;
+          }
+        }
       }
 
       return {

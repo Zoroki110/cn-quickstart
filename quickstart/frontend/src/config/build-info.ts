@@ -9,7 +9,8 @@ export const BUILD_INFO = {
     cantonApiRemoved: true,
     backendApiOnly: true,
     apiErrorHandlingFixed: true,
-    typeScriptErrorFixed: true
+    typeScriptErrorFixed: true,
+    ammPackageId: process.env.REACT_APP_AMM_POOL_PACKAGE_ID || ''
   }
 };
 

@@ -217,14 +217,46 @@ export class BackendApiService {
   }
 
   // Always resolve a fresh, party-visible CID for a poolId (server guarantees visibility)
-  private async resolveAndGrant(poolId: string, party: string): Promise<{ poolCid: string; poolId: string }> {
+  private async resolveAndGrant(poolId: string, party: string): Promise<{ poolCid: string; poolId: string; packageId?: string }> {
     const res = await this.request<any>(() =>
       this.client.post('/api/debug/resolve-and-grant', { poolId, party }, { headers: { 'X-Party': party } })
     );
     if (!res?.success || !res?.poolCid) {
       throw new Error(`Resolver failed for ${poolId}`);
     }
-    return { poolCid: res.poolCid as string, poolId: res.poolId as string };
+    let cid: string = res.poolCid as string;
+    const resolvedPkg: string | undefined = res.packageId as (string | undefined);
+    // Prefer latest AMM package when multiple pool instances exist
+    const preferredPkgPrefix =
+      (process.env.REACT_APP_AMM_POOL_PACKAGE_ID || '').trim() ||
+      (BUILD_INFO?.features?.ammPackageId || '').trim() ||
+      '8950ecde'; // fallback to current latest prefix observed in DevNet
+    try {
+      if (preferredPkgPrefix && (!resolvedPkg || !resolvedPkg?.toLowerCase().startsWith(preferredPkgPrefix.toLowerCase()))) {
+        // Scan party-visible pools for the same poolId and pick the one with preferred packageId
+        const rows = await this.fetchPoolsForParty(party);
+        const sameId = rows.filter(r => r.poolId === poolId);
+        for (const row of sameId) {
+          try {
+            const ti = await this.request<any>(() =>
+              this.client.get('/api/clearportx/debug/pool/template-id', {
+                params: { cid: row.poolCid }, headers: { 'X-Party': party }
+              })
+            );
+            const pkg: string = ti?.packageId || '';
+            if (pkg && pkg.toLowerCase().startsWith(preferredPkgPrefix.toLowerCase())) {
+              cid = row.poolCid;
+              break;
+            }
+          } catch {
+            // ignore and continue
+          }
+        }
+      }
+    } catch {
+      // best-effort preference; keep resolver selection if anything fails
+    }
+    return { poolCid: cid, poolId: res.poolId as string, packageId: resolvedPkg };
   }
 
   // Centralized request wrapper with single paced 409 retry

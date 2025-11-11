@@ -230,7 +230,7 @@ export class BackendApiService {
     const preferredPkgPrefix =
       (process.env.REACT_APP_AMM_POOL_PACKAGE_ID || '').trim() ||
       (BUILD_INFO?.features?.ammPackageId || '').trim() ||
-      '8950ecde'; // fallback to current latest prefix observed in DevNet
+      '';
     try {
       if (preferredPkgPrefix && (!resolvedPkg || !resolvedPkg?.toLowerCase().startsWith(preferredPkgPrefix.toLowerCase()))) {
         // Scan party-visible pools for the same poolId and pick the one with preferred packageId

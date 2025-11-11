@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../stores';
 import { useContractStore } from '../stores/useContractStore';
 import { backendApi } from '../services/backendApi';
@@ -8,6 +9,7 @@ import SlippageSettings from './SlippageSettings';
 import toast from 'react-hot-toast';
 
 const SwapInterface: React.FC = () => {
+  const queryClient = useQueryClient();
   const { selectedTokens, setSelectedTokens, swapTokens: swapSelectedTokens, isConnected, slippage } = useAppStore();
   const [inputAmount, setInputAmount] = useState('');
   const [outputAmount, setOutputAmount] = useState('');
@@ -159,6 +161,10 @@ const SwapInterface: React.FC = () => {
       console.log('✅ Tokens refreshed after swap:', updatedTokens.filter(t =>
         t.symbol === selectedTokens.from?.symbol || t.symbol === selectedTokens.to?.symbol
       ));
+
+      // Invalidate and refetch React Query caches to propagate changes across the app
+      queryClient.invalidateQueries({ queryKey: ['tokens'] });
+      queryClient.invalidateQueries({ queryKey: ['pools'] });
 
       // Update selected tokens with new balances
       const updatedFrom = updatedTokens.find(t => t.symbol === selectedTokens.from?.symbol);

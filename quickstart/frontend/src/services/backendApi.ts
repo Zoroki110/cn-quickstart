@@ -281,46 +281,28 @@ export class BackendApiService {
     } catch {
       // fall through to grant
     }
+    // Do NOT attempt grant over remote. Pick a party-visible CID for same poolId or by pair.
     try {
-      const grant = await this.request<any>(() => this.client.post('/api/clearportx/debug/pool/grant-visibility', {
-        poolCid,
-        newObserver: party,
-        poolId,
-      }, {
-        headers: { 'X-Party': party },
-      }));
-      // DevNet pacing to allow ACS to reflect observer update
-      await this.sleep(3500);
-      const updatedCid = grant?.newPoolCid || poolCid;
-      return updatedCid;
-    } catch (e: any) {
-      // If grant endpoint is disabled (e.g., remote without debug profile),
-      // pick a visible CID for the same poolId (or same pair) from party pools.
-      try {
-        const rows = await this.fetchPoolsForParty(party);
-        const sameId = rows.find(r => r.poolId === poolId);
-        if (sameId) return sameId.poolCid;
-        // fallback by token pair inference from poolId (ETH-USDC in id)
-        const m = (poolId || '').toUpperCase().match(/([A-Z]+)-([A-Z]+)/);
-        if (m && m.length >= 3) {
-          const [_, a, b] = m;
-          const byPair = rows.filter(r =>
-            (r.symbolA === a && r.symbolB === b) || (r.symbolA === b && r.symbolB === a)
-          );
-          if (byPair.length > 0) {
-            // choose highest TVL
-            const chosen = [...byPair].sort((x, y) =>
-              (parseFloat(y.reserveA) * parseFloat(y.reserveB)) - (parseFloat(x.reserveA) * parseFloat(x.reserveB))
-            )[0];
-            return chosen.poolCid;
-          }
+      const rows = await this.fetchPoolsForParty(party);
+      const sameId = rows.find(r => r.poolId === poolId);
+      if (sameId) return sameId.poolCid;
+      const m = (poolId || '').toUpperCase().match(/([A-Z]+)-([A-Z]+)/);
+      if (m && m.length >= 3) {
+        const [_, a, b] = m;
+        const byPair = rows.filter(r =>
+          (r.symbolA === a && r.symbolB === b) || (r.symbolA === b && r.symbolB === a)
+        );
+        if (byPair.length > 0) {
+          const chosen = [...byPair].sort((x, y) =>
+            (parseFloat(y.reserveA) * parseFloat(y.reserveB)) - (parseFloat(x.reserveA) * parseFloat(x.reserveB))
+          )[0];
+          return chosen.poolCid;
         }
-      } catch {
-        // swallow and fall through
       }
-      // As last resort, return original CID (caller may retry)
-      return poolCid;
+    } catch {
+      // ignore
     }
+    // Last resort: return original and let caller retry candidates
     return poolCid;
   }
 
@@ -514,7 +496,7 @@ export class BackendApiService {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       const party = this.currentParty();
-      // Always prefer freshest party-scoped pool by pair; fallback to directory mapping only if none
+      // Prefer party-visible pools only; avoid directory-latest to reduce 409s
       let resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
       const rows = await this.fetchPoolsForParty(party);
       const byPair = rows.filter(r =>
@@ -527,8 +509,6 @@ export class BackendApiService {
       if (chosen) {
         resolvedPoolId = chosen.poolId;
         poolCid = chosen.poolCid;
-      } else {
-        poolCid = resolvedPoolId ? await this.getDirectoryLatestCid(resolvedPoolId) : null;
       }
       if (!poolCid) throw new Error(`No pool found for ${params.inputSymbol}/${params.outputSymbol}`);
       poolCid = await this.ensurePoolCidVisible(poolCid, resolvedPoolId, party);
@@ -548,7 +528,7 @@ export class BackendApiService {
           const denom = rin + ainFee;
           const aout = (ainFee * rout) / denom;
           const capped = Math.max(0, aout * 0.99);
-          const userMin = parseFloat(params.minOutput || '0');
+          const userMin = parseFloat('0'); // override to zero; rely on conservative cap
           const finalMin = Math.min(isFinite(userMin) ? userMin : capped, capped);
           minOut = finalMin.toFixed(10);
         }
@@ -605,14 +585,8 @@ export class BackendApiService {
         pairRows = [...pairRows].sort((a, b) =>
           (parseFloat(b.reserveA) * parseFloat(b.reserveB)) - (parseFloat(a.reserveA) * parseFloat(a.reserveB))
         );
-        // Build candidate CID list: directory latest for each poolId first, then visible party CIDs
+        // Build candidate CID list: party-visible only
         const candidates: Array<{ cid: string; id: string }> = [];
-        for (const r of pairRows) {
-          const latest = await this.getDirectoryLatestCid(r.poolId);
-          if (latest && latest !== poolCid) {
-            candidates.push({ cid: latest, id: r.poolId });
-          }
-        }
         for (const r of pairRows) {
           if (r.poolCid !== poolCid) candidates.push({ cid: r.poolCid, id: r.poolId });
         }

@@ -515,6 +515,15 @@ export class BackendApiService {
       const resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
       // Always ask server for a fresh, party-visible CID
       const { poolCid } = await this.resolveAndGrant(resolvedPoolId, party);
+      // Snapshot pool reserves before swap (to compute precise output via delta)
+      let beforePool: any = null;
+      try {
+        beforePool = await this.request<any>(() =>
+          this.client.get('/api/clearportx/debug/pool-by-cid', {
+            params: { cid: poolCid }, headers: { 'X-Party': party }
+          })
+        );
+      } catch {}
 
       // Snapshot balances before swap for accurate delta measurement
       const beforeTokens = await this.getTokens(party);
@@ -566,6 +575,33 @@ export class BackendApiService {
             break;
           }
         }
+      }
+      // Last resort: compute from pool reserve delta if newPoolCid provided (more robust when trader==pool operator)
+      if (received <= 0 && beforePool?.success) {
+        try {
+          const newPoolCid = res?.newPoolCid || poolCid;
+          const afterPool = await this.request<any>(() =>
+            this.client.get('/api/clearportx/debug/pool-by-cid', {
+              params: { cid: newPoolCid }, headers: { 'X-Party': party }
+            })
+          );
+          if (afterPool?.success) {
+            const aBefore = parseFloat(beforePool.reserveA);
+            const bBefore = parseFloat(beforePool.reserveB);
+            const aAfter = parseFloat(afterPool.reserveA);
+            const bAfter = parseFloat(afterPool.reserveB);
+            const symA = beforePool.symbolA;
+            const symB = beforePool.symbolB;
+            // If input=ETH and output=USDC and pool A=ETH/B=USDC, amountOut = bBefore - bAfter
+            if (params.inputSymbol === symA && params.outputSymbol === symB) {
+              const deltaOut = bBefore - bAfter;
+              if (deltaOut > 0) received = deltaOut;
+            } else if (params.inputSymbol === symB && params.outputSymbol === symA) {
+              const deltaOut = aBefore - aAfter;
+              if (deltaOut > 0) received = deltaOut;
+            }
+          }
+        } catch {}
       }
 
       return {

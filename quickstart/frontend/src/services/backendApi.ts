@@ -444,7 +444,11 @@ export class BackendApiService {
       const tokenData = Array.isArray(res.data) ? res.data : [];
       
       // Map all tokens
-      const allTokens = tokenData.map((data: any) => this.mapToken(data));
+      let allTokens = tokenData.map((data: any) => this.mapToken(data));
+      // Dev-only heuristic: exclude giant faucet mints when unauthenticated
+      if (!this.hasJwt()) {
+        allTokens = allTokens.filter(t => (t.balance || 0) < 100000);
+      }
 
     // Aggregate tokens by symbol (sum balances of same token)
     const tokenMap = new Map<string, TokenInfo>();

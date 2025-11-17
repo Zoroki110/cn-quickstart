@@ -1,11 +1,11 @@
 package com.digitalasset.quickstart.controller;
 
-import clearportx_amm_production_gv.amm.pool.Pool;
-import clearportx_amm_production_gv.token.token.Token;
-import clearportx_amm_production_gv.lptoken.lptoken.LPToken;
+import clearportx_amm_drain_credit.amm.pool.Pool;
+import clearportx_amm_drain_credit.token.token.Token;
+import clearportx_amm_drain_credit.lptoken.lptoken.LPToken;
 import com.digitalasset.quickstart.dto.AddLiquidityRequest;
-import clearportx_amm_production_gv.amm.swaprequest.SwapRequest;
-import clearportx_amm_production_gv.amm.swaprequest.SwapReady;
+import clearportx_amm_drain_credit.amm.swaprequest.SwapRequest;
+import clearportx_amm_drain_credit.amm.swaprequest.SwapReady;
 import com.digitalasset.quickstart.ledger.StaleAcsRetry;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 // import com.digitalasset.quickstart.service.PartyRegistryService;
@@ -22,7 +22,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.math.BigDecimal;
 import java.util.*;
-import clearportx_amm_production_gv.amm.pool.SwapTrace;
+// import clearportx_amm_production_gv.amm.pool.SwapTrace; // Commented out - not in current GV DAR
 
 /**
  * Direct pool creation endpoint for debugging.
@@ -105,17 +105,33 @@ public class PoolCreationController {
                 "feeReceiver", feeReceiverFqid
             ));
 
+            String tokenASymbol = normalizeSymbol(request.tokenASymbol, "ETH");
+            String tokenBSymbol = normalizeSymbol(request.tokenBSymbol, "USDC");
+            BigDecimal bootstrapAmountA = parseAmountOrDefault(request.tokenAInitial, "100.0");
+            BigDecimal bootstrapAmountB = parseAmountOrDefault(request.tokenBInitial, "200000.0");
+            long swapFeeBps = defaultLong(request.swapFeeBps, 10000L);
+            long protocolFeeBps = defaultLong(request.protocolFeeBps, 5000L);
+
+            result.put("tokenConfig", Map.of(
+                    "tokenASymbol", tokenASymbol,
+                    "tokenBSymbol", tokenBSymbol,
+                    "bootstrapAmountA", bootstrapAmountA.toPlainString(),
+                    "bootstrapAmountB", bootstrapAmountB.toPlainString(),
+                    "swapFeeBps", swapFeeBps,
+                    "protocolFeeBps", protocolFeeBps
+            ));
+
             boolean doBootstrap = request.bootstrapTokens != null && request.bootstrapTokens;
             if (doBootstrap) {
             // Step 2: Create ETH token
             steps.add("Creating ETH token");
-            logger.info("Step 2: Creating ETH token (100 ETH)...");
+            logger.info("Step 2: Creating {} token ({})...", tokenASymbol, bootstrapAmountA.toPlainString());
 
             Token ethToken = new Token(
                 new Party(ethIssuerFqid),
                 new Party(poolPartyFqid),
-                "ETH",
-                new BigDecimal("100.0")
+                tokenASymbol,
+                bootstrapAmountA
             );
 
             ContractId<Token> ethTokenCid = ledgerApi.createAndGetCid(
@@ -123,21 +139,21 @@ public class PoolCreationController {
                 List.of(ethIssuerFqid),
                 Collections.emptyList(),
                 UUID.randomUUID().toString(),
-                clearportx_amm_production_gv.Identifiers.Token_Token__Token
+                clearportx_amm_drain_credit.Identifiers.Token_Token__Token
             ).join();
 
                 logger.info("  ✓ ETH token created: {}", ethTokenCid.getContractId);
                 result.put("ethTokenCid", ethTokenCid.getContractId);
 
             // Step 3: Create USDC token
-            steps.add("Creating USDC token");
-            logger.info("Step 3: Creating USDC token (200,000 USDC)...");
+            steps.add("Creating token B");
+            logger.info("Step 3: Creating {} token ({})...", tokenBSymbol, bootstrapAmountB.toPlainString());
 
             Token usdcToken = new Token(
                 new Party(usdcIssuerFqid),
                 new Party(poolPartyFqid),
-                "USDC",
-                new BigDecimal("200000.0")
+                tokenBSymbol,
+                bootstrapAmountB
             );
 
             ContractId<Token> usdcTokenCid = ledgerApi.createAndGetCid(
@@ -145,7 +161,7 @@ public class PoolCreationController {
                 List.of(usdcIssuerFqid),
                 Collections.emptyList(),
                 UUID.randomUUID().toString(),
-                clearportx_amm_production_gv.Identifiers.Token_Token__Token
+                clearportx_amm_drain_credit.Identifiers.Token_Token__Token
             ).join();
 
                 logger.info("  ✓ USDC token created: {}", usdcTokenCid.getContractId);
@@ -159,7 +175,9 @@ public class PoolCreationController {
             steps.add("Creating Pool contract");
             logger.info("Step 4: Creating Pool contract...");
 
-            String poolId = (request.poolId != null && !request.poolId.isBlank()) ? request.poolId : "eth-usdc-direct";
+            String poolId = (request.poolId != null && !request.poolId.isBlank())
+                    ? request.poolId
+                    : String.format(Locale.ROOT, "%s-%s-direct", tokenASymbol.toLowerCase(Locale.ROOT), tokenBSymbol.toLowerCase(Locale.ROOT));
 
             Pool pool = new Pool(
                 new Party(operatorFqid),
@@ -167,20 +185,20 @@ public class PoolCreationController {
                 new Party(lpIssuerFqid),
                 new Party(ethIssuerFqid),
                 new Party(usdcIssuerFqid),
-                "ETH",
-                "USDC",
+                tokenASymbol,
+                tokenBSymbol,
                 30L,
                 poolId,
                 new RelTime(86400000000L),
                 new BigDecimal("0.0"),
                 new BigDecimal("0.0"),
                 new BigDecimal("0.0"),
-                Optional.empty(),
-                Optional.empty(),
+                Optional.<ContractId<Token>>empty(),
+                Optional.<ContractId<Token>>empty(),
                 new Party(feeReceiverFqid),
-                10000L,
-                5000L,
-                java.util.List.of()
+                swapFeeBps,
+                protocolFeeBps,
+                List.of()
             );
 
             ContractId<Pool> poolCid = ledgerApi.createAndGetCid(
@@ -188,7 +206,7 @@ public class PoolCreationController {
                 List.of(operatorFqid, poolPartyFqid),
                 Collections.emptyList(),
                 UUID.randomUUID().toString(),
-                clearportx_amm_production_gv.Identifiers.AMM_Pool__Pool
+                clearportx_amm_drain_credit.Identifiers.AMM_Pool__Pool
             ).join();
 
             logger.info("  ✓ Pool created: {}", poolCid.getContractId);
@@ -324,7 +342,7 @@ public class PoolCreationController {
                 List.of(request.issuerParty),
                 Collections.emptyList(),
                 UUID.randomUUID().toString(),
-                clearportx_amm_production_gv.Identifiers.Token_Token__Token
+                clearportx_amm_drain_credit.Identifiers.Token_Token__Token
             ).join();
 
             logger.info("  ✓ {} token created: {}", request.symbolA, tokenACid);
@@ -343,7 +361,7 @@ public class PoolCreationController {
                 List.of(request.issuerParty),
                 Collections.emptyList(),
                 UUID.randomUUID().toString(),
-                clearportx_amm_production_gv.Identifiers.Token_Token__Token
+                clearportx_amm_drain_credit.Identifiers.Token_Token__Token
             ).join();
 
             logger.info("  ✓ {} token created: {}", request.symbolB, tokenBCid);
@@ -390,12 +408,54 @@ public class PoolCreationController {
         public String feeReceiver;
         public String poolId; // optional override
         public Boolean bootstrapTokens; // optional
+        public String tokenASymbol;
+        public String tokenBSymbol;
+        public String tokenAInitial;
+        public String tokenBInitial;
+        public Long swapFeeBps;
+        public Long protocolFeeBps;
 
         @Override
         public String toString() {
-            return String.format("CreatePoolRequest{op=%s, pool=%s, ethIss=%s, usdcIss=%s, lpIss=%s, fee=%s, poolId=%s, bootstrapTokens=%s}",
-                operatorParty, poolParty, ethIssuer, usdcIssuer, lpIssuer, feeReceiver, poolId, bootstrapTokens);
+            return String.format(
+                Locale.ROOT,
+                "CreatePoolRequest{op=%s, pool=%s, tokenA=%s, tokenB=%s, ethIss=%s, usdcIss=%s, lpIss=%s, fee=%s, poolId=%s, bootstrapTokens=%s, swapFeeBps=%s, protocolFeeBps=%s}",
+                operatorParty,
+                poolParty,
+                tokenASymbol,
+                tokenBSymbol,
+                ethIssuer,
+                usdcIssuer,
+                lpIssuer,
+                feeReceiver,
+                poolId,
+                bootstrapTokens,
+                swapFeeBps,
+                protocolFeeBps
+            );
         }
+    }
+
+    private static String normalizeSymbol(String symbol, String fallback) {
+        if (symbol == null || symbol.isBlank()) {
+            return fallback;
+        }
+        return symbol.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static BigDecimal parseAmountOrDefault(String value, String fallback) {
+        try {
+            if (value == null || value.isBlank()) {
+                return new BigDecimal(fallback);
+            }
+            return new BigDecimal(value);
+        } catch (Exception e) {
+            return new BigDecimal(fallback);
+        }
+    }
+
+    private static long defaultLong(Long value, long fallback) {
+        return value != null ? value : fallback;
     }
 
     @PostMapping("/add-liquidity")
@@ -532,11 +592,6 @@ public class PoolCreationController {
                 java.util.List<String> cids = new java.util.ArrayList<>();
                 for (var c : toks) cids.add(c.contractId.getContractId);
                 return ResponseEntity.ok(java.util.Map.of("success", true, "party", party, "count", toks.size(), "cids", cids));
-            } else if (template.equals("AMM.Pool.SwapTrace")) {
-                var tr = ledgerApi.getActiveContractsForParty(SwapTrace.class, party).join();
-                java.util.List<String> cids = new java.util.ArrayList<>();
-                for (var c : tr) cids.add(c.contractId.getContractId);
-                return ResponseEntity.ok(java.util.Map.of("success", true, "party", party, "count", tr.size(), "cids", cids));
             }
             return ResponseEntity.badRequest().body(java.util.Map.of("success", false, "error", "Unknown template: " + template));
         } catch (Exception e) {
@@ -574,7 +629,7 @@ public class PoolCreationController {
             if (inputTok.payload.getAmount.compareTo(amountIn) < 0) return ResponseEntity.status(422).body(java.util.Map.of("success", false, "error", "Insufficient input"));
 
             var deadline = java.time.Instant.now().plusSeconds(600);
-            clearportx_amm_production_gv.amm.pool.Pool.AtomicSwap choice = new clearportx_amm_production_gv.amm.pool.Pool.AtomicSwap(
+            clearportx_amm_drain_credit.amm.pool.Pool.AtomicSwap choice = new clearportx_amm_drain_credit.amm.pool.Pool.AtomicSwap(
                 new com.digitalasset.transcode.java.Party(xParty),
                 inputTok.contractId,
                 inputSymbol,
@@ -684,7 +739,7 @@ public class PoolCreationController {
             var poolPayload = pool.payload;
 
             steps.add("Exercise AddLiquidity (party-scoped)");
-            var tuple = StaleAcsRetry.runWithBackoff(
+            var tuple = StaleAcsRetry.run(
                 () -> {
                     String commandId = java.util.UUID.randomUUID().toString();
 
@@ -758,9 +813,7 @@ public class PoolCreationController {
                     ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
                     ledgerApi.getActiveContractsForParty(Token.class, xParty).join();
                 },
-                "AddLiquidityForParty",
-                300L,
-                3
+                "AddLiquidityForParty"
             ).join();
 
             com.digitalasset.transcode.java.ContractId<LPToken> lpTokenCid = tuple.get_1;
@@ -856,7 +909,7 @@ public class PoolCreationController {
             }
 
             steps.add("Create SwapRequest and execute");
-            var receiptCid = StaleAcsRetry.runWithBackoff(
+            var receiptCid = StaleAcsRetry.run(
                 () -> {
                     String flowCmd = java.util.UUID.randomUUID().toString();
                     // Re-select latest pool by poolId (prefer highest TVL)
@@ -963,9 +1016,7 @@ public class PoolCreationController {
                     ledgerApi.getActiveContracts(SwapReady.class).join();
                     ledgerApi.getActiveContracts(Token.class).join();
                 },
-                "ExecuteSwapDebug",
-                500L,
-                6
+                "ExecuteSwapDebug"
             ).join();
 
             result.put("success", true);
@@ -1077,7 +1128,7 @@ public class PoolCreationController {
             }
 
             steps.add("Execute atomic swap");
-            var receiptCid = StaleAcsRetry.runWithBackoff(
+            var receiptCid = StaleAcsRetry.run(
                 () -> {
                     // Re-select freshest pool and input token each attempt
                     var poolsNow = ledgerApi.getActiveContracts(Pool.class).join();
@@ -1107,8 +1158,8 @@ public class PoolCreationController {
                     }
 
                     var deadlineNow = java.time.Instant.now().plusSeconds(300);
-                    clearportx_amm_production_gv.amm.pool.Pool.AtomicSwap exec =
-                        new clearportx_amm_production_gv.amm.pool.Pool.AtomicSwap(
+                    clearportx_amm_drain_credit.amm.pool.Pool.AtomicSwap exec =
+                        new clearportx_amm_drain_credit.amm.pool.Pool.AtomicSwap(
                             new com.digitalasset.transcode.java.Party(trader),
                             inputNow.contractId,
                             inputSymbol,
@@ -1136,9 +1187,7 @@ public class PoolCreationController {
                     ledgerApi.getActiveContracts(Pool.class).join();
                     ledgerApi.getActiveContracts(Token.class).join();
                 },
-                "AtomicSwapDebug",
-                500L,
-                6
+                "AtomicSwapDebug"
             ).join();
 
             result.put("success", true);
@@ -1207,23 +1256,10 @@ public class PoolCreationController {
         Map<String, Object> result = new HashMap<>();
         List<String> steps = new ArrayList<>();
         try {
-            steps.add("Fetch SwapTrace ACS");
-            var traces = ledgerApi.getActiveContracts(SwapTrace.class).join();
-            List<Map<String, Object>> items = new ArrayList<>();
-            for (var t : traces) {
-                Map<String, Object> row = new HashMap<>();
-                row.put("cid", t.contractId.getContractId);
-                row.put("poolId", t.payload.getPoolId);
-                row.put("info", t.payload.getInfo);
-                // Include structured fields to debug stale CID reuse
-                row.put("canonA", t.payload.getCanonA.map(c -> c.getContractId).orElse(null));
-                row.put("canonB", t.payload.getCanonB.map(c -> c.getContractId).orElse(null));
-                row.put("traderIn", t.payload.getTraderIn.map(c -> c.getContractId).orElse(null));
-                items.add(row);
-            }
+            steps.add("SwapTrace not available in current DAR");
             result.put("success", true);
-            result.put("traces", items);
-            result.put("count", items.size());
+            result.put("traces", java.util.List.of());
+            result.put("count", 0);
             result.put("steps", steps);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
@@ -1268,14 +1304,17 @@ public class PoolCreationController {
                 new Party(party), new Party(party), new Party(party), new Party(party), new Party(party),
                 "ETH", "USDC", 30L, "ETH-USDC",
                 new RelTime(86400000000L), java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO,
-                java.util.Optional.empty(), java.util.Optional.empty(), new Party(party), 10000L, 5000L, java.util.List.of()
-            );
+                java.util.Optional.<ContractId<Token>>empty(), java.util.Optional.<ContractId<Token>>empty(), new Party(party),
+                10000L,
+                5000L,
+                List.of()
+                );
             var poolCid = ledgerApi.createAndGetCid(
                 pool,
                 java.util.List.of(party),
                 java.util.List.of(),
                 cmdCreate,
-                clearportx_amm_production_gv.Identifiers.AMM_Pool__Pool
+                clearportx_amm_drain_credit.Identifiers.AMM_Pool__Pool
             ).join();
             out.put("poolCid", poolCid.getContractId);
 
@@ -1283,8 +1322,8 @@ public class PoolCreationController {
             steps.add("mint tokens");
             Token a = new Token(new Party(party), new Party(party), "ETH", new java.math.BigDecimal("1.0"));
             Token b = new Token(new Party(party), new Party(party), "USDC", new java.math.BigDecimal("2000.0"));
-            var aCid = ledgerApi.createAndGetCid(a, java.util.List.of(party), java.util.List.of(), cmdCreate+"-a", clearportx_amm_production_gv.Identifiers.Token_Token__Token).join();
-            var bCid = ledgerApi.createAndGetCid(b, java.util.List.of(party), java.util.List.of(), cmdCreate+"-b", clearportx_amm_production_gv.Identifiers.Token_Token__Token).join();
+            var aCid = ledgerApi.createAndGetCid(a, java.util.List.of(party), java.util.List.of(), cmdCreate+"-a", clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join();
+            var bCid = ledgerApi.createAndGetCid(b, java.util.List.of(party), java.util.List.of(), cmdCreate+"-b", clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join();
             out.put("tokenA", aCid.getContractId);
             out.put("tokenB", bCid.getContractId);
 

@@ -34,6 +34,20 @@ const formatDateTime = (iso?: string) => {
   }
 };
 
+const formatRelativeTime = (iso?: string) => {
+  if (!iso) return '—';
+  const created = new Date(iso).getTime();
+  if (Number.isNaN(created)) return iso;
+  const diffMs = Date.now() - created;
+  if (diffMs < 60_000) return 'Just now';
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+};
+
 const statusStyles: Record<TransactionHistoryEntry['status'], string> = {
   settled: 'bg-success-500/10 text-success-600 dark:text-success-400 border-success-500/30',
   pending: 'bg-warning-500/10 text-warning-600 dark:text-warning-400 border-warning-500/30',
@@ -65,6 +79,7 @@ const TransactionHistory: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -89,6 +104,19 @@ const TransactionHistory: React.FC = () => {
     [transactions, dismissedIds]
   );
 
+  useEffect(() => {
+    if (!selectedId && visibleTransactions.length > 0) {
+      setSelectedId(visibleTransactions[0].id);
+    } else if (selectedId && !visibleTransactions.find(tx => tx.id === selectedId)) {
+      setSelectedId(visibleTransactions[0]?.id || null);
+    }
+  }, [visibleTransactions, selectedId]);
+
+  const selectedTransaction = useMemo(
+    () => visibleTransactions.find((tx) => tx.id === selectedId) || null,
+    [visibleTransactions, selectedId]
+  );
+
   const handleRefresh = async () => {
     setRefreshing(true);
     await fetchHistory();
@@ -109,6 +137,26 @@ const TransactionHistory: React.FC = () => {
     } catch {
       toast.error('Unable to copy Contract ID');
     }
+  };
+
+  const formatTypeLabel = (type: TransactionHistoryEntry['type']) => {
+    switch (type) {
+      case 'ADD_LIQUIDITY':
+        return 'Add Liquidity';
+      case 'SWAP':
+        return 'Swap';
+      case 'POOL_CREATION':
+        return 'Pool Creation';
+      default:
+        return type.replace('_', ' ');
+    }
+  };
+
+  const summarizeAmount = (tx: TransactionHistoryEntry) => {
+    if (tx.type === 'SWAP') {
+      return `${formatCompact(tx.amountADesired)} ${tx.tokenA} → ${formatCompact(tx.amountBDesired)} ${tx.tokenB}`;
+    }
+    return `${formatCompact(tx.amountADesired)} ${tx.tokenA} / ${formatCompact(tx.amountBDesired)} ${tx.tokenB}`;
   };
 
   const renderDetails = (tx: TransactionHistoryEntry) => [
@@ -168,25 +216,58 @@ const TransactionHistory: React.FC = () => {
             <p className="text-sm text-gray-400">Exécutez un swap ou un ajout de liquidité pour voir l'historique.</p>
           </div>
         ) : (
-          <div className="space-y-10">
-            {visibleTransactions.map((tx) => (
-              <article key={tx.id} className="rounded-2xl border border-gray-200/60 dark:border-gray-800/60 bg-white/80 dark:bg-dark-900/80 p-6 shadow-lg">
+          <div className="space-y-8">
+            <div className="overflow-hidden rounded-2xl border border-gray-200/60 dark:border-gray-800/60 bg-white/70 dark:bg-dark-900/70">
+              <div className="grid grid-cols-5 gap-4 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                <span>Time</span>
+                <span>Type</span>
+                <span>Pool</span>
+                <span>Amount</span>
+                <span>Status</span>
+              </div>
+              <div className="divide-y divide-gray-200/60 dark:divide-gray-800/60">
+                {visibleTransactions.map((tx) => (
+                  <button
+                    key={tx.id}
+                    onClick={() => setSelectedId(tx.id)}
+                    className={`w-full text-left px-4 py-3 transition duration-200 ${
+                      selectedId === tx.id
+                        ? 'bg-white dark:bg-dark-800'
+                        : 'hover:bg-gray-50 dark:hover:bg-dark-800/40'
+                    }`}
+                  >
+                    <div className="grid grid-cols-5 gap-4 items-center">
+                      <span className="text-sm text-gray-600 dark:text-gray-300">{formatRelativeTime(tx.createdAt)}</span>
+                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{formatTypeLabel(tx.type)}</span>
+                      <span className="text-sm text-gray-700 dark:text-gray-200">{tx.poolId || '—'}</span>
+                      <span className="text-sm text-gray-700 dark:text-gray-200">{summarizeAmount(tx)}</span>
+                      <span className={`justify-self-start px-3 py-1 rounded-full text-xs font-semibold border ${statusStyles[tx.status]}`}>
+                        {statusLabels[tx.status]}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {selectedTransaction && (
+              <article className="rounded-2xl border border-gray-200/60 dark:border-gray-800/60 bg-white/80 dark:bg-dark-900/80 p-6 shadow-lg">
                 <header className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between border-b border-gray-200/60 dark:border-gray-800/60 pb-5 mb-6">
                   <div>
-                    <p className="text-sm text-accent-600 font-semibold uppercase tracking-wide">{tx.title}</p>
+                    <p className="text-sm text-accent-600 font-semibold uppercase tracking-wide">{selectedTransaction.title}</p>
                     <h3 className="text-responsive-lg font-semibold mt-1 text-gray-900 dark:text-gray-100">
-                      {tx.tokenA}/{tx.tokenB}
+                      {selectedTransaction.tokenA}/{selectedTransaction.tokenB}
                     </h3>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Created {formatDateTime(tx.createdAt)}
+                      Created {formatDateTime(selectedTransaction.createdAt)}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className={`px-4 py-1.5 rounded-full text-sm font-medium border ${statusStyles[tx.status]}`}>
-                      {statusLabels[tx.status]}
+                    <span className={`px-4 py-1.5 rounded-full text-sm font-medium border ${statusStyles[selectedTransaction.status]}`}>
+                      {statusLabels[selectedTransaction.status]}
                     </span>
                     <button
-                      onClick={() => handleDismiss(tx.id)}
+                      onClick={() => handleDismiss(selectedTransaction.id)}
                       className="h-10 w-10 rounded-full border border-gray-200 dark:border-gray-700 flex items-center justify-center hover:bg-gray-50 dark:hover:bg-dark-800 transition-colors"
                       title="Fermer cette fiche"
                     >
@@ -195,12 +276,11 @@ const TransactionHistory: React.FC = () => {
                   </div>
                 </header>
 
-                {/* Transaction Details */}
                 <section className="mb-8">
                   <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Transaction Details</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {renderDetails(tx).map((detail) => (
-                      <div key={`${tx.id}-${detail.label}`} className="rounded-xl border border-gray-100 dark:border-gray-800 bg-white/60 dark:bg-dark-900/60 p-4">
+                    {renderDetails(selectedTransaction).map((detail) => (
+                      <div key={`${selectedTransaction.id}-${detail.label}`} className="rounded-xl border border-gray-100 dark:border-gray-800 bg-white/60 dark:bg-dark-900/60 p-4">
                         <p className="text-sm text-gray-500 dark:text-gray-400">{detail.label}</p>
                         <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">{detail.value}</p>
                       </div>
@@ -208,11 +288,10 @@ const TransactionHistory: React.FC = () => {
                   </div>
                 </section>
 
-                {/* Event Timeline */}
                 <section className="mb-8">
                   <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Event Timeline</h4>
                   <ol className="relative border-l border-gray-200 dark:border-gray-700 pl-6 space-y-6">
-                    {tx.eventTimeline.map((event) => (
+                    {selectedTransaction.eventTimeline.map((event) => (
                       <li key={event.id} className="relative">
                         <span className="absolute -left-3 top-0 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white dark:bg-dark-900 border border-gray-200 dark:border-gray-700 shadow">
                           {timelineIcon(event.status)}
@@ -231,15 +310,14 @@ const TransactionHistory: React.FC = () => {
                   </ol>
                 </section>
 
-                {/* Contract ID */}
                 <section>
                   <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Contract ID</h4>
                   <div className="flex flex-col md:flex-row md:items-center gap-4">
                     <code className="flex-1 text-xs md:text-sm break-all rounded-xl bg-gray-900/90 text-white px-4 py-3 shadow-inner">
-                      {tx.contractId || 'N/A'}
+                      {selectedTransaction.contractId || 'N/A'}
                     </code>
                     <button
-                      onClick={() => handleCopyContractId(tx.contractId)}
+                      onClick={() => handleCopyContractId(selectedTransaction.contractId)}
                       className="btn-secondary flex items-center justify-center gap-2 px-4 py-2"
                     >
                       <Copy className="h-4 w-4" />
@@ -248,7 +326,7 @@ const TransactionHistory: React.FC = () => {
                   </div>
                 </section>
               </article>
-            ))}
+            )}
           </div>
         )}
       </div>

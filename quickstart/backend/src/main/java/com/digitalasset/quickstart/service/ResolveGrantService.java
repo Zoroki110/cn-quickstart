@@ -1,7 +1,7 @@
 package com.digitalasset.quickstart.service;
 
-import clearportx_amm_production_gv.amm.pool.Pool;
-import clearportx_amm_production_gv.token.token.Token;
+import clearportx_amm_drain_credit.amm.pool.Pool;
+import clearportx_amm_drain_credit.token.token.Token;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 import com.digitalasset.transcode.java.ContractId;
 import com.digitalasset.transcode.java.Party;
@@ -39,7 +39,23 @@ public class ResolveGrantService {
         List<LedgerApi.ActiveContract<Pool>> poolsOp = ledgerApi.getActiveContractsForParty(Pool.class, operator).join();
         List<LedgerApi.ActiveContract<Pool>> candidates = new ArrayList<>();
         for (var p : poolsOp) {
-            if (p.payload.getPoolId.equals(poolId)) candidates.add(p);
+            if (p.payload.getPoolId.equalsIgnoreCase(poolId)) candidates.add(p);
+        }
+        if (candidates.isEmpty()) {
+            // Fallback: interpret poolId as token pair (e.g., ETH-USDC) ignoring order/case
+            String normalized = poolId.trim().toUpperCase(Locale.ROOT);
+            String[] parts = normalized.split("[-_/]");
+            if (parts.length == 2) {
+                String first = parts[0];
+                String second = parts[1];
+                for (var p : poolsOp) {
+                    String symA = p.payload.getSymbolA.toUpperCase(Locale.ROOT);
+                    String symB = p.payload.getSymbolB.toUpperCase(Locale.ROOT);
+                    if ((symA.equals(first) && symB.equals(second)) || (symA.equals(second) && symB.equals(first))) {
+                        candidates.add(p);
+                    }
+                }
+            }
         }
         if (candidates.isEmpty()) {
             throw new IllegalStateException("No pool candidates found for poolId=" + poolId);
@@ -74,37 +90,13 @@ public class ResolveGrantService {
             final String targetCid = currentCid;
             boolean visible = partyPools.stream().anyMatch(p -> p.contractId.getContractId.equals(targetCid));
             if (!visible) {
-                String cmdId = java.util.UUID.randomUUID().toString();
-                Pool.GrantVisibility choice = new Pool.GrantVisibility(new Party(party));
-                try {
-                    ContractId<Pool> newCid = ledgerApi.exerciseAndGetResultWithParties(
-                            chosen.contractId,
-                            choice,
-                            cmdId,
-                            List.of(operator),
-                            List.of(operator, party)
-                    ).join();
-                    if (!newCid.getContractId.equals(currentCid)) {
-                        currentCid = newCid.getContractId;
-                    }
-                    granted = true;
-                } catch (Exception first) {
-                    // Retry across other operator-visible candidates for same poolId
-                    for (var cand : candidates) {
-                        try {
-                            ContractId<Pool> newCid = ledgerApi.exerciseAndGetResultWithParties(
-                                    cand.contractId,
-                                    choice,
-                                    java.util.UUID.randomUUID().toString(),
-                                    List.of(operator),
-                                    List.of(operator, party)
-                            ).join();
-                            currentCid = newCid.getContractId;
-                            granted = true;
-                            break;
-                        } catch (Exception ignore) {
-                            // try next
-                        }
+                // Fall back to picking a candidate visible to 'party' (no on-ledger grant)
+                for (var cand : candidates) {
+                    String candCid = cand.contractId.getContractId;
+                    boolean candVisible = partyPools.stream().anyMatch(p -> p.contractId.getContractId.equals(candCid));
+                    if (candVisible) {
+                        currentCid = candCid;
+                        break;
                     }
                 }
             }

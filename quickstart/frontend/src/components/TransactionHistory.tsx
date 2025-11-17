@@ -193,7 +193,6 @@ const TransactionHistory: React.FC = () => {
       <div className="card">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
           <div>
-            <p className="text-sm uppercase tracking-widest text-gray-500 dark:text-gray-400">Vue de détail</p>
             <h2 className="heading-2">Transaction History</h2>
           </div>
           <button
@@ -218,10 +217,9 @@ const TransactionHistory: React.FC = () => {
         ) : (
           <div className="space-y-8">
             <div className="overflow-hidden rounded-2xl border border-gray-200/60 dark:border-gray-800/60 bg-white/70 dark:bg-dark-900/70">
-              <div className="grid grid-cols-5 gap-4 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              <div className="grid grid-cols-4 gap-4 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 <span>Time</span>
                 <span>Type</span>
-                <span>Pool</span>
                 <span>Amount</span>
                 <span>Status</span>
               </div>
@@ -236,10 +234,9 @@ const TransactionHistory: React.FC = () => {
                         : 'hover:bg-gray-50 dark:hover:bg-dark-800/40'
                     }`}
                   >
-                    <div className="grid grid-cols-5 gap-4 items-center">
+                    <div className="grid grid-cols-4 gap-4 items-center">
                       <span className="text-sm text-gray-600 dark:text-gray-300">{formatRelativeTime(tx.createdAt)}</span>
                       <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{formatTypeLabel(tx.type)}</span>
-                      <span className="text-sm text-gray-700 dark:text-gray-200">{tx.poolId || '—'}</span>
                       <span className="text-sm text-gray-700 dark:text-gray-200">{summarizeAmount(tx)}</span>
                       <span className={`justify-self-start px-3 py-1 rounded-full text-xs font-semibold border ${statusStyles[tx.status]}`}>
                         {statusLabels[tx.status]}

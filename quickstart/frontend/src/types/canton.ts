@@ -144,6 +144,34 @@ export interface SwapTransaction {
   error?: string;
 }
 
+export type TransactionStatus = 'pending' | 'settled' | 'failed';
+export type TransactionType = 'ADD_LIQUIDITY' | 'SWAP' | 'POOL_CREATION' | 'TOKEN_MINT' | 'UNKNOWN';
+
+export interface TransactionTimelineItem {
+  id: string;
+  title: string;
+  description: string;
+  status: 'completed' | 'pending' | 'failed';
+  timestamp?: string;
+}
+
+export interface TransactionHistoryEntry {
+  id: string;
+  title: string;
+  type: TransactionType;
+  status: TransactionStatus;
+  createdAt: string;
+  expiresAt?: string;
+  tokenA: string;
+  tokenB: string;
+  amountADesired: string;
+  amountBDesired: string;
+  minLpAmount?: string;
+  lpTokenSymbol?: string;
+  contractId: string;
+  eventTimeline: TransactionTimelineItem[];
+}
+
 // Pool Interface Types
 export interface PoolInfo {
   contractId: string;

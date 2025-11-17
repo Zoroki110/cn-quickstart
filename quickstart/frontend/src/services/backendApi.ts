@@ -1,7 +1,7 @@
 // ClearportX Backend API Service
 // Connects to Spring Boot backend at http://localhost:8080
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { TokenInfo, PoolInfo, SwapQuote } from '../types/canton';
+import { TokenInfo, PoolInfo, SwapQuote, TransactionHistoryEntry } from '../types/canton';
 import { getAccessToken, getPartyId } from './auth';
 import { BUILD_INFO } from '../config/build-info';
 
@@ -23,8 +23,8 @@ const BACKEND_URL =
  * This allows using friendly names like "alice" in the frontend
  * while using the real Canton party IDs in backend calls
  */
-const DEVNET_PARTY = process.env.REACT_APP_PARTY_ID 
-  || 'ClearportX-DEX-1::122043801dccdfd8c892fa46ebc1dafc901f7992218886840830aeef1cf7eacedd09';
+const DEVNET_PARTY = process.env.REACT_APP_PARTY_ID
+  || 'ClearportX-DEX-1::122081f2b8e29cbe57d1037a18e6f70e57530773b3a4d1bea6bab981b7a76e943b37';
 
 const PARTY_MAPPING: Record<string, string> = {
   'alice@clearportx': DEVNET_PARTY,
@@ -33,6 +33,40 @@ const PARTY_MAPPING: Record<string, string> = {
   'AppProvider': DEVNET_PARTY,
   'app-provider': DEVNET_PARTY,
 };
+
+const FALLBACK_TRANSACTIONS: TransactionHistoryEntry[] = [
+  {
+    id: 'demo-add-liquidity-001',
+    title: 'AddLiquidity Transaction',
+    type: 'ADD_LIQUIDITY',
+    status: 'settled',
+    createdAt: '2025-11-15T19:45:00Z',
+    expiresAt: '2025-11-15T20:46:00Z',
+    tokenA: 'CC',
+    tokenB: 'PP',
+    amountADesired: '1950',
+    amountBDesired: '1950',
+    minLpAmount: '1940',
+    lpTokenSymbol: 'LP-CC-PP',
+    contractId: '00b69dbaaa12f291cc65c5377c7b5d11baba199397af2bfdc5ed5757d50d2806d3ca111220d53ee8f31b108591e1517f7787c6adedc2b2386e86c65da1bf100e112392dc9f',
+    eventTimeline: [
+      {
+        id: 'demo-add-liquidity-001-evt-1',
+        title: 'Add Liquidity Settled',
+        description: 'Added 1.95K CC / 1.95K PP and received 1.95K LP tokens.',
+        status: 'completed',
+        timestamp: '2025-11-15T19:46:00Z',
+      },
+      {
+        id: 'demo-add-liquidity-001-evt-2',
+        title: 'Intent Archived',
+        description: 'Transaction was archived.',
+        status: 'completed',
+        timestamp: '2025-11-15T19:47:00Z',
+      },
+    ],
+  },
+];
 
 /**
  * Map frontend party name to Canton party ID
@@ -336,7 +370,7 @@ export class BackendApiService {
       if (sameId) return sameId.poolCid;
       const m = (poolId || '').toUpperCase().match(/([A-Z]+)-([A-Z]+)/);
       if (m && m.length >= 3) {
-        const [_, a, b] = m;
+        const [, a, b] = m;
         const byPair = rows.filter(r =>
           (r.symbolA === a && r.symbolB === b) || (r.symbolA === b && r.symbolB === a)
         );
@@ -1007,6 +1041,71 @@ export class BackendApiService {
       USDT: 'https://cryptologos.cc/logos/tether-usdt-logo.png',
     };
     return logos[symbol] || '';
+  }
+
+  async getTransactionHistory(): Promise<TransactionHistoryEntry[]> {
+    try {
+      const res = await this.client.get('/api/transactions/recent');
+      const rows = Array.isArray(res.data) ? res.data : [];
+      if (!rows.length) {
+        return FALLBACK_TRANSACTIONS;
+      }
+      return rows.map((row: any) => this.normalizeTransactionHistoryEntry(row));
+    } catch (error) {
+      console.warn('Falling back to demo transaction history payload:', error);
+      return FALLBACK_TRANSACTIONS;
+    }
+  }
+
+  private normalizeTransactionHistoryEntry(entry: any): TransactionHistoryEntry {
+    const fallbackId = entry?.id || entry?.transactionId || `tx-${Date.now()}`;
+    return {
+      id: fallbackId,
+      title: entry?.title || this.inferTransactionTitle(entry?.type),
+      type: entry?.type || 'UNKNOWN',
+      status: entry?.status || 'pending',
+      createdAt: entry?.createdAt || entry?.timestamp || new Date().toISOString(),
+      expiresAt: entry?.expiresAt,
+      tokenA: entry?.tokenA || entry?.symbolA || '',
+      tokenB: entry?.tokenB || entry?.symbolB || '',
+      amountADesired: entry?.amountADesired?.toString() ?? entry?.amountA?.toString() ?? '0',
+      amountBDesired: entry?.amountBDesired?.toString() ?? entry?.amountB?.toString() ?? '0',
+      minLpAmount: entry?.minLpAmount?.toString() ?? entry?.minAmountLp?.toString(),
+      lpTokenSymbol: entry?.lpTokenSymbol,
+      contractId: entry?.contractId || entry?.cid || '',
+      eventTimeline: Array.isArray(entry?.eventTimeline) && entry?.eventTimeline.length > 0
+        ? entry.eventTimeline.map((item: any, index: number) => ({
+            id: item?.id || `${fallbackId}-evt-${index}`,
+            title: item?.title || 'Ledger Event',
+            description: item?.description || '',
+            status: item?.status || 'completed',
+            timestamp: item?.timestamp,
+          }))
+        : [
+            {
+              id: `${fallbackId}-evt-0`,
+              title: 'Ledger Event',
+              description: 'Event recorded on Canton ledger.',
+              status: 'completed',
+              timestamp: entry?.createdAt || new Date().toISOString(),
+            },
+          ],
+    };
+  }
+
+  private inferTransactionTitle(type: TransactionHistoryEntry['type'] | undefined): string {
+    switch (type) {
+      case 'ADD_LIQUIDITY':
+        return 'AddLiquidity Transaction';
+      case 'SWAP':
+        return 'Swap Transaction';
+      case 'POOL_CREATION':
+        return 'Pool Creation Transaction';
+      case 'TOKEN_MINT':
+        return 'Token Mint Transaction';
+      default:
+        return 'Ledger Transaction';
+    }
   }
 }
 

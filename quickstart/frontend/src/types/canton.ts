@@ -168,6 +168,7 @@ export interface TransactionHistoryEntry {
   amountBDesired: string;
   minLpAmount?: string;
   lpTokenSymbol?: string;
+  lpMintedAmount?: string;
   poolId?: string;
   contractId: string;
   eventTimeline: TransactionTimelineItem[];

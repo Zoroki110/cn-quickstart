@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { backendApi } from '../services/backendApi';
@@ -38,10 +38,9 @@ const LiquidityInterface: React.FC = () => {
           }
         });
 
-        // 3. Get user balances for these tokens
-        // TEMPORARY: Use public endpoint (hardcoded 'app-provider')
-        // TODO: Get party from authService.getParty() after OAuth login
-        const userTokens = await backendApi.getTokens('app-provider');
+        // 3. Get user balances for these tokens (wallet view excludes pool canonicals)
+        const actingParty = backendApi.getCurrentParty();
+        const userTokens = await backendApi.getWalletTokens(actingParty);
 
         // 4. Merge pool tokens with user balances (default to 0 if user has no balance)
         const tokensWithBalances = Array.from(uniqueTokensMap.values()).map(token => {
@@ -53,6 +52,8 @@ const LiquidityInterface: React.FC = () => {
         });
 
         setTokens(tokensWithBalances);
+        setSelectedTokenA(prev => (prev ? tokensWithBalances.find(t => t.symbol === prev.symbol) || prev : null));
+        setSelectedTokenB(prev => (prev ? tokensWithBalances.find(t => t.symbol === prev.symbol) || prev : null));
 
         // Si un pool est passé en paramètre, pré-sélectionner les tokens
         const pool = location.state?.pool as PoolInfo | undefined;
@@ -73,6 +74,24 @@ const LiquidityInterface: React.FC = () => {
 
     loadTokens();
   }, [location.state, setPools]);
+
+  const refreshWalletBalances = useCallback(async () => {
+    try {
+      const actingParty = backendApi.getCurrentParty();
+      const walletTokens = await backendApi.getWalletTokens(actingParty);
+      setTokens(currentTokens => {
+        const updated = currentTokens.map(token => {
+          const match = walletTokens.find(t => t.symbol === token.symbol);
+          return { ...token, balance: match?.balance || 0 };
+        });
+        setSelectedTokenA(prev => (prev ? updated.find(t => t.symbol === prev.symbol) || prev : null));
+        setSelectedTokenB(prev => (prev ? updated.find(t => t.symbol === prev.symbol) || prev : null));
+        return updated;
+      });
+    } catch (error) {
+      console.error('Failed to refresh wallet balances:', error);
+    }
+  }, []);
 
   // Calculer automatiquement le montant B en fonction du ratio du pool
   useEffect(() => {
@@ -143,11 +162,22 @@ const LiquidityInterface: React.FC = () => {
         minLPTokens: '0.0000000001',  // Allow any amount (no minimum for now)
       });
 
-      toast.success(`Liquidity added! LP tokens: ${parseFloat(response.lpAmount).toFixed(4)}`);
+      const lpFromResponse = response?.lpAmount ? parseFloat(response.lpAmount) : NaN;
+      const lpDisplayAmount = Number.isFinite(lpFromResponse) && lpFromResponse > 0
+        ? lpFromResponse
+        : estimatedLPTokens;
+      toast.success(`Liquidity added! LP tokens: ${lpDisplayAmount.toFixed(4)}`);
 
       // Recharger les pools
       const updatedPools = await backendApi.getPools();
       setPools(updatedPools);
+      await refreshWalletBalances();
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('clearportx:transactions:refresh', {
+          detail: { source: 'liquidity:add', historyEntryId: response?.historyEntryId }
+        }));
+      }
 
       // Reset form
       setAmountA('');
@@ -180,14 +210,26 @@ const LiquidityInterface: React.FC = () => {
     }
   };
 
-  const existingPool = pools.find(p =>
-    (p.tokenA.symbol === selectedTokenA?.symbol && p.tokenB.symbol === selectedTokenB?.symbol) ||
-    (p.tokenA.symbol === selectedTokenB?.symbol && p.tokenB.symbol === selectedTokenA?.symbol)
-  );
+  const existingPool = useMemo(() => (
+    pools.find(p =>
+      (p.tokenA.symbol === selectedTokenA?.symbol && p.tokenB.symbol === selectedTokenB?.symbol) ||
+      (p.tokenA.symbol === selectedTokenB?.symbol && p.tokenB.symbol === selectedTokenA?.symbol)
+    ) || null
+  ), [pools, selectedTokenA, selectedTokenB]);
 
-  const estimatedLPTokens = amountA && amountB
-    ? Math.sqrt(parseFloat(amountA) * parseFloat(amountB))
-    : 0;
+  const estimatedLPTokens = useMemo(() => {
+    const valueA = parseFloat(amountA);
+    const valueB = parseFloat(amountB);
+    if (!Number.isFinite(valueA) || !Number.isFinite(valueB) || valueA <= 0 || valueB <= 0) {
+      return 0;
+    }
+    if (!existingPool || existingPool.totalLiquidity <= 0 || existingPool.reserveA <= 0 || existingPool.reserveB <= 0) {
+      return Math.sqrt(valueA * valueB);
+    }
+    const shareA = (valueA * existingPool.totalLiquidity) / existingPool.reserveA;
+    const shareB = (valueB * existingPool.totalLiquidity) / existingPool.reserveB;
+    return Math.min(shareA, shareB);
+  }, [amountA, amountB, existingPool]);
 
   const poolShare = existingPool && estimatedLPTokens
     ? (estimatedLPTokens / (existingPool.totalLiquidity + estimatedLPTokens)) * 100

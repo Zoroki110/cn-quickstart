@@ -99,6 +99,15 @@ const TransactionHistory: React.FC = () => {
     fetchHistory();
   }, [fetchHistory]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const handler = () => fetchHistory();
+    window.addEventListener('clearportx:transactions:refresh', handler);
+    return () => window.removeEventListener('clearportx:transactions:refresh', handler);
+  }, [fetchHistory]);
+
   const visibleTransactions = useMemo(
     () => transactions.filter((tx) => !dismissedIds.has(tx.id)),
     [transactions, dismissedIds]
@@ -165,6 +174,7 @@ const TransactionHistory: React.FC = () => {
     { label: 'Token B', value: tx.tokenB || '—' },
     { label: 'Amount B Desired', value: `${formatCompact(tx.amountBDesired)} ${tx.tokenB}` },
     { label: 'Min LP Amount', value: tx.minLpAmount ? `${formatCompact(tx.minLpAmount)} ${tx.lpTokenSymbol || 'LP'}` : '—' },
+    { label: 'LP Tokens Minted', value: tx.lpMintedAmount ? `${formatCompact(tx.lpMintedAmount)} ${tx.lpTokenSymbol || 'LP'}` : '—' },
     { label: 'Expires At', value: formatDateTime(tx.expiresAt) },
     { label: 'Status', value: statusLabels[tx.status] },
   ];

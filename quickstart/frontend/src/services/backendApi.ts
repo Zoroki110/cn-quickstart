@@ -578,7 +578,7 @@ export class BackendApiService {
       
       // Ensure res.data is an array
       const tokenData = Array.isArray(res.data) ? res.data : [];
-      
+
       // Map all tokens
       let allTokens = tokenData.map((data: any) => this.mapToken(data));
       // Dev-only heuristic: exclude giant faucet mints when unauthenticated
@@ -586,28 +586,11 @@ export class BackendApiService {
         allTokens = allTokens.filter(t => (t.balance || 0) < 100000);
       }
 
-    // Aggregate tokens by symbol (sum balances of same token)
-    const tokenMap = new Map<string, TokenInfo>();
+      const aggregatedTokens = this.aggregateTokensBySymbol(allTokens).filter(token => (token.balance || 0) > 0);
 
-    for (const token of allTokens) {
-      const existing = tokenMap.get(token.symbol);
-      if (existing) {
-        // Sum the balances
-        existing.balance = (existing.balance || 0) + (token.balance || 0);
-      } else {
-        // First occurrence of this symbol
-        tokenMap.set(token.symbol, { ...token });
-      }
-    }
+      console.log(`Aggregated ${allTokens.length} tokens into ${aggregatedTokens.length} unique tokens`);
 
-    // Convert map to array and filter out tokens with 0 balance
-    const aggregatedTokens = Array.from(tokenMap.values())
-      .filter(token => (token.balance || 0) > 0)
-      .sort((a, b) => (b.balance || 0) - (a.balance || 0)); // Sort by balance descending
-
-    console.log(`Aggregated ${allTokens.length} tokens into ${aggregatedTokens.length} unique tokens`);
-
-    return aggregatedTokens;
+      return aggregatedTokens;
     } catch (error) {
       console.error('Error loading tokens:', error);
       return [];
@@ -618,7 +601,18 @@ export class BackendApiService {
    * Wallet-only tokens (exclude pool canonical tokens)
    */
   async getWalletTokens(party: string): Promise<TokenInfo[]> {
-    return this.getTokens(party);
+    const cantonParty = mapPartyToBackend(party);
+    console.log(`Getting wallet tokens for ${party} (mapped to ${cantonParty})`);
+    try {
+      const res = await this.client.get(`/api/wallet/tokens/${cantonParty}`);
+      const tokenData = Array.isArray(res.data) ? res.data : [];
+      const aggregated = this.aggregateTokensBySymbol(tokenData.map((data: any) => this.mapToken(data)));
+      console.log(`Wallet tokens aggregated into ${aggregated.length} entries`);
+      return aggregated;
+    } catch (error) {
+      console.error('Error loading wallet tokens:', error);
+      return this.getTokens(party);
+    }
   }
 
   /**
@@ -830,7 +824,7 @@ export class BackendApiService {
   /**
    * Add liquidity to a pool
    */
-  async addLiquidity(params: AddLiquidityParams): Promise<{ lpTokenCid: string; lpAmount: string }> {
+  async addLiquidity(params: AddLiquidityParams): Promise<{ lpTokenCid: string; lpAmount: string; historyEntryId?: string }> {
     // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
       const party = this.currentParty();
@@ -851,7 +845,8 @@ export class BackendApiService {
       const res = await this.request<any>(() => this.client.post('/api/clearportx/debug/add-liquidity-by-cid', byCid));
       return {
         lpTokenCid: res?.lpTokenCid ?? '',
-        lpAmount: res?.lpAmount ?? params.minLPTokens
+        lpAmount: res?.lpAmount ?? params.minLPTokens,
+        historyEntryId: res?.historyEntryId,
       };
     }
 
@@ -868,7 +863,7 @@ export class BackendApiService {
     amountA: string;
     amountB: string;
     minLPTokens: string;
-  }): Promise<{ lpTokenCid: string; lpAmount: string }> {
+  }): Promise<{ lpTokenCid: string; lpAmount: string; historyEntryId?: string }> {
     const party = this.currentParty();
     const poolId = params.poolId || '';
     const visibleCid = await this.ensurePoolCidVisible(params.poolCid, poolId, party);
@@ -882,7 +877,8 @@ export class BackendApiService {
     const res = await this.request<any>(() => this.client.post('/api/clearportx/debug/add-liquidity-by-cid', body));
     return {
       lpTokenCid: res?.lpTokenCid ?? '',
-      lpAmount: res?.lpAmount ?? params.minLPTokens
+      lpAmount: res?.lpAmount ?? params.minLPTokens,
+      historyEntryId: res?.historyEntryId,
     };
   }
   /**
@@ -1014,7 +1010,7 @@ export class BackendApiService {
       },
       reserveA: parseFloat(row.reserveA || '0'),
       reserveB: parseFloat(row.reserveB || '0'),
-      totalLiquidity: 0, // not provided; optional
+      totalLiquidity: parseFloat(row.totalLPSupply || row.totalLiquidity || '0'),
       feeRate: 0.003,
       apr: 0,
       volume24h: 0,
@@ -1030,6 +1026,19 @@ export class BackendApiService {
       contractId: data.contractId || '',
       logoUrl: this.getTokenLogo(data.symbol),
     };
+  }
+
+  private aggregateTokensBySymbol(tokens: TokenInfo[]): TokenInfo[] {
+    const tokenMap = new Map<string, TokenInfo>();
+    for (const token of tokens) {
+      const existing = tokenMap.get(token.symbol);
+      if (existing) {
+        existing.balance = (existing.balance || 0) + (token.balance || 0);
+      } else {
+        tokenMap.set(token.symbol, { ...token });
+      }
+    }
+    return Array.from(tokenMap.values()).sort((a, b) => (b.balance || 0) - (a.balance || 0));
   }
 
   // Helper: Get token logo URL
@@ -1072,6 +1081,7 @@ export class BackendApiService {
       amountBDesired: entry?.amountBDesired?.toString() ?? entry?.amountB?.toString() ?? '0',
       minLpAmount: entry?.minLpAmount?.toString() ?? entry?.minAmountLp?.toString(),
       lpTokenSymbol: entry?.lpTokenSymbol,
+      lpMintedAmount: entry?.lpMintedAmount?.toString?.() ?? entry?.lpMintedAmount,
       contractId: entry?.contractId || entry?.cid || '',
       eventTimeline: Array.isArray(entry?.eventTimeline) && entry?.eventTimeline.length > 0
         ? entry.eventTimeline.map((item: any, index: number) => ({

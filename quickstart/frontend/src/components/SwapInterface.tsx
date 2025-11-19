@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../stores';
 import { useContractStore } from '../stores/useContractStore';
@@ -22,6 +22,21 @@ const SwapInterface: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [pools, setPools] = useState<PoolInfo[]>([]);
   const [volume24h, setVolume24h] = useState<number>(0);
+
+  const resolvedPoolId = useMemo(() => {
+    if (!selectedTokens.from || !selectedTokens.to || pools.length === 0) return null;
+    const fromSymbol = selectedTokens.from.symbol.toUpperCase();
+    const toSymbol = selectedTokens.to.symbol.toUpperCase();
+    const match = pools.find(pool => {
+      const symbolA = pool.tokenA.symbol.toUpperCase();
+      const symbolB = pool.tokenB.symbol.toUpperCase();
+      return (
+        (symbolA === fromSymbol && symbolB === toSymbol) ||
+        (symbolA === toSymbol && symbolB === fromSymbol)
+      );
+    });
+    return match?.contractId ?? null;
+  }, [pools, selectedTokens.from, selectedTokens.to]);
 
   const formatCurrency = (value: number) => {
     if (!isFinite(value) || value <= 0) return '$0';
@@ -92,7 +107,7 @@ const SwapInterface: React.FC = () => {
 
   // Calculer le quote quand le montant change
   useEffect(() => {
-    if (!selectedTokens.from || !selectedTokens.to || !inputAmount) {
+    if (!selectedTokens.from || !selectedTokens.to || !inputAmount || !resolvedPoolId) {
       setOutputAmount('');
       setQuote(null);
       return;
@@ -110,7 +125,7 @@ const SwapInterface: React.FC = () => {
 
         // Use real backend API to calculate quote
         const calculatedQuote = await backendApi.calculateSwapQuote({
-          poolId: '', // Auto-discover by token pair
+          poolId: resolvedPoolId,
           inputSymbol: selectedTokens.from!.symbol,
           outputSymbol: selectedTokens.to!.symbol,
           inputAmount: amount.toString(),
@@ -135,7 +150,7 @@ const SwapInterface: React.FC = () => {
 
     const timeout = setTimeout(calculateQuote, 500);
     return () => clearTimeout(timeout);
-  }, [inputAmount, selectedTokens.from, selectedTokens.to]);
+  }, [inputAmount, selectedTokens.from, selectedTokens.to, resolvedPoolId]);
 
   const handleSwap = async () => {
     if (!selectedTokens.from || !selectedTokens.to || !inputAmount || !quote) {
@@ -149,12 +164,18 @@ const SwapInterface: React.FC = () => {
       return;
     }
 
+    if (!resolvedPoolId) {
+      toast.error('No liquidity pool available for this pair');
+      return;
+    }
+
     try {
       setLoading(true);
       const minOutput = quote.outputAmount * (1 - slippage / 100);
 
       // Call real backend API - atomic swap
       const response = await backendApi.executeAtomicSwap({
+        poolId: resolvedPoolId,
         inputSymbol: selectedTokens.from.symbol,
         outputSymbol: selectedTokens.to.symbol,
         inputAmount: amount.toFixed(10),  // 10 decimal precision for DAML

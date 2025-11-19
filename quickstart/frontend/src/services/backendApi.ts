@@ -1,7 +1,7 @@
 // ClearportX Backend API Service
 // Connects to Spring Boot backend at http://localhost:8080
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { TokenInfo, PoolInfo, SwapQuote, TransactionHistoryEntry } from '../types/canton';
+import { TokenInfo, PoolInfo, SwapQuote, TransactionHistoryEntry, LpTokenInfo } from '../types/canton';
 import { getAccessToken, getPartyId } from './auth';
 import { BUILD_INFO } from '../config/build-info';
 
@@ -615,6 +615,26 @@ export class BackendApiService {
     }
   }
 
+  async getLpTokens(party: string): Promise<LpTokenInfo[]> {
+    const cantonParty = mapPartyToBackend(party);
+    console.log(`Getting LP tokens for ${party} (mapped to ${cantonParty})`);
+    try {
+      const res = await this.client.get(`/api/wallet/lp-tokens/${cantonParty}`);
+      const rows = Array.isArray(res.data) ? res.data : [];
+      const mapped = rows.map((row: any) => ({
+        poolId: row.poolId || row.pool_id || '',
+        amount: parseFloat(row.amount || row.balance || '0'),
+        contractId: row.contractId || row.cid || '',
+        owner: row.owner || row.party || undefined,
+      })).filter(lp => lp.poolId && Number.isFinite(lp.amount) && lp.amount > 0);
+      console.log(`Fetched ${mapped.length} LP token positions`);
+      return mapped;
+    } catch (error) {
+      console.error('Error loading LP tokens:', error);
+      return [];
+    }
+  }
+
   /**
    * Get pool CID for a given pool by matching token symbols
    * Fetches pool CIDs from the backend and finds matching pool
@@ -960,6 +980,7 @@ export class BackendApiService {
 
     return {
       contractId: data.poolId || '',
+      poolId: data.poolId || '',
       tokenA: {
         symbol: tokenA.symbol,
         name: tokenA.name,
@@ -992,6 +1013,7 @@ export class BackendApiService {
     return {
       // contractId keeps poolId for routing consistency in UI
       contractId: row.poolId || '',
+      poolId: row.poolId || '',
       tokenA: {
         symbol: tokenA.symbol,
         name: tokenA.name,

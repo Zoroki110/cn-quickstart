@@ -123,6 +123,13 @@ export interface TokenInfo {
   contractId?: string;
 }
 
+export interface LpTokenInfo {
+  poolId: string;
+  amount: number;
+  contractId: string;
+  owner?: string;
+}
+
 export interface SwapQuote {
   inputAmount: number;
   outputAmount: number;
@@ -177,6 +184,7 @@ export interface TransactionHistoryEntry {
 // Pool Interface Types
 export interface PoolInfo {
   contractId: string;
+  poolId?: string;
   tokenA: TokenInfo;
   tokenB: TokenInfo;
   reserveA: number;

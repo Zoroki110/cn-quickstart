@@ -177,16 +177,16 @@ public class ClearportxDebugController {
                         .max(Comparator.comparing(t -> t.payload.getAmount)).orElse(null);
                 // Dev fallback: mint fresh tokens if missing or insufficient
                 if (tokA == null || (tokA.payload.getAmount.compareTo(amountA) < 0)) {
-                    Token freshA = new Token(new Party(xParty), new Party(xParty), pay.getSymbolA, amountA);
+                    Token freshA = new Token(pay.getIssuerA, new Party(xParty), pay.getSymbolA, amountA);
                     tokA = new LedgerApi.ActiveContract<>(
-                            ledgerApi.createAndGetCid(freshA, List.of(xParty), List.of(), UUID.randomUUID().toString(), clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join(),
+                            ledgerApi.createAndGetCid(freshA, List.of(pay.getIssuerA.getParty), List.of(), UUID.randomUUID().toString(), clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join(),
                             freshA
                     );
                 }
                 if (tokB == null || (tokB.payload.getAmount.compareTo(amountB) < 0)) {
-                    Token freshB = new Token(new Party(xParty), new Party(xParty), pay.getSymbolB, amountB);
+                    Token freshB = new Token(pay.getIssuerB, new Party(xParty), pay.getSymbolB, amountB);
                     tokB = new LedgerApi.ActiveContract<>(
-                            ledgerApi.createAndGetCid(freshB, List.of(xParty), List.of(), UUID.randomUUID().toString(), clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join(),
+                            ledgerApi.createAndGetCid(freshB, List.of(pay.getIssuerB.getParty), List.of(), UUID.randomUUID().toString(), clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join(),
                             freshB
                     );
                 }
@@ -280,9 +280,9 @@ public class ClearportxDebugController {
                 LpTokenCreated lpCreated = extractLpTokenCreated(txn);
                 BigDecimal mintedLp = (lpCreated != null && lpCreated.amount() != null)
                         ? lpCreated.amount()
-                        : finalPoolPayload.getTotalLPSupply().subtract(pay.getTotalLPSupply());
+                        : finalPoolPayload.getTotalLPSupply.subtract(pay.getTotalLPSupply);
                 if (mintedLp.compareTo(BigDecimal.ZERO) <= 0) {
-                    mintedLp = estimateLpMint(amountA, amountB, pay.getReserveA, pay.getReserveB, pay.getTotalLPSupply());
+                    mintedLp = estimateLpMint(amountA, amountB, pay.getReserveA, pay.getReserveB, pay.getTotalLPSupply);
                 }
                 String lpTokenCid = lpCreated != null ? lpCreated.cid() : null;
                 var historyEntry = transactionHistoryService.recordAddLiquidity(
@@ -452,17 +452,17 @@ public class ClearportxDebugController {
             var tokB = myToks.stream().filter(t -> t.payload.getSymbol.equals(symB) && t.payload.getOwner.getParty.equals(xParty))
                     .max(Comparator.comparing(t -> t.payload.getAmount)).orElse(null);
             if (tokA == null || (tokA.payload.getAmount.compareTo(amountA) < 0)) {
-                Token freshA = new Token(new Party(xParty), new Party(xParty), symA, amountA);
+                Token freshA = new Token(pay.getIssuerA, new Party(xParty), symA, amountA);
                 tokA = new LedgerApi.ActiveContract<>(
-                        ledgerApi.createAndGetCid(freshA, List.of(xParty), List.of(), UUID.randomUUID().toString(), clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join(),
+                        ledgerApi.createAndGetCid(freshA, List.of(pay.getIssuerA.getParty), List.of(), UUID.randomUUID().toString(), clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join(),
                         freshA
                 );
                 txPacer.awaitSlot(1200);
             }
             if (tokB == null || (tokB.payload.getAmount.compareTo(amountB) < 0)) {
-                Token freshB = new Token(new Party(xParty), new Party(xParty), symB, amountB);
+                Token freshB = new Token(pay.getIssuerB, new Party(xParty), symB, amountB);
                 tokB = new LedgerApi.ActiveContract<>(
-                        ledgerApi.createAndGetCid(freshB, List.of(xParty), List.of(), UUID.randomUUID().toString(), clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join(),
+                        ledgerApi.createAndGetCid(freshB, List.of(pay.getIssuerB.getParty), List.of(), UUID.randomUUID().toString(), clearportx_amm_drain_credit.Identifiers.Token_Token__Token).join(),
                         freshB
                 );
                 txPacer.awaitSlot(1200);
@@ -535,7 +535,7 @@ public class ClearportxDebugController {
                     "poolCid", pool.contractId.getContractId,
                     "poolId", poolId
             );
-            BigDecimal mintedEstimate = estimateLpMint(amountA, amountB, pay.getReserveA, pay.getReserveB, pay.getTotalLPSupply());
+            BigDecimal mintedEstimate = estimateLpMint(amountA, amountB, pay.getReserveA, pay.getReserveB, pay.getTotalLPSupply);
             transactionHistoryService.recordAddLiquidity(
                     poolId,
                     pool.contractId.getContractId,
@@ -840,17 +840,19 @@ public class ClearportxDebugController {
             var maybe = pools.stream().filter(p -> p.contractId.getContractId.equals(poolCid)).findFirst();
             if (maybe.isEmpty()) return ResponseEntity.status(404).body(Map.of("success", false, "error", "Pool not visible for party"));
             var pay = maybe.get().payload;
-            return ResponseEntity.ok(Map.of(
-                    "success", true,
-                    "poolCid", poolCid,
-                    "poolId", pay.getPoolId,
-                    "symbolA", pay.getSymbolA,
-                    "symbolB", pay.getSymbolB,
-                    "reserveA", pay.getReserveA.toPlainString(),
-                    "reserveB", pay.getReserveB.toPlainString(),
-                    "tokenACid", pay.getTokenACid.map(cid -> cid.getContractId).orElse(null),
-                    "tokenBCid", pay.getTokenBCid.map(cid -> cid.getContractId).orElse(null)
-            ));
+            java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("poolCid", poolCid);
+            payload.put("poolId", pay.getPoolId);
+            payload.put("symbolA", pay.getSymbolA);
+            payload.put("symbolB", pay.getSymbolB);
+            payload.put("reserveA", pay.getReserveA.toPlainString());
+            payload.put("reserveB", pay.getReserveB.toPlainString());
+            payload.put("tokenACid", pay.getTokenACid.map(cid -> cid.getContractId).orElse(null));
+            payload.put("tokenBCid", pay.getTokenBCid.map(cid -> cid.getContractId).orElse(null));
+            payload.put("maxInBps", pay.getMaxInBps);
+            payload.put("maxOutBps", pay.getMaxOutBps);
+            return ResponseEntity.ok(payload);
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("success", false, "error", e.getMessage()));
         }
@@ -1058,8 +1060,8 @@ public class ClearportxDebugController {
                             var fields = created.getCreateArguments().getFieldsList();
                             if (fields.size() >= 4) {
                                 var amountValue = fields.get(3).getValue();
-                                if (amountValue.hasDecimal()) {
-                                    amount = new java.math.BigDecimal(amountValue.getDecimal());
+                                if (amountValue.hasNumeric()) {
+                                    amount = new java.math.BigDecimal(amountValue.getNumeric());
                                 }
                             }
                         }

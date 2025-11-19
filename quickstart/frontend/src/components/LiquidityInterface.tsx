@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { backendApi } from '../services/backendApi';
-import { TokenInfo, PoolInfo } from '../types/canton';
+import { TokenInfo, PoolInfo, LpTokenInfo } from '../types/canton';
 import toast from 'react-hot-toast';
 
 const LiquidityInterface: React.FC = () => {
@@ -12,6 +12,7 @@ const LiquidityInterface: React.FC = () => {
 
   const [mode, setMode] = useState<'add' | 'remove'>('add');
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
+  const [lpTokens, setLpTokens] = useState<LpTokenInfo[]>([]);
   const [selectedTokenA, setSelectedTokenA] = useState<TokenInfo | null>(null);
   const [selectedTokenB, setSelectedTokenB] = useState<TokenInfo | null>(null);
   const [amountA, setAmountA] = useState('');
@@ -19,17 +20,17 @@ const LiquidityInterface: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [calculating, setCalculating] = useState(false);
 
-  const augmentPoolsWithUserLiquidity = useCallback((poolList: PoolInfo[], walletTokens: TokenInfo[]) => {
+  const augmentPoolsWithUserLiquidity = useCallback((poolList: PoolInfo[], lpPositions: LpTokenInfo[]) => {
     return poolList.map(pool => {
-      const lpPrimary = `LP-${pool.tokenA.symbol}-${pool.tokenB.symbol}`;
-      const lpSecondary = `LP-${pool.tokenB.symbol}-${pool.tokenA.symbol}`;
-      const lpToken = walletTokens.find(t => t.symbol === lpPrimary || t.symbol === lpSecondary);
-      const userLiquidity = lpToken?.balance || 0;
+      const normalizedPoolId = pool.poolId || pool.contractId;
+      const poolPositions = lpPositions.filter(position => position.poolId === normalizedPoolId);
+      const userLiquidity = poolPositions.reduce((sum, position) => sum + (position.amount || 0), 0);
       const userShare = userLiquidity > 0 && pool.totalLiquidity > 0
         ? (userLiquidity / pool.totalLiquidity) * 100
         : 0;
       return {
         ...pool,
+        poolId: normalizedPoolId,
         userLiquidity,
         userShare,
       };
@@ -56,7 +57,10 @@ const LiquidityInterface: React.FC = () => {
 
         // 3. Get user balances for these tokens (wallet view excludes pool canonicals)
         const actingParty = backendApi.getCurrentParty();
-        const userTokens = await backendApi.getWalletTokens(actingParty);
+        const [userTokens, userLpTokens] = await Promise.all([
+          backendApi.getWalletTokens(actingParty),
+          backendApi.getLpTokens(actingParty),
+        ]);
 
         // 4. Merge pool tokens with user balances (default to 0 if user has no balance)
         const tokensWithBalances = Array.from(uniqueTokensMap.values()).map(token => {
@@ -68,10 +72,11 @@ const LiquidityInterface: React.FC = () => {
         });
 
         setTokens(tokensWithBalances);
+        setLpTokens(userLpTokens);
         setSelectedTokenA(prev => (prev ? tokensWithBalances.find(t => t.symbol === prev.symbol) || prev : null));
         setSelectedTokenB(prev => (prev ? tokensWithBalances.find(t => t.symbol === prev.symbol) || prev : null));
 
-        const enhancedPools = augmentPoolsWithUserLiquidity(poolsData, userTokens);
+        const enhancedPools = augmentPoolsWithUserLiquidity(poolsData, userLpTokens);
         setPools(enhancedPools);
 
         // Si un pool est passé en paramètre, pré-sélectionner les tokens
@@ -94,10 +99,13 @@ const LiquidityInterface: React.FC = () => {
     loadTokens();
   }, [location.state, setPools, augmentPoolsWithUserLiquidity]);
 
-  const refreshWalletBalances = useCallback(async (): Promise<TokenInfo[]> => {
+  const refreshWalletState = useCallback(async (): Promise<{ walletTokens: TokenInfo[]; lpPositions: LpTokenInfo[] }> => {
     try {
       const actingParty = backendApi.getCurrentParty();
-      const walletTokens = await backendApi.getWalletTokens(actingParty);
+      const [walletTokens, lpPositions] = await Promise.all([
+        backendApi.getWalletTokens(actingParty),
+        backendApi.getLpTokens(actingParty),
+      ]);
       setTokens(currentTokens => {
         const updated = currentTokens.map(token => {
           const match = walletTokens.find(t => t.symbol === token.symbol);
@@ -107,10 +115,11 @@ const LiquidityInterface: React.FC = () => {
         setSelectedTokenB(prev => (prev ? updated.find(t => t.symbol === prev.symbol) || prev : null));
         return updated;
       });
-      return walletTokens;
+      setLpTokens(lpPositions);
+      return { walletTokens, lpPositions };
     } catch (error) {
       console.error('Failed to refresh wallet balances:', error);
-      return [];
+      return { walletTokens: [], lpPositions: [] };
     }
   }, []);
 
@@ -191,8 +200,8 @@ const LiquidityInterface: React.FC = () => {
 
       // Recharger les pools
       const updatedPools = await backendApi.getPools();
-      const latestWalletTokens = await refreshWalletBalances();
-      const enhancedPools = augmentPoolsWithUserLiquidity(updatedPools, latestWalletTokens);
+      const { lpPositions: latestLpPositions } = await refreshWalletState();
+      const enhancedPools = augmentPoolsWithUserLiquidity(updatedPools, latestLpPositions);
       setPools(enhancedPools);
 
       if (typeof window !== 'undefined') {

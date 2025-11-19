@@ -3,6 +3,7 @@
 
 package com.digitalasset.quickstart.controller;
 
+import com.digitalasset.quickstart.dto.LpTokenDTO;
 import com.digitalasset.quickstart.dto.PoolDTO;
 import com.digitalasset.quickstart.dto.TokenDTO;
 import com.digitalasset.quickstart.security.PartyMappingService;
@@ -79,6 +80,17 @@ public class LedgerController {
     public CompletableFuture<List<TokenDTO>> walletTokensForParty(@PathVariable String party) {
         logger.info("GET /api/wallet/tokens/{} - public access (wallet-only)", party);
         return reader.walletTokensForParty(party);
+    }
+
+    /**
+     * GET /api/wallet/lp-tokens/{party} - LP token positions for a party
+     */
+    @GetMapping("/wallet/lp-tokens/{party}")
+    @WithSpan
+    @PreAuthorize("permitAll()")
+    public CompletableFuture<java.util.List<LpTokenDTO>> walletLpTokensForParty(@PathVariable String party) {
+        logger.info("GET /api/wallet/lp-tokens/{} - public access", party);
+        return reader.lpTokensForParty(party);
     }
     /**
      * GET /api/pools - Get all active liquidity pools

@@ -19,13 +19,29 @@ const LiquidityInterface: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [calculating, setCalculating] = useState(false);
 
+  const augmentPoolsWithUserLiquidity = useCallback((poolList: PoolInfo[], walletTokens: TokenInfo[]) => {
+    return poolList.map(pool => {
+      const lpPrimary = `LP-${pool.tokenA.symbol}-${pool.tokenB.symbol}`;
+      const lpSecondary = `LP-${pool.tokenB.symbol}-${pool.tokenA.symbol}`;
+      const lpToken = walletTokens.find(t => t.symbol === lpPrimary || t.symbol === lpSecondary);
+      const userLiquidity = lpToken?.balance || 0;
+      const userShare = userLiquidity > 0 && pool.totalLiquidity > 0
+        ? (userLiquidity / pool.totalLiquidity) * 100
+        : 0;
+      return {
+        ...pool,
+        userLiquidity,
+        userShare,
+      };
+    });
+  }, []);
+
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
     const loadTokens = async () => {
       try {
         // 1. Get all active pools to extract available tokens
         const poolsData = await backendApi.getPools();
-        setPools(poolsData);
 
         // 2. Extract unique tokens from pools
         const uniqueTokensMap = new Map<string, TokenInfo>();
@@ -55,6 +71,9 @@ const LiquidityInterface: React.FC = () => {
         setSelectedTokenA(prev => (prev ? tokensWithBalances.find(t => t.symbol === prev.symbol) || prev : null));
         setSelectedTokenB(prev => (prev ? tokensWithBalances.find(t => t.symbol === prev.symbol) || prev : null));
 
+        const enhancedPools = augmentPoolsWithUserLiquidity(poolsData, userTokens);
+        setPools(enhancedPools);
+
         // Si un pool est passé en paramètre, pré-sélectionner les tokens
         const pool = location.state?.pool as PoolInfo | undefined;
         if (pool) {
@@ -73,9 +92,9 @@ const LiquidityInterface: React.FC = () => {
     };
 
     loadTokens();
-  }, [location.state, setPools]);
+  }, [location.state, setPools, augmentPoolsWithUserLiquidity]);
 
-  const refreshWalletBalances = useCallback(async () => {
+  const refreshWalletBalances = useCallback(async (): Promise<TokenInfo[]> => {
     try {
       const actingParty = backendApi.getCurrentParty();
       const walletTokens = await backendApi.getWalletTokens(actingParty);
@@ -88,8 +107,10 @@ const LiquidityInterface: React.FC = () => {
         setSelectedTokenB(prev => (prev ? updated.find(t => t.symbol === prev.symbol) || prev : null));
         return updated;
       });
+      return walletTokens;
     } catch (error) {
       console.error('Failed to refresh wallet balances:', error);
+      return [];
     }
   }, []);
 
@@ -170,8 +191,9 @@ const LiquidityInterface: React.FC = () => {
 
       // Recharger les pools
       const updatedPools = await backendApi.getPools();
-      setPools(updatedPools);
-      await refreshWalletBalances();
+      const latestWalletTokens = await refreshWalletBalances();
+      const enhancedPools = augmentPoolsWithUserLiquidity(updatedPools, latestWalletTokens);
+      setPools(enhancedPools);
 
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('clearportx:transactions:refresh', {

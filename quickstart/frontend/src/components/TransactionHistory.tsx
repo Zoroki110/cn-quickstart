@@ -10,6 +10,28 @@ const numberFormatter = new Intl.NumberFormat('en', {
   maximumFractionDigits: 2,
 });
 
+const addThousandsSeparator = (digits: string) =>
+  digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+const formatFullAmount = (value?: string) => {
+  if (!value) return '—';
+  const trimmed = value.trim();
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    return trimmed;
+  }
+  const negative = trimmed.startsWith('-');
+  const unsigned = negative ? trimmed.slice(1) : trimmed;
+  const [rawInt = '0', rawFrac] = unsigned.split('.');
+  const intDigits = rawInt.replace(/^0+(?=\d)/, '') || '0';
+  const formattedInt = addThousandsSeparator(intDigits);
+  if (!rawFrac) {
+    return negative ? `-${formattedInt}` : formattedInt;
+  }
+  const trimmedFrac = rawFrac.replace(/0+$/, '');
+  const body = trimmedFrac.length ? `${formattedInt}.${trimmedFrac}` : formattedInt;
+  return negative ? `-${body}` : body;
+};
+
 const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -163,18 +185,18 @@ const TransactionHistory: React.FC = () => {
 
   const summarizeAmount = (tx: TransactionHistoryEntry) => {
     if (tx.type === 'SWAP') {
-      return `${formatCompact(tx.amountADesired)} ${tx.tokenA} → ${formatCompact(tx.amountBDesired)} ${tx.tokenB}`;
+      return `${formatFullAmount(tx.amountADesired)} ${tx.tokenA} → ${formatFullAmount(tx.amountBDesired)} ${tx.tokenB}`;
     }
-    return `${formatCompact(tx.amountADesired)} ${tx.tokenA} / ${formatCompact(tx.amountBDesired)} ${tx.tokenB}`;
+    return `${formatFullAmount(tx.amountADesired)} ${tx.tokenA} / ${formatFullAmount(tx.amountBDesired)} ${tx.tokenB}`;
   };
 
   const renderDetails = (tx: TransactionHistoryEntry) => [
     { label: 'Token A', value: tx.tokenA || '—' },
-    { label: 'Amount A Desired', value: `${formatCompact(tx.amountADesired)} ${tx.tokenA}` },
+    { label: 'Amount A Desired', value: `${formatFullAmount(tx.amountADesired)} ${tx.tokenA}` },
     { label: 'Token B', value: tx.tokenB || '—' },
-    { label: 'Amount B Desired', value: `${formatCompact(tx.amountBDesired)} ${tx.tokenB}` },
-    { label: 'Min LP Amount', value: tx.minLpAmount ? `${formatCompact(tx.minLpAmount)} ${tx.lpTokenSymbol || 'LP'}` : '—' },
-    { label: 'LP Tokens Minted', value: tx.lpMintedAmount ? `${formatCompact(tx.lpMintedAmount)} ${tx.lpTokenSymbol || 'LP'}` : '—' },
+    { label: 'Amount B Desired', value: `${formatFullAmount(tx.amountBDesired)} ${tx.tokenB}` },
+    { label: 'Min LP Amount', value: tx.minLpAmount ? `${formatFullAmount(tx.minLpAmount)} ${tx.lpTokenSymbol || 'LP'}` : '—' },
+    { label: 'LP Tokens Minted', value: tx.lpMintedAmount ? `${formatFullAmount(tx.lpMintedAmount)} ${tx.lpTokenSymbol || 'LP'}` : '—' },
     { label: 'Expires At', value: formatDateTime(tx.expiresAt) },
     { label: 'Status', value: statusLabels[tx.status] },
   ];

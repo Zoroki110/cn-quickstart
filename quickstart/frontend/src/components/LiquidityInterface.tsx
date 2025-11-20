@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { backendApi } from '../services/backendApi';
@@ -19,12 +19,78 @@ const LiquidityInterface: React.FC = () => {
   const [amountB, setAmountB] = useState('');
   const [loading, setLoading] = useState(false);
   const [calculating, setCalculating] = useState(false);
+  const [rawPools, setRawPools] = useState<PoolInfo[]>([]);
+  const LP_BASELINES_STORAGE_KEY = 'clearportx:lp-baselines:v1';
+  const [lpBaselines, setLpBaselines] = useState<Record<string, number>>(() => {
+    if (typeof window === 'undefined') {
+      return {};
+    }
+    try {
+      const stored = window.localStorage.getItem(LP_BASELINES_STORAGE_KEY);
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  });
+  const lpBaselinesRef = useRef(lpBaselines);
+  useEffect(() => {
+    lpBaselinesRef.current = lpBaselines;
+  }, [lpBaselines]);
+  const baselinesInitializedRef = useRef(Object.keys(lpBaselinesRef.current).length > 0);
 
-  const augmentPoolsWithUserLiquidity = useCallback((poolList: PoolInfo[], lpPositions: LpTokenInfo[]) => {
+  const persistLpBaselines = useCallback((next: Record<string, number>) => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(LP_BASELINES_STORAGE_KEY, JSON.stringify(next));
+    }
+  }, []);
+
+  const computePoolTotals = useCallback((positions: LpTokenInfo[]) => {
+    const totals = new Map<string, number>();
+    positions.forEach(pos => {
+      if (!pos.poolId) {
+        return;
+      }
+      totals.set(pos.poolId, (totals.get(pos.poolId) ?? 0) + (pos.amount || 0));
+    });
+    return totals;
+  }, []);
+
+  const seedBaselinesIfNeeded = useCallback((party: string, positions: LpTokenInfo[]) => {
+    if (baselinesInitializedRef.current) {
+      return lpBaselinesRef.current;
+    }
+    const totals = computePoolTotals(positions);
+    const snapshot = { ...lpBaselinesRef.current };
+    let changed = false;
+    totals.forEach((sum, poolId) => {
+      const key = `${party}::${poolId}`;
+      if (snapshot[key] === undefined) {
+        snapshot[key] = sum;
+        changed = true;
+      }
+    });
+    if (changed) {
+      persistLpBaselines(snapshot);
+      lpBaselinesRef.current = snapshot;
+      setLpBaselines(snapshot);
+    }
+    baselinesInitializedRef.current = true;
+    return snapshot;
+  }, [computePoolTotals, persistLpBaselines]);
+
+  const augmentPoolsWithUserLiquidity = useCallback((
+    poolList: PoolInfo[],
+    lpPositions: LpTokenInfo[],
+    baselineMap: Record<string, number>,
+    actingParty: string
+  ) => {
     return poolList.map(pool => {
       const normalizedPoolId = pool.poolId || pool.contractId;
       const poolPositions = lpPositions.filter(position => position.poolId === normalizedPoolId);
-      const userLiquidity = poolPositions.reduce((sum, position) => sum + (position.amount || 0), 0);
+      const totalHeld = poolPositions.reduce((sum, position) => sum + (position.amount || 0), 0);
+      const baselineKey = `${actingParty}::${normalizedPoolId}`;
+      const baseline = baselineMap[baselineKey] ?? 0;
+      const userLiquidity = Math.max(0, totalHeld - baseline);
       const userShare = userLiquidity > 0 && pool.totalLiquidity > 0
         ? (userLiquidity / pool.totalLiquidity) * 100
         : 0;
@@ -36,6 +102,28 @@ const LiquidityInterface: React.FC = () => {
       };
     });
   }, []);
+
+  const handleResetLiquidityView = useCallback(() => {
+    const actingParty = backendApi.getCurrentParty();
+    const totals = computePoolTotals(lpTokens);
+    const snapshot = { ...lpBaselinesRef.current };
+    let changed = false;
+    totals.forEach((sum, poolId) => {
+      const key = `${actingParty}::${poolId}`;
+      if (snapshot[key] !== sum) {
+        snapshot[key] = sum;
+        changed = true;
+      }
+    });
+    if (changed) {
+      persistLpBaselines(snapshot);
+      lpBaselinesRef.current = snapshot;
+      setLpBaselines(snapshot);
+      toast.success('Liquidity view resynced with ledger balances');
+    } else {
+      toast.success('Liquidity view already matches ledger balances');
+    }
+  }, [computePoolTotals, lpTokens, persistLpBaselines]);
 
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
@@ -73,10 +161,12 @@ const LiquidityInterface: React.FC = () => {
 
         setTokens(tokensWithBalances);
         setLpTokens(userLpTokens);
+        setRawPools(poolsData);
         setSelectedTokenA(prev => (prev ? tokensWithBalances.find(t => t.symbol === prev.symbol) || prev : null));
         setSelectedTokenB(prev => (prev ? tokensWithBalances.find(t => t.symbol === prev.symbol) || prev : null));
 
-        const enhancedPools = augmentPoolsWithUserLiquidity(poolsData, userLpTokens);
+        const baselineSnapshot = seedBaselinesIfNeeded(actingParty, userLpTokens);
+        const enhancedPools = augmentPoolsWithUserLiquidity(poolsData, userLpTokens, baselineSnapshot, actingParty);
         setPools(enhancedPools);
 
         // Si un pool est passé en paramètre, pré-sélectionner les tokens
@@ -97,7 +187,7 @@ const LiquidityInterface: React.FC = () => {
     };
 
     loadTokens();
-  }, [location.state, setPools, augmentPoolsWithUserLiquidity]);
+  }, [location.state, setPools, augmentPoolsWithUserLiquidity, seedBaselinesIfNeeded]);
 
   const refreshWalletState = useCallback(async (): Promise<{ walletTokens: TokenInfo[]; lpPositions: LpTokenInfo[] }> => {
     try {
@@ -122,6 +212,16 @@ const LiquidityInterface: React.FC = () => {
       return { walletTokens: [], lpPositions: [] };
     }
   }, []);
+
+  useEffect(() => {
+    if (!rawPools.length) {
+      return;
+    }
+    const actingParty = backendApi.getCurrentParty();
+    const baselineSnapshot = lpBaselinesRef.current;
+    const enhancedPools = augmentPoolsWithUserLiquidity(rawPools, lpTokens, baselineSnapshot, actingParty);
+    setPools(enhancedPools);
+  }, [rawPools, lpTokens, lpBaselines, augmentPoolsWithUserLiquidity, setPools]);
 
   // Calculer automatiquement le montant B en fonction du ratio du pool
   useEffect(() => {
@@ -200,9 +300,8 @@ const LiquidityInterface: React.FC = () => {
 
       // Recharger les pools
       const updatedPools = await backendApi.getPools();
-      const { lpPositions: latestLpPositions } = await refreshWalletState();
-      const enhancedPools = augmentPoolsWithUserLiquidity(updatedPools, latestLpPositions);
-      setPools(enhancedPools);
+      setRawPools(updatedPools);
+      await refreshWalletState();
 
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('clearportx:transactions:refresh', {
@@ -495,7 +594,16 @@ const LiquidityInterface: React.FC = () => {
 
       {/* Your Positions */}
       <div className="glass-strong rounded-2xl p-6">
-        <h2 className="heading-3 mb-4">Your Liquidity Positions</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="heading-3">Your Liquidity Positions</h2>
+          <button
+            type="button"
+            onClick={handleResetLiquidityView}
+            className="text-sm font-semibold text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 transition-colors"
+          >
+            Re-sync view
+          </button>
+        </div>
 
         {pools.filter(p => p.userLiquidity && p.userLiquidity > 0).length === 0 ? (
           <div className="text-center py-8">

@@ -1068,7 +1068,7 @@ export class BackendApiService {
     const upper = symbol?.toUpperCase?.() || symbol;
     const basePath = `${process.env.PUBLIC_URL ?? ''}/tokens`;
     const logos: Record<string, string> = {
-      CBTC: `${basePath}/cbtc.svg`,
+      CBTC: `${basePath}/cbtc.png`,
       CC: `${basePath}/cc.svg`,
       CANTON: `${basePath}/cc.svg`,
       ETH: 'https://cryptologos.cc/logos/ethereum-eth-logo.png',

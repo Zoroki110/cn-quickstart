@@ -266,6 +266,31 @@ const SwapInterface: React.FC = () => {
     setQuote(null);
   };
 
+  const renderTokenBadge = (
+    token: TokenInfo | null,
+    fallbackColor: string,
+    fallbackTextColor: string = 'text-gray-900 dark:text-gray-100'
+  ) => (
+    <div
+      className={`w-8 h-8 rounded-full overflow-hidden border border-white/40 shadow-inner flex items-center justify-center ${
+        token?.logoUrl ? 'bg-white dark:bg-dark-700' : fallbackColor
+      }`}
+    >
+      {token?.logoUrl ? (
+        <img
+          src={token.logoUrl}
+          alt={`${token.symbol} logo`}
+          className="w-full h-full object-cover"
+          loading="lazy"
+        />
+      ) : (
+        <span className={`text-xs font-bold uppercase ${fallbackTextColor}`}>
+          {token?.symbol?.charAt(0) ?? '?'}
+        </span>
+      )}
+    </div>
+  );
+
   return (
     <div className="max-w-md mx-auto">
       <div className="card-glow bg-white dark:bg-dark-900 relative overflow-hidden">
@@ -329,9 +354,7 @@ const SwapInterface: React.FC = () => {
               >
                 {selectedTokens.from ? (
                   <>
-                    <div className="w-6 h-6 rounded-full bg-primary-100 dark:bg-primary-900/20 flex items-center justify-center font-bold text-primary-600 dark:text-primary-400 text-xs">
-                      {selectedTokens.from.symbol.charAt(0)}
-                    </div>
+                    {renderTokenBadge(selectedTokens.from, 'bg-primary-100 dark:bg-primary-900/20', 'text-primary-600 dark:text-primary-400')}
                     <span className="font-semibold text-gray-900 dark:text-gray-100">
                       {selectedTokens.from.symbol}
                     </span>
@@ -391,9 +414,7 @@ const SwapInterface: React.FC = () => {
               >
                 {selectedTokens.to ? (
                   <>
-                    <div className="w-6 h-6 rounded-full bg-success-100 dark:bg-success-900/20 flex items-center justify-center font-bold text-success-600 dark:text-success-400 text-xs">
-                      {selectedTokens.to.symbol.charAt(0)}
-                    </div>
+                    {renderTokenBadge(selectedTokens.to, 'bg-success-100 dark:bg-success-900/20', 'text-success-600 dark:text-success-400')}
                     <span className="font-semibold text-gray-900 dark:text-gray-100">
                       {selectedTokens.to.symbol}
                     </span>

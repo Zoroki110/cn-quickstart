@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { useAppStore } from '../stores';
 import { backendApi } from '../services/backendApi';
 import { useNavigate } from 'react-router-dom';
+import { TokenInfo } from '../types/canton';
 
 const PoolsInterface: React.FC = () => {
   const { pools, setPools } = useAppStore();
@@ -34,6 +35,27 @@ const PoolsInterface: React.FC = () => {
   const averageAPR = pools.length > 0
     ? pools.reduce((sum, pool) => sum + pool.apr, 0) / pools.length
     : 0;
+
+  const renderPoolToken = (token: TokenInfo, extraClasses = '') => (
+    <div
+      className={`w-10 h-10 rounded-full overflow-hidden border border-white/50 shadow-md flex items-center justify-center ${
+        token.logoUrl ? 'bg-white dark:bg-dark-700' : 'bg-primary-50 dark:bg-dark-800'
+      } ${extraClasses}`}
+    >
+      {token.logoUrl ? (
+        <img
+          src={token.logoUrl}
+          alt={`${token.symbol} logo`}
+          className="w-full h-full object-cover"
+          loading="lazy"
+        />
+      ) : (
+        <span className="text-base font-bold text-gray-900 dark:text-gray-100">
+          {token.symbol.charAt(0)}
+        </span>
+      )}
+    </div>
+  );
 
   const formatNumber = (num: number) => {
     if (num >= 1_000_000) {
@@ -154,12 +176,9 @@ const PoolsInterface: React.FC = () => {
                   <div className="flex items-center space-x-4 flex-1">
                     {/* Token Pair */}
                     <div className="flex items-center">
-                      <div className="w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/20 flex items-center justify-center font-bold text-primary-600 dark:text-primary-400">
-                        {pool.tokenA.symbol.charAt(0)}
-                      </div>
-                      <div className="w-10 h-10 rounded-full bg-success-100 dark:bg-success-900/20 flex items-center justify-center font-bold text-success-600 dark:text-success-400 -ml-3">
-                        {pool.tokenB.symbol.charAt(0)}
-                      </div>
+                      {renderPoolToken(pool.tokenA)}
+                      {renderPoolToken(pool.tokenB, '-ml-3')}
+
                       <div className="ml-3">
                         <h3 className="font-bold text-lg text-gray-900 dark:text-gray-100">
                           {pool.tokenA.symbol}/{pool.tokenB.symbol}

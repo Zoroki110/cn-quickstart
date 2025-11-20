@@ -1065,13 +1065,18 @@ export class BackendApiService {
 
   // Helper: Get token logo URL
   private getTokenLogo(symbol: string): string {
+    const upper = symbol?.toUpperCase?.() || symbol;
+    const basePath = `${process.env.PUBLIC_URL ?? ''}/tokens`;
     const logos: Record<string, string> = {
+      CBTC: `${basePath}/cbtc.svg`,
+      CC: `${basePath}/cc.svg`,
+      CANTON: `${basePath}/cc.svg`,
       ETH: 'https://cryptologos.cc/logos/ethereum-eth-logo.png',
       USDC: 'https://cryptologos.cc/logos/usd-coin-usdc-logo.png',
       BTC: 'https://cryptologos.cc/logos/bitcoin-btc-logo.png',
       USDT: 'https://cryptologos.cc/logos/tether-usdt-logo.png',
     };
-    return logos[symbol] || '';
+    return logos[upper] || '';
   }
 
   async getTransactionHistory(): Promise<TransactionHistoryEntry[]> {

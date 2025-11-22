@@ -845,31 +845,23 @@ export class BackendApiService {
    * Add liquidity to a pool
    */
   async addLiquidity(params: AddLiquidityParams): Promise<{ lpTokenCid: string; lpAmount: string; historyEntryId?: string }> {
-    // Use debug endpoint when auth is disabled (no real JWT)
     if (!this.hasJwt()) {
-      const party = this.currentParty();
-      // Get a fresh, party-visible CID from server
-      const { poolCid } = await this.resolveAndGrant(params.poolId, party);
-
-      const byCid = {
-        poolCid,
+      const payload = {
         poolId: params.poolId,
         amountA: params.amountA.toString(),
         amountB: params.amountB.toString(),
         minLPTokens: params.minLPTokens.toString(),
       };
-
-      console.log('Adding liquidity (by-cid) with:', byCid);
-
-      // CID-first endpoint with single paced retry inside request()
-      const res = await this.request<any>(() => this.client.post('/api/clearportx/debug/add-liquidity-by-cid', byCid));
+      console.log('Adding liquidity (auto-resolve pool) with:', payload);
+      const res = await this.request<any>(() =>
+        this.client.post('/api/clearportx/debug/add-liquidity-by-cid', payload)
+      );
       return {
         lpTokenCid: res?.lpTokenCid ?? '',
         lpAmount: res?.lpAmount ?? params.minLPTokens,
         historyEntryId: res?.historyEntryId,
       };
     }
-
     const res = await this.client.post('/api/liquidity/add', params);
     return res.data;
   }

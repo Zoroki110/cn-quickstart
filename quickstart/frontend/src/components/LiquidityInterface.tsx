@@ -284,9 +284,15 @@ const LiquidityInterface: React.FC = () => {
         return;
       }
 
+      const targetPoolId = pool.poolId || pool.contractId;
+      if (!targetPoolId) {
+        toast.error('Pool identifier missing; refresh pools and try again.');
+        return;
+      }
+
       // Call real backend API
       const response = await backendApi.addLiquidity({
-        poolId: pool.contractId,
+        poolId: targetPoolId,
         amountA: amountANum.toFixed(10),  // 10 decimal precision for DAML
         amountB: amountBNum.toFixed(10),
         minLPTokens: '0.0000000001',  // Allow any amount (no minimum for now)

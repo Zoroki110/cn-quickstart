@@ -3,6 +3,7 @@
 
 import com.google.protobuf.gradle.*
 import org.openapitools.generator.gradle.plugin.tasks.GenerateTask
+import java.io.File
 
 plugins {
     id("buildlogic.java-application-conventions")
@@ -23,7 +24,8 @@ dependencies {
     implementation(Deps.transcode.protoJava)
     implementation(Deps.transcode.protoJson)
 
-    protobuf(Deps.daml.proto)
+    // Use local Canton 3.4.7 protos extracted from validator
+    // protobuf(Deps.daml.proto)  // Commented out - using local protos instead
     protobuf(Deps.grpc.commonsProto)
     implementation(Deps.grpc.stub)
     implementation(Deps.grpc.protobuf)
@@ -151,6 +153,12 @@ sourceSets {
                 "$projectDir/build/generated-token-standard-openapi/src/main/java",
                 "$projectDir/build/generated-daml-bindings" // TODO: remove this line once daml plugin is used
             )
+            // Exclude legacy testnoarchive generated bindings under generated-daml-bindings
+            exclude("clearportx_amm_production/testnoarchive/**")
+        }
+        proto {
+            srcDir("/tmp/canton-347-protos-clean")  // Canton 3.4.7 ledger-api + scalapb
+            // Note: google/rpc already provided by Deps.grpc.commonsProto
         }
     }
     test {
@@ -160,11 +168,37 @@ sourceSets {
     }
 }
 
+val manualDrainCreditBindings = tasks.register("applyManualDrainCreditBindings") {
+    val manualDir = file("$rootDir/clearportx/manual-drain-credit-backup")
+    val targetRoot = file("$projectDir/build/generated-daml-bindings")
+    inputs.dir(manualDir)
+    outputs.dir(targetRoot)
+    doLast {
+        if (!manualDir.exists()) {
+            throw GradleException("Manual drain+credit bindings not found at ${manualDir.absolutePath}")
+        }
+        fun copyManual(sourceName: String, targetRelativePath: String) {
+            val sourceFile = File(manualDir, sourceName)
+            if (!sourceFile.exists()) {
+                throw GradleException("Missing manual binding file: ${sourceFile.absolutePath}")
+            }
+            val targetFile = File(targetRoot, targetRelativePath)
+            targetFile.parentFile.mkdirs()
+            sourceFile.copyTo(targetFile, overwrite = true)
+        }
+        copyManual("Daml.manual.java", "daml/Daml.java")
+        copyManual("Pool.manual.java", "clearportx_amm_drain_credit/amm/pool/Pool.java")
+        copyManual("Identifiers.manual.java", "clearportx_amm_drain_credit/Identifiers.java")
+        println("✅ Applied manual drain+credit bindings overlay into ${targetRoot.absolutePath}")
+    }
+}
+
 tasks.getByName("compileJava").dependsOn(
     ":daml:build",
     "openApiGenerate",
     "openApiGenerateMetadata",
-    "openApiGenerateAllocation"
+    "openApiGenerateAllocation",
+    manualDrainCreditBindings
 )
 
 protobuf {
@@ -181,6 +215,8 @@ protobuf {
             it.plugins {
                 id("grpc") { }
             }
+            // Add local Canton 3.4.7 protos from validator
+            it.inputs.dir("/tmp/canton-347-protos")
         }
     }
 }

@@ -11,10 +11,17 @@ buildscript {
     }
 }
 
+import com.digitalasset.transcode.codegen.java.gradle.JavaCodegenTask
+
 plugins {
     id("base")
     id("de.undercouch.download") version "5.6.0"
 }
+
+// Use manual drain+credit bindings by default (skip Transcode codegen unless explicitly enabled)
+val enableClearportxCodegen = providers.environmentVariable("CLEARPORTX_ENABLE_CODEGEN")
+    .map { it.equals("true", ignoreCase = true) }
+    .orElse(false)
 
 tasks.register<Exec>("compileDaml") {
     dependsOn("verifyDamlSdkVersion")
@@ -39,17 +46,65 @@ tasks.register<com.digitalasset.transcode.codegen.java.gradle.JavaCodegenTask>("
 }
 
 tasks.register<com.digitalasset.transcode.codegen.java.gradle.JavaCodegenTask>("codeGenClearportX") {
-    dar.from("$rootDir/clearportx/artifacts/devnet/clearportx-amm-production-v1.0.2-frozen.dar")
+    // Always prefer the latest GV DAR from daml-prod, skip if none present
+    val prodDist = file("$rootDir/clearportx/daml-prod/.daml/dist")
+    val latestGvDar: File? = if (prodDist.exists()) {
+        prodDist.listFiles()?.filter { it.isFile && it.name.matches(Regex("clearportx-amm-production-gv-.*\\.dar")) }
+            ?.maxByOrNull { it.lastModified() }
+    } else null
+    val fallbackGv = file("$rootDir/clearportx/artifacts/devnet/clearportx-amm-gv.dar")
+    val chosenGv: File? = latestGvDar ?: (if (fallbackGv.exists()) fallbackGv else null)
+    onlyIf {
+        val enabled = enableClearportxCodegen.get()
+        if (!enabled) {
+            println("⚠️  Skipping ClearportX codegen (manual drain+credit bindings in use). Set CLEARPORTX_ENABLE_CODEGEN=true to re-enable Transcode.")
+        }
+        enabled && chosenGv != null
+    }
+    if (chosenGv != null) {
+        println("Using GV DAR for codegen: ${chosenGv.absolutePath}")
+        dar.from(chosenGv.absolutePath)
+    }
     destination = file("$rootDir/backend/build/generated-daml-bindings")
-    // PRODUCTION v1.0.2 - With MintForTesting and MintForAliceAndBob scripts
-    // Package name: clearportx-amm-production
-    // Package hash: cf2ab9f46a11c1d98cc990f6143971bfc1e22a200883ffed73a76ff3b59b7eec
+}
+
+tasks.register<com.digitalasset.transcode.codegen.java.gradle.JavaCodegenTask>("codeGenClearportXProd") {
+    // Generate bindings for non-GV production package to satisfy legacy imports if present
+    val prodDist = file("$rootDir/clearportx/daml-prod/.daml/dist")
+    val latestProdDar: File? = if (prodDist.exists()) {
+        prodDist.listFiles()?.filter { it.isFile && it.name.matches(Regex("clearportx-amm-production-[0-9].*\\.dar")) && !it.name.contains("-gv-") }
+            ?.maxByOrNull { it.lastModified() }
+    } else null
+    // Remove frozen DAR fallback - only use latest prod DAR
+    val chosen: File? = latestProdDar
+    onlyIf { chosen != null }
+    if (chosen != null) {
+        println("Using PROD DAR for codegen: ${chosen.absolutePath}")
+        dar.from(chosen.absolutePath)
+    }
+    destination = file("$rootDir/backend/build/generated-daml-bindings")
 }
 
 tasks.named("build") {
-    dependsOn("codeGen", "codeGenClearportX")
+    // Keep licensing codegen, do not force ClearportX codegen during normal build
+    dependsOn("codeGen")
+    if (enableClearportxCodegen.get()) {
+        // Also generate ClearportX (gv-compat) bindings and run it AFTER licensing so its Daml.java wins
+        dependsOn("codeGenClearportX")
+        tasks.named("codeGenClearportX") {
+            mustRunAfter("codeGen")
+        }
+    } else {
+        doFirst {
+            println("✅ ClearportX manual bindings overlay active (transcode codegen disabled).")
+        }
+    }
 }
 
+// Ensure gv-compat codegen runs after licensing codegen so aggregated Daml.java contains AMM when enabled
+tasks.named("codeGenClearportX") {
+    mustRunAfter("codeGen")
+}
 // Helper function to compute SDK variables
 fun computeSdkVariables(): Map<String, Any> {
     val osName = System.getProperty("os.name").lowercase()

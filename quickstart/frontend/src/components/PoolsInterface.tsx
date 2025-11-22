@@ -77,18 +77,30 @@ const PoolsInterface: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="max-w-6xl mx-auto">
-        <div className="card">
-          <div className="flex items-center justify-center py-12">
-            <div className="spinner w-12 h-12"></div>
+      <section className="relative min-h-[calc(100vh-220px)] flex items-center justify-center px-4 py-10">
+        <div
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/0 via-white/70 to-white dark:from-dark-900/0 dark:via-dark-900/60 dark:to-dark-950"
+          aria-hidden="true"
+        />
+        <div className="relative w-full max-w-6xl">
+          <div className="card">
+            <div className="flex items-center justify-center py-12">
+              <div className="spinner w-12 h-12"></div>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
     );
   }
 
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <section className="relative min-h-[calc(100vh-220px)] px-4 py-10">
+      <div
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/0 via-white/60 to-white dark:from-dark-900/0 dark:via-dark-900/60 dark:to-dark-950"
+        aria-hidden="true"
+      />
+      <div className="relative max-w-6xl mx-auto space-y-6">
       {/* Header avec Stats Globales */}
       <div className="glass-strong rounded-2xl p-6">
         <div className="flex items-center justify-between mb-6">
@@ -316,7 +328,8 @@ const PoolsInterface: React.FC = () => {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </section>
   );
 };
 

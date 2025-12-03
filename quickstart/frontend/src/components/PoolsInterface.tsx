@@ -95,11 +95,7 @@ const PoolsInterface: React.FC = () => {
 
 
   return (
-    <section className="relative min-h-[calc(100vh-220px)] px-4 py-10">
-      <div
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/0 via-white/60 to-white dark:from-dark-900/0 dark:via-dark-900/60 dark:to-dark-950"
-        aria-hidden="true"
-      />
+    <div className="min-h-[calc(100vh-220px)] px-4 py-10">
       <div className="relative max-w-6xl mx-auto space-y-6">
       {/* Header avec Stats Globales */}
       <div className="glass-strong rounded-2xl p-6">
@@ -329,7 +325,7 @@ const PoolsInterface: React.FC = () => {
         </div>
       </div>
       </div>
-    </section>
+    </div>
   );
 };
 

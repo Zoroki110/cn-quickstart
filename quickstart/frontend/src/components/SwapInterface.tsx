@@ -292,11 +292,7 @@ const SwapInterface: React.FC = () => {
   );
 
   return (
-    <section className="relative min-h-[calc(100vh-220px)] flex items-center justify-center px-4 py-10">
-      <div
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/0 via-white/70 to-white dark:from-dark-900/0 dark:via-dark-900/60 dark:to-dark-950"
-        aria-hidden="true"
-      />
+    <div className="min-h-[calc(100vh-220px)] flex items-center justify-center px-4 py-10">
       <div className="relative w-full max-w-md mx-auto">
         <div className="card-glow bg-white dark:bg-dark-900 relative overflow-hidden">
         {/* Background Pattern */}
@@ -540,7 +536,7 @@ const SwapInterface: React.FC = () => {
         type="to"
       />
       </div>
-    </section>
+    </div>
   );
 };
 

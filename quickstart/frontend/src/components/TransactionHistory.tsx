@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw, X, Clock, CheckCircle2, Loader2, Copy, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { backendApi } from '../services/backendApi';
-import type { TransactionHistoryEntry, TransactionTimelineItem } from '../types/canton';
+import type { PoolInfo, TransactionHistoryEntry, TransactionTimelineItem } from '../types/canton';
 
 const numberFormatter = new Intl.NumberFormat('en', {
   notation: 'compact',
@@ -56,6 +56,17 @@ const formatDateTime = (iso?: string) => {
   }
 };
 
+const buildPairKey = (a: string, b: string) => [a?.toUpperCase?.() ?? '', b?.toUpperCase?.() ?? ''].sort().join('/');
+
+const trimNumberString = (value: number, precision = 10) => {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const fixed = value.toFixed(precision);
+  const trimmed = fixed.replace(/0+$/, '').replace(/\.$/, '');
+  return trimmed.length > 0 ? trimmed : '0';
+};
+
 const formatRelativeTime = (iso?: string) => {
   if (!iso) return '—';
   const created = new Date(iso).getTime();
@@ -102,6 +113,7 @@ const TransactionHistory: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pools, setPools] = useState<PoolInfo[]>([]);
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -120,6 +132,23 @@ const TransactionHistory: React.FC = () => {
   useEffect(() => {
     fetchHistory();
   }, [fetchHistory]);
+
+  useEffect(() => {
+    let mounted = true;
+    backendApi
+      .getPools()
+      .then((data) => {
+        if (mounted) {
+          setPools(data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load pools for history view', err);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -183,9 +212,64 @@ const TransactionHistory: React.FC = () => {
     }
   };
 
+  const poolLookup = useMemo(() => {
+    const map = new Map<string, PoolInfo>();
+    pools.forEach((pool) => {
+      if (pool.poolId) {
+        map.set(pool.poolId, pool);
+      }
+      map.set(buildPairKey(pool.tokenA.symbol, pool.tokenB.symbol), pool);
+    });
+    return map;
+  }, [pools]);
+
+  const estimateSwapOutput = useCallback((tx: TransactionHistoryEntry): number | null => {
+    if (tx.type !== 'SWAP') {
+      return null;
+    }
+    const amountIn = Number(tx.amountADesired);
+    if (!Number.isFinite(amountIn) || amountIn <= 0) {
+      return null;
+    }
+    const pool =
+      (tx.poolId && poolLookup.get(tx.poolId)) ||
+      poolLookup.get(buildPairKey(tx.tokenA, tx.tokenB));
+    if (!pool) {
+      return null;
+    }
+    const isAtoB = tx.tokenA === pool.tokenA.symbol && tx.tokenB === pool.tokenB.symbol;
+    const isBtoA = tx.tokenA === pool.tokenB.symbol && tx.tokenB === pool.tokenA.symbol;
+    if (!isAtoB && !isBtoA) {
+      return null;
+    }
+    const reserveIn = isAtoB ? pool.reserveA : pool.reserveB;
+    const reserveOut = isAtoB ? pool.reserveB : pool.reserveA;
+    if (!Number.isFinite(reserveIn) || !Number.isFinite(reserveOut) || reserveIn <= 0 || reserveOut <= 0) {
+      return null;
+    }
+    const feeRate = pool.feeRate ?? 0.003;
+    const inputAfterFee = amountIn * (1 - feeRate);
+    if (inputAfterFee <= 0) {
+      return null;
+    }
+    const outputAmount = (inputAfterFee * reserveOut) / (reserveIn + inputAfterFee);
+    return Number.isFinite(outputAmount) && outputAmount > 0 ? outputAmount : null;
+  }, [poolLookup]);
+
+  const formatSwapOutput = useCallback((tx: TransactionHistoryEntry) => {
+    const estimated = estimateSwapOutput(tx);
+    if (estimated != null) {
+      const trimmed = trimNumberString(estimated);
+      if (trimmed) {
+        return formatFullAmount(trimmed);
+      }
+    }
+    return formatFullAmount(tx.amountBDesired);
+  }, [estimateSwapOutput]);
+
   const summarizeAmount = (tx: TransactionHistoryEntry) => {
     if (tx.type === 'SWAP') {
-      return `${formatFullAmount(tx.amountADesired)} ${tx.tokenA} → ${formatFullAmount(tx.amountBDesired)} ${tx.tokenB}`;
+      return `${formatFullAmount(tx.amountADesired)} ${tx.tokenA} → ${formatSwapOutput(tx)} ${tx.tokenB}`;
     }
     return `${formatFullAmount(tx.amountADesired)} ${tx.tokenA} / ${formatFullAmount(tx.amountBDesired)} ${tx.tokenB}`;
   };

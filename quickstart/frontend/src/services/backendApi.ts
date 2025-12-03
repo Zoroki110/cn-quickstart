@@ -4,6 +4,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import { TokenInfo, PoolInfo, SwapQuote, TransactionHistoryEntry, LpTokenInfo } from '../types/canton';
 import { getAccessToken, getPartyId } from './auth';
 import { BUILD_INFO } from '../config/build-info';
+import { getAuthToken } from '../api/client';
 
 type DomainError = {
   code: string;
@@ -134,8 +135,8 @@ export class BackendApiService {
 
     // JWT and X-Party interceptor
     this.client.interceptors.request.use((config) => {
-      // Get token from Keycloak auth service
-      const token = getAccessToken();
+      const walletToken = getAuthToken();
+      const token = walletToken || getAccessToken();
 
       // Get party ID from token or fallback
       const party = getPartyId() || DEVNET_PARTY;

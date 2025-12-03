@@ -1,11 +1,13 @@
 import { IWalletConnector } from "./IWalletConnector";
 import { DevWalletConnector } from "./DevWalletConnector";
 import { LoopWalletConnector } from "./LoopWalletConnector";
+import { ZoroWalletConnector } from "./ZoroWalletConnector";
 
 class WalletManager {
   private activeConnector: IWalletConnector | null = null;
   private loopConnector: LoopWalletConnector | null = null;
   private devConnector: DevWalletConnector | null = null;
+  private zoroConnector: ZoroWalletConnector | null = null;
 
   async connectLoop(): Promise<IWalletConnector> {
     if (!this.loopConnector) {
@@ -20,6 +22,14 @@ class WalletManager {
       this.devConnector = new DevWalletConnector();
     }
     this.activeConnector = this.devConnector;
+    return this.activeConnector;
+  }
+
+  async connectZoro(): Promise<IWalletConnector> {
+    if (!this.zoroConnector) {
+      this.zoroConnector = new ZoroWalletConnector();
+    }
+    this.activeConnector = this.zoroConnector;
     return this.activeConnector;
   }
 

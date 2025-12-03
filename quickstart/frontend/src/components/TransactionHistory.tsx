@@ -278,7 +278,10 @@ const TransactionHistory: React.FC = () => {
     { label: 'Token A', value: tx.tokenA || '—' },
     { label: 'Amount A Desired', value: `${formatFullAmount(tx.amountADesired)} ${tx.tokenA}` },
     { label: 'Token B', value: tx.tokenB || '—' },
-    { label: 'Amount B Desired', value: `${formatFullAmount(tx.amountBDesired)} ${tx.tokenB}` },
+    {
+      label: 'Amount B Desired',
+      value: `${tx.type === 'SWAP' ? formatSwapOutput(tx) : formatFullAmount(tx.amountBDesired)} ${tx.tokenB}`,
+    },
     { label: 'Min LP Amount', value: tx.minLpAmount ? `${formatFullAmount(tx.minLpAmount)} ${tx.lpTokenSymbol || 'LP'}` : '—' },
     { label: 'LP Tokens Minted', value: tx.lpMintedAmount ? `${formatFullAmount(tx.lpMintedAmount)} ${tx.lpTokenSymbol || 'LP'}` : '—' },
     { label: 'Expires At', value: formatDateTime(tx.expiresAt) },

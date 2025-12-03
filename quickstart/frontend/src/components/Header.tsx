@@ -48,28 +48,32 @@ const Header: React.FC = () => {
     key: string;
     label: string;
     description: string;
-    accent: string;
+    iconSrc: string;
+    iconAlt: string;
     action: () => Promise<unknown>;
   }> = [
     {
       key: 'party',
       label: 'Party ID (manuel)',
       description: 'Saisir un party Canton et signer le challenge via Dev Wallet.',
-      accent: 'from-indigo-500 to-purple-500',
+      iconSrc: '/clearportx-logo.svg',
+      iconAlt: 'ClearportX logo',
       action: authenticateWithDev,
     },
     {
       key: 'loop',
       label: 'Loop Wallet',
       description: 'Se connecter avec le SDK Loop officiel.',
-      accent: 'from-sky-500 to-cyan-500',
+      iconSrc: '/loop.png',
+      iconAlt: 'Loop Wallet logo',
       action: authenticateWithLoop,
     },
     {
       key: 'zoro',
       label: 'Zoro Wallet',
       description: 'Utiliser la future extension Zoro.',
-      accent: 'from-amber-500 to-orange-500',
+      iconSrc: '/zoro.png',
+      iconAlt: 'Zoro Wallet logo',
       action: authenticateWithZoro,
     },
   ];
@@ -187,12 +191,19 @@ const Header: React.FC = () => {
                           onClick={() => handleConnect(option.action)}
                           className={`w-full text-left rounded-2xl border border-gray-200 dark:border-gray-700 px-4 py-3 transition bg-white/90 dark:bg-dark-800/80 hover:-translate-y-0.5 hover:shadow-lg disabled:opacity-60`}
                         >
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between gap-4">
                             <div>
                               <p className="text-sm font-semibold text-gray-900 dark:text-white">{option.label}</p>
                               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{option.description}</p>
                             </div>
-                            <span className={`h-10 w-10 rounded-full bg-gradient-to-br ${option.accent} opacity-80`}></span>
+                            <div className="flex-shrink-0 w-12 h-12 rounded-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-dark-800 shadow-sm flex items-center justify-center overflow-hidden">
+                              <img
+                                src={option.iconSrc}
+                                alt={option.iconAlt}
+                                className="w-8 h-8 object-contain"
+                                loading="lazy"
+                              />
+                            </div>
                           </div>
                         </button>
                       ))}

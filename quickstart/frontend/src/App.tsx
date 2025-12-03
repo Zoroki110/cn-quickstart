@@ -6,8 +6,6 @@ import { useAppStore } from './stores';
 import { useCantonHealth } from './hooks';
 import { BUILD_INFO } from './config/build-info';
 
-import { useWalletAuth } from './wallet';
-
 // Components
 import {
   Header,
@@ -30,14 +28,6 @@ const CANTON_CONFIG = {
 function App() {
   const { setConnected, theme } = useAppStore();
   const { data: isHealthy, isLoading: healthLoading } = useCantonHealth();
-  const {
-    authenticateWithDev,
-    partyId: walletPartyId,
-    walletType,
-    loading: walletLoading,
-    error: walletError,
-  } = useWalletAuth();
-
   useEffect(() => {
     // Initialiser l'API Canton
     try {
@@ -87,37 +77,6 @@ function App() {
         
         {/* Contenu principal */}
         <main className="relative container-app py-8 space-y-6">
-          <section className="rounded-2xl border border-gray-200/70 dark:border-gray-800 bg-white/80 dark:bg-dark-900/80 shadow-xl backdrop-blur px-6 py-5 space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.3em] text-gray-500 dark:text-gray-400">Wallet Access</p>
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Connect Dev Wallet</h2>
-                <p className="text-sm text-gray-600 dark:text-gray-300 max-w-xl">
-                  Enter a Canton party manually and obtain a JWT via the /api/auth challenge/verify endpoints.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:opacity-60"
-                onClick={() => authenticateWithDev()}
-                disabled={walletLoading}
-              >
-                {walletLoading ? 'Connecting…' : 'Connect Dev Wallet'}
-              </button>
-            </div>
-            <div className="rounded-2xl bg-gray-50/90 dark:bg-dark-800/90 px-4 py-3 text-sm text-gray-700 dark:text-gray-200">
-              <p>
-                Status:{' '}
-                <span className="font-semibold">
-                  {walletPartyId ? `Connected as ${walletPartyId}` : 'Not connected'}
-                </span>
-              </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Wallet type: {walletType ?? 'n/a'}</p>
-              {walletError && (
-                <p className="mt-2 text-sm text-rose-500 dark:text-rose-400">{walletError}</p>
-              )}
-            </div>
-          </section>
           <Routes>
             <Route path="/" element={<SwapInterface />} />
             <Route path="/swap" element={<SwapInterface />} />

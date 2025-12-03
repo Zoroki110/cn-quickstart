@@ -1,22 +1,37 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAppStore } from '../stores';
-import { isAuthenticated, login, logout, getUsername } from '../services/auth';
+import { useWalletAuth } from '../wallet';
 
 const Header: React.FC = () => {
   const location = useLocation();
   const { theme, setTheme } = useAppStore();
-  const [authenticated, setAuthenticated] = useState(isAuthenticated());
-  const [username, setUsername] = useState(getUsername());
+  const {
+    partyId,
+    walletType,
+    loading: walletLoading,
+    error: walletError,
+    authenticateWithDev,
+    authenticateWithLoop,
+    authenticateWithZoro,
+    disconnect,
+  } = useWalletAuth();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
 
-  // Check auth state periodically
   useEffect(() => {
-    const interval = setInterval(() => {
-      setAuthenticated(isAuthenticated());
-      setUsername(getUsername());
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+    const handler = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+
+    if (menuOpen) {
+      document.addEventListener('mousedown', handler);
+    }
+
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
 
   const navigation = [
     { name: 'Swap', href: '/swap' },
@@ -29,11 +44,51 @@ const Header: React.FC = () => {
     setTheme(theme === 'light' ? 'dark' : 'light');
   };
 
+  const walletOptions: Array<{
+    key: string;
+    label: string;
+    description: string;
+    accent: string;
+    action: () => Promise<unknown>;
+  }> = [
+    {
+      key: 'party',
+      label: 'Party ID (manuel)',
+      description: 'Saisir un party Canton et signer le challenge via Dev Wallet.',
+      accent: 'from-indigo-500 to-purple-500',
+      action: authenticateWithDev,
+    },
+    {
+      key: 'loop',
+      label: 'Loop Wallet',
+      description: 'Se connecter avec le SDK Loop officiel.',
+      accent: 'from-sky-500 to-cyan-500',
+      action: authenticateWithLoop,
+    },
+    {
+      key: 'zoro',
+      label: 'Zoro Wallet',
+      description: 'Utiliser la future extension Zoro.',
+      accent: 'from-amber-500 to-orange-500',
+      action: authenticateWithZoro,
+    },
+  ];
+
+  const handleConnect = async (action: () => Promise<unknown>) => {
+    try {
+      await action();
+      setMenuOpen(false);
+    } catch (err) {
+      console.error('Wallet connection failed', err);
+    }
+  };
+
+  const connected = Boolean(partyId);
+
   return (
     <header className="sticky top-0 z-50 glass-strong border-b border-gray-200/20 dark:border-gray-700/20">
       <div className="container-app">
         <div className="flex items-center justify-between h-16">
-          {/* Logo */}
           <Link to="/" className="flex items-center space-x-3">
             <div className="h-10 w-10 rounded-lg bg-white dark:bg-white p-1 flex items-center justify-center">
               <img
@@ -48,19 +103,18 @@ const Header: React.FC = () => {
             </div>
           </Link>
 
-          {/* Navigation */}
           <nav className="hidden md:flex items-center space-x-1">
             {navigation.map((item) => {
-              const isActive = location.pathname === item.href || 
+              const isActive = location.pathname === item.href ||
                 (location.pathname === '/' && item.href === '/swap');
-              
+
               return (
                 <Link
                   key={item.name}
                   to={item.href}
                   className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
-                    isActive 
-                      ? 'text-accent-600 dark:text-accent-500 bg-accent-50 dark:bg-accent-900/20' 
+                    isActive
+                      ? 'text-accent-600 dark:text-accent-500 bg-accent-50 dark:bg-accent-900/20'
                       : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-dark-800'
                   }`}
                 >
@@ -70,31 +124,89 @@ const Header: React.FC = () => {
             })}
           </nav>
 
-          {/* Actions */}
           <div className="flex items-center space-x-3">
-            {/* OAuth Login/Logout */}
-            {!authenticated ? (
+            <div className="relative" ref={dropdownRef}>
               <button
-                onClick={() => login()}
-                className="px-4 py-2 rounded-xl font-medium transition-all duration-200 bg-primary-600 text-white hover:bg-primary-700 hover:shadow-lg"
+                type="button"
+                onClick={() => setMenuOpen((prev) => !prev)}
+                disabled={walletLoading}
+                className={`flex items-center gap-3 rounded-xl border px-4 py-2 text-left shadow-sm transition duration-200 min-w-[180px] ${
+                  connected
+                    ? 'border-emerald-200/60 bg-emerald-50 dark:border-emerald-900/40 dark:bg-emerald-900/20 text-emerald-900 dark:text-emerald-200'
+                    : 'border-primary-200/60 bg-white/80 dark:border-dark-700 dark:bg-dark-800 text-gray-800 dark:text-gray-100'
+                } ${walletLoading ? 'opacity-70 cursor-not-allowed' : 'hover:shadow-lg'}`}
               >
-                Connect Wallet
-              </button>
-            ) : (
-              <div className="flex items-center space-x-2">
-                <div className="px-3 py-2 rounded-lg bg-success-100 dark:bg-success-900/20">
-                  <span className="text-sm font-medium text-success-700 dark:text-success-400">
-                    {username || 'Connected'}
-                  </span>
+                <div className="flex-1">
+                  <p className="text-[11px] uppercase tracking-[0.2em] text-gray-400 dark:text-gray-500">Wallet</p>
+                  <p className="text-sm font-semibold">
+                    {connected ? formatPartyId(partyId) : 'Connect Wallet'}
+                  </p>
+                  {connected && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {walletType ? walletType.toUpperCase() : 'Unknown'}
+                    </p>
+                  )}
                 </div>
-                <button
-                  onClick={() => logout()}
-                  className="px-3 py-2 rounded-lg font-medium transition-all duration-200 border border-gray-300 dark:border-dark-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-dark-800"
+                <svg
+                  className={`w-4 h-4 transition-transform ${menuOpen ? 'rotate-180' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                 >
-                  Disconnect
-                </button>
-              </div>
-            )}
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {menuOpen && (
+                <div className="absolute right-0 mt-3 w-80 rounded-2xl border border-gray-200/80 dark:border-gray-700 bg-white dark:bg-dark-900 shadow-2xl backdrop-blur p-4 space-y-3">
+                  {connected ? (
+                    <>
+                      <div className="rounded-xl border border-emerald-100 dark:border-emerald-900/40 bg-emerald-50/60 dark:bg-emerald-900/10 px-4 py-3">
+                        <p className="text-xs uppercase tracking-wide text-emerald-600 dark:text-emerald-300">Connecté</p>
+                        <p className="font-semibold text-gray-900 dark:text-white break-all">{partyId}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Wallet: {walletType ?? 'unknown'}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          disconnect();
+                          setMenuOpen(false);
+                        }}
+                        className="w-full rounded-xl border border-gray-300 dark:border-gray-700 px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-dark-800 transition"
+                      >
+                        Disconnect
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {walletOptions.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          disabled={walletLoading}
+                          onClick={() => handleConnect(option.action)}
+                          className={`w-full text-left rounded-2xl border border-gray-200 dark:border-gray-700 px-4 py-3 transition bg-white/90 dark:bg-dark-800/80 hover:-translate-y-0.5 hover:shadow-lg disabled:opacity-60`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900 dark:text-white">{option.label}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{option.description}</p>
+                            </div>
+                            <span className={`h-10 w-10 rounded-full bg-gradient-to-br ${option.accent} opacity-80`}></span>
+                          </div>
+                        </button>
+                      ))}
+                      {walletError && (
+                        <p className="text-sm text-rose-500 dark:text-rose-400">{walletError}</p>
+                      )}
+                      {walletLoading && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Connexion en cours…</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
 
             <button
               onClick={toggleTheme}
@@ -117,5 +229,13 @@ const Header: React.FC = () => {
     </header>
   );
 };
+
+function formatPartyId(party?: string | null) {
+  if (!party) return 'Not connected';
+  if (party.length <= 22) {
+    return party;
+  }
+  return `${party.slice(0, 10)}…${party.slice(-6)}`;
+}
 
 export default Header;

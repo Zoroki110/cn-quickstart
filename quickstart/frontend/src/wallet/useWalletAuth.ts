@@ -22,6 +22,8 @@ export interface WalletAuthState {
   error: string | null;
   authenticateWithLoop: () => Promise<VerifyResponse>;
   authenticateWithDev: () => Promise<VerifyResponse>;
+  authenticateWithZoro: () => Promise<VerifyResponse>;
+  disconnect: () => void;
 }
 
 export function useWalletAuth(): WalletAuthState {
@@ -73,6 +75,19 @@ export function useWalletAuth(): WalletAuthState {
     [runAuthFlow]
   );
 
+  const authenticateWithZoro = useCallback(
+    () => runAuthFlow(() => walletManager.connectZoro()),
+    [runAuthFlow]
+  );
+
+  const disconnect = useCallback(() => {
+    setToken(null);
+    setPartyId(null);
+    setWalletType(null);
+    setAuthToken(null);
+    setError(null);
+  }, []);
+
   return {
     token,
     partyId,
@@ -81,6 +96,8 @@ export function useWalletAuth(): WalletAuthState {
     error,
     authenticateWithLoop,
     authenticateWithDev,
+    authenticateWithZoro,
+    disconnect,
   };
 }
 

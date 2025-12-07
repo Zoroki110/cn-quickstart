@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { walletManager } from "./WalletManager";
 import type { IWalletConnector } from "./IWalletConnector";
-import { apiPostJson, setAuthToken } from "../api/client";
+import { apiPostJson, clearWalletSession, loadWalletSession, persistWalletSession, setAuthToken } from "../api/client";
 
 type ChallengeResponse = {
   challengeId: string;
@@ -49,10 +49,16 @@ export function useWalletAuth(): WalletAuthState {
         signature,
       });
 
+      const connectorType = normalizeWalletType(connector.getType());
       setToken(verification.token);
       setPartyId(verification.partyId);
       setAuthToken(verification.token);
-      setWalletType(connector.getType());
+      setWalletType(connectorType);
+      persistWalletSession({
+        token: verification.token,
+        partyId: verification.partyId,
+        walletType: connectorType,
+      });
 
       return verification;
     } catch (err) {
@@ -85,7 +91,18 @@ export function useWalletAuth(): WalletAuthState {
     setPartyId(null);
     setWalletType(null);
     setAuthToken(null);
+    clearWalletSession();
     setError(null);
+  }, []);
+
+  useEffect(() => {
+    const session = loadWalletSession();
+    if (session?.token && session.partyId) {
+      setToken(session.token);
+      setPartyId(session.partyId);
+      setWalletType(normalizeWalletType(session.walletType));
+      setAuthToken(session.token);
+    }
   }, []);
 
   return {
@@ -113,4 +130,11 @@ async function verifyChallenge(
     ...params,
     walletType: connector.getType(),
   });
+}
+
+function normalizeWalletType(value: string | null | undefined): "loop" | "zoro" | "dev" | "unknown" {
+  if (value === "loop" || value === "zoro" || value === "dev" || value === "unknown") {
+    return value;
+  }
+  return "unknown";
 }

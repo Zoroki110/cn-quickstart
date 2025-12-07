@@ -16,6 +16,15 @@ const DEFAULT_HEADERS: Record<string, string> = {
   "ngrok-skip-browser-warning": "true",
 };
 
+const WALLET_SESSION_KEY = "clearportx.wallet.session";
+
+export type WalletSession = {
+  token: string;
+  partyId: string;
+  walletType: string;
+  expiresAt?: string | null;
+};
+
 let walletAuthToken: string | null = null;
 
 export function setAuthToken(token: string | null) {
@@ -24,6 +33,45 @@ export function setAuthToken(token: string | null) {
 
 export function getAuthToken(): string | null {
   return walletAuthToken;
+}
+
+export function persistWalletSession(session: WalletSession | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (!session) {
+    window.localStorage.removeItem(WALLET_SESSION_KEY);
+    return;
+  }
+  try {
+    window.localStorage.setItem(WALLET_SESSION_KEY, JSON.stringify(session));
+  } catch (err) {
+    console.warn("Failed to persist wallet session", err);
+  }
+}
+
+export function loadWalletSession(): WalletSession | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const raw = window.localStorage.getItem(WALLET_SESSION_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as WalletSession;
+    if (parsed?.token && parsed?.partyId) {
+      return parsed;
+    }
+  } catch (err) {
+    console.warn("Failed to parse wallet session", err);
+  }
+  window.localStorage.removeItem(WALLET_SESSION_KEY);
+  return null;
+}
+
+export function clearWalletSession() {
+  persistWalletSession(null);
 }
 
 export async function apiGet<T>(path: string): Promise<T> {

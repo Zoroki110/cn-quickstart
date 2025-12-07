@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../stores';
 import { useContractStore } from '../stores/useContractStore';
@@ -7,10 +7,14 @@ import { TokenInfo, SwapQuote, PoolInfo } from '../types/canton';
 import TokenSelector from './TokenSelector';
 import SlippageSettings from './SlippageSettings';
 import toast from 'react-hot-toast';
+import { useWalletAuth } from '../wallet';
+import { useLegacyBalances } from '../hooks';
 
 const SwapInterface: React.FC = () => {
   const queryClient = useQueryClient();
-  const { selectedTokens, setSelectedTokens, swapTokens: swapSelectedTokens, isConnected, slippage } = useAppStore();
+  const { selectedTokens, setSelectedTokens, swapTokens: swapSelectedTokens, slippage } = useAppStore();
+  const { partyId } = useWalletAuth();
+  const { balances: legacyBalances, reload: reloadLegacyBalances } = useLegacyBalances(partyId);
   const [inputAmount, setInputAmount] = useState('');
   const [outputAmount, setOutputAmount] = useState('');
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
@@ -45,15 +49,46 @@ const SwapInterface: React.FC = () => {
     return `$${value.toFixed(0)}`;
   };
 
+  const getBalanceEntry = useCallback((symbol?: string) => {
+    if (!symbol) {
+      return undefined;
+    }
+    return legacyBalances[symbol.toUpperCase()];
+  }, [legacyBalances]);
+
+  const formatBalanceDisplay = useCallback((symbol?: string) => {
+    const entry = getBalanceEntry(symbol);
+    if (!entry) {
+      return '0.0000';
+    }
+    const numeric = Number(entry.amount);
+    if (!Number.isFinite(numeric)) {
+      return entry.amount;
+    }
+    return numeric.toLocaleString('en-US', { maximumFractionDigits: 4 });
+  }, [getBalanceEntry]);
+
+  const getNumericBalance = useCallback((symbol?: string) => {
+    const entry = getBalanceEntry(symbol);
+    if (!entry) {
+      return 0;
+    }
+    const numeric = Number(entry.amount);
+    return Number.isFinite(numeric) ? numeric : 0;
+  }, [getBalanceEntry]);
+
+  const parsedInputAmount = parseFloat(inputAmount || '0');
+  const normalizedInputAmount = Number.isFinite(parsedInputAmount) ? parsedInputAmount : 0;
+  const insufficientBalance = Boolean(partyId && selectedTokens.from && normalizedInputAmount > getNumericBalance(selectedTokens.from.symbol));
+  const disableSwap = loading || !partyId || !selectedTokens.from || !selectedTokens.to || !inputAmount || !quote || insufficientBalance;
+
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
     const loadTokens = async () => {
       try {
-        // 1. Get all active pools to extract available tokens
         const pools = await backendApi.getPools();
         setPools(pools);
 
-        // 2. Extract unique tokens from pools
         const uniqueTokensMap = new Map<string, TokenInfo>();
         pools.forEach(pool => {
           if (!uniqueTokensMap.has(pool.tokenA.symbol)) {
@@ -64,22 +99,25 @@ const SwapInterface: React.FC = () => {
           }
         });
 
-        // 3. Get user balances for these tokens (using current acting party)
-        const userTokens = await backendApi.getWalletTokens(backendApi.getCurrentParty());
+        let tokensWithBalances = Array.from(uniqueTokensMap.values()).map(token => ({ ...token, balance: 0 }));
 
-        // 4. Merge pool tokens with user balances (default to 0 if user has no balance)
-        const tokensWithBalances = Array.from(uniqueTokensMap.values()).map(token => {
-          const userToken = userTokens.find(t => t.symbol === token.symbol);
-          return {
-            ...token,
-            balance: userToken?.balance || 0, // Show 0 if user has no balance
-          };
-        });
+        if (partyId) {
+          try {
+            const userTokens = await backendApi.getWalletTokens(partyId);
+            tokensWithBalances = tokensWithBalances.map(token => {
+              const userToken = userTokens.find(t => t.symbol === token.symbol);
+              return {
+                ...token,
+                balance: userToken?.balance || 0,
+              };
+            });
+          } catch (balanceError) {
+            console.warn('Failed to load wallet tokens for party', balanceError);
+          }
+        }
 
         setTokens(tokensWithBalances);
         useContractStore.getState().setTokens(tokensWithBalances);
-
-        console.log('✅ Loaded tokens from pools:', tokensWithBalances);
       } catch (error) {
         console.error('Error loading tokens:', error);
         toast.error('Failed to load tokens from backend');
@@ -87,7 +125,7 @@ const SwapInterface: React.FC = () => {
     };
 
     loadTokens();
-  }, []);
+  }, [partyId]);
 
   // Compute 24h volume for selected pair from current pools
   useEffect(() => {
@@ -158,9 +196,20 @@ const SwapInterface: React.FC = () => {
       return;
     }
 
+    if (!partyId) {
+      toast.error('Connect a wallet to swap tokens');
+      return;
+    }
+
     const amount = parseFloat(inputAmount);
     if (isNaN(amount) || amount <= 0) {
       toast.error('Please enter a valid amount');
+      return;
+    }
+
+    const availableBalance = getNumericBalance(selectedTokens.from.symbol);
+    if (amount > availableBalance) {
+      toast.error('Insufficient balance for this swap');
       return;
     }
 
@@ -173,61 +222,52 @@ const SwapInterface: React.FC = () => {
       setLoading(true);
       const minOutput = quote.outputAmount * (1 - slippage / 100);
 
-      // Call real backend API - atomic swap
       const response = await backendApi.executeAtomicSwap({
         poolId: resolvedPoolId,
         inputSymbol: selectedTokens.from.symbol,
         outputSymbol: selectedTokens.to.symbol,
-        inputAmount: amount.toFixed(10),  // 10 decimal precision for DAML
+        inputAmount: amount.toFixed(10),
         minOutput: minOutput.toFixed(10),
-        maxPriceImpactBps: Math.round(slippage * 100),  // 0.5% → 50 bps
+        maxPriceImpactBps: Math.round(slippage * 100),
       });
 
       toast.success(`Swap successful! Received ${parseFloat(response.amountOut).toFixed(4)} ${response.outputSymbol}`);
 
-      // Poll for ACS propagation and refresh balances (current acting party)
-      const party = backendApi.getCurrentParty();
-      let updatedTokens = await backendApi.getWalletTokens(party);
-      for (let i = 0; i < 6; i++) { // up to ~3.6s
-        await new Promise(resolve => setTimeout(resolve, 600));
-        const next = await backendApi.getWalletTokens(party);
-        // If either token balance moved, accept
-        const fromBal = next.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
-        const toBal = next.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;
-        const prevFromBal = updatedTokens.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
-        const prevToBal = updatedTokens.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;
-        if (fromBal !== prevFromBal || toBal !== prevToBal) {
+      if (partyId) {
+        let updatedTokens = await backendApi.getWalletTokens(partyId);
+        for (let i = 0; i < 6; i++) {
+          await new Promise(resolve => setTimeout(resolve, 600));
+          const next = await backendApi.getWalletTokens(partyId);
+          const fromBal = next.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
+          const toBal = next.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;
+          const prevFromBal = updatedTokens.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
+          const prevToBal = updatedTokens.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;
+          if (fromBal !== prevFromBal || toBal !== prevToBal) {
+            updatedTokens = next;
+            break;
+          }
           updatedTokens = next;
-          break;
         }
-        updatedTokens = next;
+        setTokens(updatedTokens);
+        useContractStore.getState().setTokens(updatedTokens);
+
+        const updatedFrom = updatedTokens.find(t => t.symbol === selectedTokens.from?.symbol);
+        const updatedTo = updatedTokens.find(t => t.symbol === selectedTokens.to?.symbol);
+        if (updatedFrom && updatedTo) {
+          setSelectedTokens({ from: updatedFrom, to: updatedTo });
+        }
       }
-      setTokens(updatedTokens);
-      useContractStore.getState().setTokens(updatedTokens);
 
-      console.log('✅ Tokens refreshed after swap:', updatedTokens.filter(t =>
-        t.symbol === selectedTokens.from?.symbol || t.symbol === selectedTokens.to?.symbol
-      ));
-
-      // Invalidate and refetch React Query caches to propagate changes across the app
+      await reloadLegacyBalances();
       queryClient.invalidateQueries({ queryKey: ['tokens'] });
       queryClient.invalidateQueries({ queryKey: ['pools'] });
 
-      // Update selected tokens with new balances
-      const updatedFrom = updatedTokens.find(t => t.symbol === selectedTokens.from?.symbol);
-      const updatedTo = updatedTokens.find(t => t.symbol === selectedTokens.to?.symbol);
-      if (updatedFrom && updatedTo) {
-        setSelectedTokens({ from: updatedFrom, to: updatedTo });
-      }
-
-      // Reset form
       setInputAmount('');
       setOutputAmount('');
       setQuote(null);
     } catch (error: any) {
       console.error('Error executing swap:', error);
 
-      // Normalize error from request() wrapper (DomainError) or Axios
       const httpStatus: number | undefined =
         error?.httpStatus ?? error?.response?.status;
       const code: string | undefined =
@@ -344,7 +384,7 @@ const SwapInterface: React.FC = () => {
             <div className="flex items-center justify-between mb-3">
               <span className="body-small">From</span>
               <span className="body-small">
-                Balance: {selectedTokens.from?.balance?.toFixed(4) || '0.00'}
+                Balance: {formatBalanceDisplay(selectedTokens.from?.symbol)}
               </span>
             </div>
 
@@ -404,7 +444,7 @@ const SwapInterface: React.FC = () => {
             <div className="flex items-center justify-between mb-3">
               <span className="body-small">To</span>
               <span className="body-small">
-                Balance: {selectedTokens.to?.balance?.toFixed(4) || '0.00'}
+                Balance: {formatBalanceDisplay(selectedTokens.to?.symbol)}
               </span>
             </div>
 
@@ -465,9 +505,9 @@ const SwapInterface: React.FC = () => {
         {/* Swap Button */}
         <button
           onClick={handleSwap}
-          disabled={loading || !isConnected || !selectedTokens.from || !selectedTokens.to || !inputAmount || !quote}
+          disabled={disableSwap}
           className={`w-full py-4 rounded-xl font-semibold text-lg transition-all duration-200 flex items-center justify-center space-x-2 ${
-            loading || !isConnected || !selectedTokens.from || !selectedTokens.to || !inputAmount || !quote
+            disableSwap
               ? 'bg-gray-200 dark:bg-dark-800 text-gray-400 dark:text-gray-600 cursor-not-allowed'
               : 'btn-primary'
           }`}
@@ -477,8 +517,10 @@ const SwapInterface: React.FC = () => {
               <div className="spinner w-5 h-5"></div>
               <span>Swapping...</span>
             </>
-          ) : !isConnected ? (
+          ) : !partyId ? (
             'Connect Wallet'
+          ) : insufficientBalance ? (
+            'Insufficient Balance'
           ) : (
             'Swap Tokens'
           )}
@@ -515,6 +557,7 @@ const SwapInterface: React.FC = () => {
       <TokenSelector
         isOpen={showFromSelector}
         onClose={() => setShowFromSelector(false)}
+        balances={legacyBalances}
         onSelect={(token) => {
           setSelectedTokens({ from: token });
           setShowFromSelector(false);
@@ -527,6 +570,7 @@ const SwapInterface: React.FC = () => {
       <TokenSelector
         isOpen={showToSelector}
         onClose={() => setShowToSelector(false)}
+        balances={legacyBalances}
         onSelect={(token) => {
           setSelectedTokens({ to: token });
           setShowToSelector(false);

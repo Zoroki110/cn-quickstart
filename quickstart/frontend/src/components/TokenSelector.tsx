@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Search } from 'lucide-react';
 import { TokenInfo } from '../types/canton';
+import { LegacyBalanceMap } from '../hooks/useLegacyBalances';
 
 interface TokenSelectorProps {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface TokenSelectorProps {
   tokens: TokenInfo[];
   selectedToken: TokenInfo | null;
   type: 'from' | 'to';
+  balances?: LegacyBalanceMap;
 }
 
 const TokenSelector: React.FC<TokenSelectorProps> = ({
@@ -19,6 +21,7 @@ const TokenSelector: React.FC<TokenSelectorProps> = ({
   tokens,
   selectedToken,
   type,
+  balances,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -28,6 +31,15 @@ const TokenSelector: React.FC<TokenSelectorProps> = ({
   );
 
   const popularTokens = ['USDC', 'ETH', 'BTC', 'USDT', 'CBTC', 'CC'];
+
+  const formatBalance = (symbol: string) => {
+    const entry = balances?.[symbol.toUpperCase()];
+    if (!entry) {
+      return null;
+    }
+    const numeric = Number(entry.amount);
+    return Number.isFinite(numeric) ? numeric.toFixed(4) : entry.amount;
+  };
 
   const renderTokenIcon = (token: TokenInfo, size: string = 'w-10 h-10') => (
     <div
@@ -147,14 +159,12 @@ const TokenSelector: React.FC<TokenSelectorProps> = ({
                         </div>
                       </div>
 
-                      {token.balance !== undefined && (
-                        <div className="text-right">
-                          <p className="font-medium text-gray-900 dark:text-gray-100">
-                            {token.balance.toFixed(4)}
-                          </p>
-                          <p className="text-sm text-gray-500 dark:text-gray-400">Balance</p>
-                        </div>
-                      )}
+                      <div className="text-right">
+                        <p className="font-medium text-gray-900 dark:text-gray-100">
+                          {formatBalance(token.symbol) ?? (token.balance !== undefined ? token.balance.toFixed(4) : '0.0000')}
+                        </p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Balance</p>
+                      </div>
                     </motion.button>
                   ))}
                 </div>

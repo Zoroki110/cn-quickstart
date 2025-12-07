@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../stores';
 import { useContractStore } from '../stores/useContractStore';
@@ -9,12 +9,13 @@ import SlippageSettings from './SlippageSettings';
 import toast from 'react-hot-toast';
 import { useWalletAuth } from '../wallet';
 import { useLegacyBalances } from '../hooks';
+import { calculateSwapQuoteFromPool } from '../utils/poolMath';
 
 const SwapInterface: React.FC = () => {
   const queryClient = useQueryClient();
   const { selectedTokens, setSelectedTokens, swapTokens: swapSelectedTokens, slippage } = useAppStore();
   const { partyId } = useWalletAuth();
-  const { balances: legacyBalances, reload: reloadLegacyBalances } = useLegacyBalances(partyId);
+  const { balances: legacyBalances, reload: reloadLegacyBalances } = useLegacyBalances(partyId || null);
   const [inputAmount, setInputAmount] = useState('');
   const [outputAmount, setOutputAmount] = useState('');
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
@@ -26,6 +27,7 @@ const SwapInterface: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [pools, setPools] = useState<PoolInfo[]>([]);
   const [volume24h, setVolume24h] = useState<number>(0);
+  const lastConnectedParty = useRef<string | null>(null);
 
   const resolvedPoolId = useMemo(() => {
     if (!selectedTokens.from || !selectedTokens.to || pools.length === 0) return null;
@@ -41,6 +43,13 @@ const SwapInterface: React.FC = () => {
     });
     return match?.contractId ?? null;
   }, [pools, selectedTokens.from, selectedTokens.to]);
+
+  const activePool = useMemo(() => {
+    if (!resolvedPoolId) {
+      return null;
+    }
+    return pools.find(pool => pool.contractId === resolvedPoolId || pool.poolId === resolvedPoolId) ?? null;
+  }, [pools, resolvedPoolId]);
 
   const formatCurrency = (value: number) => {
     if (!isFinite(value) || value <= 0) return '$0';
@@ -81,6 +90,18 @@ const SwapInterface: React.FC = () => {
   const normalizedInputAmount = Number.isFinite(parsedInputAmount) ? parsedInputAmount : 0;
   const insufficientBalance = Boolean(partyId && selectedTokens.from && normalizedInputAmount > getNumericBalance(selectedTokens.from.symbol));
   const disableSwap = loading || !partyId || !selectedTokens.from || !selectedTokens.to || !inputAmount || !quote || insufficientBalance;
+
+  useEffect(() => {
+    const previous = lastConnectedParty.current;
+    if (partyId && partyId !== previous) {
+      reloadLegacyBalances();
+    }
+    if (!partyId) {
+      lastConnectedParty.current = null;
+      return;
+    }
+    lastConnectedParty.current = partyId;
+  }, [partyId, reloadLegacyBalances]);
 
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
@@ -145,50 +166,44 @@ const SwapInterface: React.FC = () => {
 
   // Calculer le quote quand le montant change
   useEffect(() => {
-    if (!selectedTokens.from || !selectedTokens.to || !inputAmount || !resolvedPoolId) {
+    if (!selectedTokens.from || !selectedTokens.to || !inputAmount || !activePool) {
       setOutputAmount('');
       setQuote(null);
       return;
     }
 
-    const calculateQuote = async () => {
+    const timeout = setTimeout(() => {
       setCalculating(true);
       try {
         const amount = parseFloat(inputAmount);
-        if (isNaN(amount) || amount <= 0) {
+        if (!Number.isFinite(amount) || amount <= 0) {
           setOutputAmount('');
           setQuote(null);
           return;
         }
 
-        // Use real backend API to calculate quote
-        const calculatedQuote = await backendApi.calculateSwapQuote({
-          poolId: resolvedPoolId,
-          inputSymbol: selectedTokens.from!.symbol,
-          outputSymbol: selectedTokens.to!.symbol,
-          inputAmount: amount.toString(),
-        });
+        const estimatedQuote = calculateSwapQuoteFromPool(
+          activePool,
+          selectedTokens.from!.symbol,
+          selectedTokens.to!.symbol,
+          amount
+        );
 
-        if (calculatedQuote) {
-          setQuote(calculatedQuote);
-          setOutputAmount(calculatedQuote.outputAmount.toFixed(6));
-        } else {
+        if (!estimatedQuote) {
           setOutputAmount('');
           setQuote(null);
-          toast.error('No pool found for this pair');
+          return;
         }
-      } catch (error) {
-        console.error('Error calculating quote:', error);
-        setOutputAmount('');
-        setQuote(null);
+
+        setQuote(estimatedQuote);
+        setOutputAmount(estimatedQuote.outputAmount.toFixed(6));
       } finally {
         setCalculating(false);
       }
-    };
+    }, 250);
 
-    const timeout = setTimeout(calculateQuote, 500);
     return () => clearTimeout(timeout);
-  }, [inputAmount, selectedTokens.from, selectedTokens.to, resolvedPoolId]);
+  }, [inputAmount, selectedTokens.from, selectedTokens.to, activePool]);
 
   const handleSwap = async () => {
     if (!selectedTokens.from || !selectedTokens.to || !inputAmount || !quote) {

@@ -67,8 +67,14 @@ export function useLegacyBalances(partyId: string | null | undefined): UseLegacy
   }, [partyId]);
 
   useEffect(() => {
+    if (!partyId) {
+      setBalances({});
+      setError(null);
+      setLoading(false);
+      return;
+    }
     fetchBalances();
-  }, [fetchBalances]);
+  }, [partyId, fetchBalances]);
 
   return {
     balances,

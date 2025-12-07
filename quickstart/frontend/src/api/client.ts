@@ -97,10 +97,15 @@ async function request<T>(method: HttpMethod, path: string, body?: unknown): Pro
   });
 
   const payload = await parseJson(response);
-  if (!response.ok || payload === null) {
+  if (!response.ok) {
+    console.warn("[API] Non-2xx response", response.url, response.status);
     const message =
       payload?.message || payload?.error || `Request to ${path} failed with status ${response.status}`;
     throw new Error(message);
+  }
+  if (payload === null) {
+    console.warn("[API] Empty JSON response", response.url);
+    throw new Error(`Request to ${path} returned an empty response`);
   }
   return payload as T;
 }

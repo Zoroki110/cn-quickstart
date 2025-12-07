@@ -161,7 +161,7 @@ const TokenSelector: React.FC<TokenSelectorProps> = ({
 
                       <div className="text-right">
                         <p className="font-medium text-gray-900 dark:text-gray-100">
-                          {formatBalance(token.symbol) ?? (token.balance !== undefined ? token.balance.toFixed(4) : '0.0000')}
+                          {formatBalance(token.symbol) ?? '0.0000'}
                         </p>
                         <p className="text-sm text-gray-500 dark:text-gray-400">Balance</p>
                       </div>

@@ -152,10 +152,10 @@ export class BackendApiService {
       const url = config.url ?? '';
       const isPublicEndpoint = publicEndpoints.some(endpoint => url.includes(endpoint));
 
-      if (token && !isPublicEndpoint) {
+      if (token) {
         config.headers.Authorization = `Bearer ${token}`;
         console.log('🔐 Adding JWT to request:', config.url);
-      } else if (!token && !isPublicEndpoint) {
+      } else if (!isPublicEndpoint) {
         console.warn('⚠️ No JWT token found for protected endpoint:', config.url);
       }
 
@@ -552,7 +552,7 @@ export class BackendApiService {
       pool.reserveA > 0 && pool.reserveB > 0
     );
     if (activePools.length === 0) {
-      return [];
+      return [...pools];
     }
 
     const pairToBest: Record<string, PoolInfo> = {};
@@ -706,105 +706,41 @@ export class BackendApiService {
   }
 
   /**
-   * Execute atomic swap (PrepareSwap + ExecuteSwap in 1 transaction)
-   * This is the recommended endpoint for production use
+   * Execute swap via debug endpoint (JWT-aware)
    */
   async executeAtomicSwap(params: SwapParams): Promise<AtomicSwapResponse> {
-    const idempotencyKey = this.generateIdempotencyKey();
+    const party = this.currentParty();
+    const resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
+    const { poolCid } = await this.resolveAndGrant(resolvedPoolId, party);
+    const minOutputStr = params.minOutput ?? '0';
+    const body = {
+      poolCid,
+      poolId: resolvedPoolId,
+      inputSymbol: params.inputSymbol,
+      outputSymbol: params.outputSymbol,
+      amountIn: params.inputAmount,
+      minOutput: minOutputStr,
+    };
 
-    // Use debug endpoint when auth is disabled (no real JWT)
-    if (!this.hasJwt()) {
-      const party = this.currentParty();
-      const resolvedPoolId = params.poolId || `${params.inputSymbol}-${params.outputSymbol}`;
-      // Always ask server for a fresh, party-visible CID
-      const { poolCid } = await this.resolveAndGrant(resolvedPoolId, party);
-      // Snapshot pool reserves before swap (to compute precise output via delta)
-      let beforePool: any = null;
-      try {
-        beforePool = await this.request<any>(() =>
-          this.client.get('/api/clearportx/debug/pool-by-cid', {
-            params: { cid: poolCid }, headers: { 'X-Party': party }
-          })
-        );
-      } catch {}
+    const swapResponse = await this.request<any>(() =>
+      this.client.post('/api/clearportx/debug/swap-by-cid', body, { headers: { 'X-Party': party } })
+    );
 
-      // Snapshot balances before swap for accurate delta measurement
-      const beforeTokens = await this.getTokens(party);
-      const beforeMap = new Map<string, number>(beforeTokens.map(t => [t.symbol, t.balance || 0]));
+    const rawResolvedOutput = swapResponse?.resolvedOutput ?? swapResponse?.amountOut ?? swapResponse?.minOutput ?? '0';
+    const numericResolved = Number(rawResolvedOutput);
+    const amountOut = Number.isFinite(numericResolved)
+      ? numericResolved.toString()
+      : String(rawResolvedOutput ?? '0');
 
-      // Respect caller-provided minOutput (slippage) when available
-      const minOutputStr = params.minOutput ?? '0';
-      const body = {
-        poolCid,
-        poolId: resolvedPoolId,
-        inputSymbol: params.inputSymbol,
-        outputSymbol: params.outputSymbol,
-        amountIn: params.inputAmount,
-        minOutput: minOutputStr,
-      };
-      const res = await this.request<any>(() =>
-        this.client.post('/api/clearportx/debug/swap-by-cid', body, { headers: { 'X-Party': party } })
-      );
-
-      // Compute precise output using pool reserve delta first (most robust)
-      let received = 0;
-      if (beforePool?.success) {
-        try {
-          const newPoolCid = res?.newPoolCid || poolCid;
-          const afterPool = await this.request<any>(() =>
-            this.client.get('/api/clearportx/debug/pool-by-cid', {
-              params: { cid: newPoolCid }, headers: { 'X-Party': party }
-            })
-          );
-          if (afterPool?.success) {
-            const aBefore = parseFloat(beforePool.reserveA);
-            const bBefore = parseFloat(beforePool.reserveB);
-            const aAfter = parseFloat(afterPool.reserveA);
-            const bAfter = parseFloat(afterPool.reserveB);
-            const symA = beforePool.symbolA;
-            const symB = beforePool.symbolB;
-            if (params.inputSymbol === symA && params.outputSymbol === symB) {
-              const deltaOut = bBefore - bAfter;
-              if (deltaOut > 0) received = deltaOut;
-            } else if (params.inputSymbol === symB && params.outputSymbol === symA) {
-              const deltaOut = aBefore - aAfter;
-              if (deltaOut > 0) received = deltaOut;
-            }
-          }
-        } catch {}
-      }
-      // If still zero, poll wallet token balance delta for output symbol
-      if (received <= 0) {
-        const outSym = (params.outputSymbol || '').toUpperCase();
-        const outBefore = beforeMap.get(outSym) ?? beforeMap.get(params.outputSymbol) ?? 0;
-        for (let i = 0; i < 8; i++) { // ~ up to ~4.8s (8 * 600ms)
-          await this.sleep(600);
-          const afterTokens = await this.getWalletTokens(party);
-          const afterMap = new Map<string, number>(afterTokens.map(t => [t.symbol.toUpperCase(), t.balance || 0]));
-          const outAfter = afterMap.get(outSym) ?? 0;
-          const delta = outAfter - outBefore;
-          if (delta > 0) {
-            received = delta;
-            break;
-          }
-        }
-      }
-
-      return {
-        receiptCid: res?.receiptCid ?? '',
-        trader: getPartyId() || '',
-        inputSymbol: params.inputSymbol,
-        outputSymbol: params.outputSymbol,
-        amountIn: params.inputAmount,
-        amountOut: received.toString(),
-        timestamp: new Date().toISOString(),
-      };
-    }
-
-    const res = await this.client.post('/api/swap/atomic', params, {
-      headers: { 'X-Idempotency-Key': idempotencyKey },
-    });
-    return res.data;
+    return {
+      receiptCid: swapResponse?.commandId ?? swapResponse?.outputTokenCid ?? '',
+      trader: party,
+      inputSymbol: params.inputSymbol,
+      outputSymbol: params.outputSymbol,
+      amountIn: params.inputAmount,
+      amountOut,
+      timestamp: new Date().toISOString(),
+    };
   }
 
   /**

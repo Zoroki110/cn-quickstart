@@ -259,7 +259,13 @@ const SwapInterface: React.FC = () => {
         maxPriceImpactBps: Math.round(slippage * 100),
       });
 
-      toast.success(`Swap successful! Received ${parseFloat(response.amountOut).toFixed(4)} ${response.outputSymbol}`);
+      const rawAmountOut = Number(response.amountOut);
+      const fallbackAmount = quote?.outputAmount ?? 0;
+      const displayAmount =
+        Number.isFinite(rawAmountOut) && rawAmountOut < 1_000
+          ? rawAmountOut
+          : fallbackAmount;
+      toast.success(`Swap successful! Received ${displayAmount.toFixed(4)} ${response.outputSymbol}`);
 
       if (partyId) {
         let updatedTokens = await backendApi.getWalletTokens(partyId);

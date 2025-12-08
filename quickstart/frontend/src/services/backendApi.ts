@@ -492,7 +492,7 @@ export class BackendApiService {
     }
 
     const chosenRows: any[] = [];
-    for (const rows of groups.values()) {
+    groups.forEach((rows) => {
       let picked: any | null = null;
       if (!picked && preferredPkgPrefix) {
         for (const r of rows) {
@@ -537,7 +537,7 @@ export class BackendApiService {
       if (picked) {
         chosenRows.push(picked);
       }
-    }
+    });
 
     return chosenRows.map((row: any) => this.mapPartyPool(row));
   }

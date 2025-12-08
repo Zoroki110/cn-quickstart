@@ -146,6 +146,8 @@ export class BackendApiService {
         '/api/health',
         '/api/health/ledger',
         '/actuator/health',
+        '/api/debug/',
+        '/api/clearportx/debug/',
       ];
       const url = config.url ?? '';
       const isPublicEndpoint = publicEndpoints.some(endpoint => url.includes(endpoint));
@@ -433,38 +435,140 @@ export class BackendApiService {
   }
 
   /**
-   * Get all active pools from the public endpoint (source of truth)
-   * Returns unique pools by token pair, sorted by TVL proxy
+   * Get all active pools, preferring the public directory but falling back to the party-specific view when needed.
    */
   async getPools(): Promise<PoolInfo[]> {
+    let publicPools: PoolInfo[] = [];
+
     try {
       const res = await this.client.get('/api/pools');
       const poolData = Array.isArray(res.data) ? res.data : [];
-      const allPools = poolData.map((data: any) => this.mapPool(data));
-
-      const activePools = allPools.filter((pool: PoolInfo) =>
-        pool.reserveA > 0 && pool.reserveB > 0
-      );
-
-      const pairToBest: Record<string, PoolInfo> = {};
-      for (const pool of activePools) {
-        const pairKey = [pool.tokenA.symbol, pool.tokenB.symbol].sort().join('/');
-        const tvl = pool.reserveA * pool.reserveB;
-        const current = pairToBest[pairKey];
-        if (!current || tvl > current.reserveA * current.reserveB) {
-          pairToBest[pairKey] = pool;
-        }
-      }
-
-      return Object.values(pairToBest).sort((a, b) => {
-        const tvlA = a.reserveA * a.reserveB;
-        const tvlB = b.reserveA * b.reserveB;
-        return tvlB - tvlA;
-      });
+      publicPools = poolData.map((data: any) => this.mapPool(data));
     } catch (error) {
-      console.error('Error loading pools:', error);
+      console.warn('Public pools fetch failed', error);
+    }
+
+    if (publicPools.length > 0) {
+      return this.normalizePools(publicPools);
+    }
+
+    try {
+      const fallbackPools = await this.loadPartyScopedPools();
+      if (fallbackPools.length > 0) {
+        return this.normalizePools(fallbackPools);
+      }
+    } catch (fallbackErr) {
+      console.error('Fallback pool loader failed', fallbackErr);
+    }
+
+    return [];
+  }
+
+  private async loadPartyScopedPools(): Promise<PoolInfo[]> {
+    const party = this.currentParty();
+    const partyRows = await this.fetchPoolsForParty(party);
+    if (partyRows.length === 0) {
       return [];
     }
+
+    let directoryMap: Record<string, { poolCid: string }> = {};
+    try {
+      const dirRes = await this.client.get('/api/clearportx/debug/directory');
+      directoryMap = (dirRes.data?.mapping as Record<string, { poolCid: string }>) || {};
+    } catch {
+      directoryMap = {};
+    }
+
+    const preferredPkgPrefix =
+      (process.env.REACT_APP_AMM_POOL_PACKAGE_ID || '').trim() ||
+      ((BUILD_INFO?.features as any)?.ammPackageId || '').trim();
+
+    const groups = new Map<string, any[]>();
+    for (const row of partyRows) {
+      const key = [String(row.symbolA), String(row.symbolB)].sort().join('/');
+      const arr = groups.get(key) || [];
+      arr.push(row);
+      groups.set(key, arr);
+    }
+
+    const chosenRows: any[] = [];
+    for (const rows of groups.values()) {
+      let picked: any | null = null;
+      if (!picked && preferredPkgPrefix) {
+        for (const r of rows) {
+          try {
+            const ti = await this.request<any>(() =>
+              this.client.get('/api/debug/pool/template-id', {
+                params: { cid: r.poolCid },
+                headers: { 'X-Party': party },
+              })
+            );
+            const pkg: string = ti?.packageId || '';
+            if (pkg && pkg.toLowerCase().startsWith(String(preferredPkgPrefix).toLowerCase())) {
+              picked = r;
+              break;
+            }
+          } catch {
+            // ignore and continue
+          }
+        }
+      }
+      if (!picked) {
+        const latestMatches: any[] = [];
+        for (const r of rows) {
+          const latest = directoryMap[r.poolId]?.poolCid;
+          if (latest && latest === r.poolCid) {
+            latestMatches.push(r);
+          }
+        }
+        if (latestMatches.length > 0) {
+          picked = [...latestMatches].sort((a, b) =>
+            (parseFloat(b.reserveA) * parseFloat(b.reserveB)) -
+            (parseFloat(a.reserveA) * parseFloat(a.reserveB))
+          )[0];
+        }
+      }
+      if (!picked) {
+        picked = [...rows].sort((a, b) =>
+          (parseFloat(b.reserveA) * parseFloat(b.reserveB)) -
+          (parseFloat(a.reserveA) * parseFloat(a.reserveB))
+        )[0];
+      }
+      if (picked) {
+        chosenRows.push(picked);
+      }
+    }
+
+    return chosenRows.map((row: any) => this.mapPartyPool(row));
+  }
+
+  private normalizePools(pools: PoolInfo[]): PoolInfo[] {
+    if (!Array.isArray(pools) || pools.length === 0) {
+      return [];
+    }
+
+    const activePools = pools.filter((pool: PoolInfo) =>
+      pool.reserveA > 0 && pool.reserveB > 0
+    );
+    if (activePools.length === 0) {
+      return [];
+    }
+
+    const pairToBest: Record<string, PoolInfo> = {};
+    for (const pool of activePools) {
+      const pairKey = [pool.tokenA.symbol, pool.tokenB.symbol].sort().join('/');
+      const tvl = pool.reserveA * pool.reserveB;
+      const current = pairToBest[pairKey];
+      if (!current || tvl > current.reserveA * current.reserveB) {
+        pairToBest[pairKey] = pool;
+      }
+    }
+
+    return Object.values(pairToBest).sort((a, b) => {
+      const tvlA = a.reserveA * a.reserveB;
+      const tvlB = b.reserveA * b.reserveB;
+      return tvlB - tvlA;
+    });
   }
 
   /**

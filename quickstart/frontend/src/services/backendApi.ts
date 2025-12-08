@@ -4,7 +4,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import { TokenInfo, PoolInfo, SwapQuote, TransactionHistoryEntry, LpTokenInfo } from '../types/canton';
 import { getAccessToken, getPartyId } from './auth';
 import { BUILD_INFO } from '../config/build-info';
-import { getAuthToken } from '../api/client';
+import { getActiveWalletParty, getAuthToken } from '../api/client';
 
 type DomainError = {
   code: string;
@@ -138,20 +138,18 @@ export class BackendApiService {
       const walletToken = getAuthToken();
       const token = walletToken || getAccessToken();
 
-      // Get party ID from token or fallback
-      const party = getPartyId() || DEVNET_PARTY;
+      const walletPartyId = getActiveWalletParty();
+      const party = walletPartyId || getPartyId() || DEVNET_PARTY;
 
-      // Public endpoints that don't need JWT authentication
       const publicEndpoints = [
         '/api/pools',
         '/api/health',
-        '/api/tokens/',
-        '/api/debug/',
-        '/api/clearportx/debug/',
+        '/api/health/ledger',
+        '/actuator/health',
       ];
-      const isPublicEndpoint = publicEndpoints.some(endpoint => config.url?.includes(endpoint));
+      const url = config.url ?? '';
+      const isPublicEndpoint = publicEndpoints.some(endpoint => url.includes(endpoint));
 
-      // Add Authorization header for all protected endpoints (swap, liquidity)
       if (token && !isPublicEndpoint) {
         config.headers.Authorization = `Bearer ${token}`;
         console.log('🔐 Adding JWT to request:', config.url);
@@ -159,7 +157,6 @@ export class BackendApiService {
         console.warn('⚠️ No JWT token found for protected endpoint:', config.url);
       }
 
-      // Always inject X-Party header (backend uses this for party context)
       if (party) {
         config.headers['X-Party'] = party;
         console.log('👤 Adding X-Party header:', party.substring(0, 30) + '...');
@@ -186,6 +183,10 @@ export class BackendApiService {
   }
 
   private hasJwt(): boolean {
+    const walletToken = getAuthToken();
+    if (walletToken) {
+      return true;
+    }
     const token = getAccessToken();
     return !!token && token !== 'devnet-mock-token';
   }
@@ -193,7 +194,7 @@ export class BackendApiService {
   // Resolve a fresh pool CID for a given poolId by choosing a pool whose canonical token CIDs are alive for poolParty
   private async resolveFreshPoolCidById(poolId: string): Promise<string | null> {
     try {
-      const appParty = getPartyId() || DEVNET_PARTY;
+      const appParty = this.currentParty();
       // Resolve poolParty from poolId
       const parties = await this.client.post('/api/debug/pool-parties', { poolId }).then(r => r.data?.parties).catch(() => null);
       const poolParty = parties?.poolParty;
@@ -243,7 +244,7 @@ export class BackendApiService {
   }
 
   private currentParty(): string {
-    return getPartyId() || DEVNET_PARTY;
+    return getActiveWalletParty() || getPartyId() || DEVNET_PARTY;
   }
 
   // Expose current acting party to UI (for consistent token refresh)
@@ -406,6 +407,10 @@ export class BackendApiService {
     return sorted[0].poolCid;
   }
 
+  async resolvePoolCid(poolId: string): Promise<string | null> {
+    return this.resolvePoolCidForIdPreferEmpty(poolId);
+  }
+
   /**
    * Health check - verify backend is running and synced
    */
@@ -428,121 +433,34 @@ export class BackendApiService {
   }
 
   /**
-   * Get all active pools (party-scoped if possible; fallback to global)
+   * Get all active pools from the public endpoint (source of truth)
    * Returns unique pools by token pair, sorted by TVL proxy
    */
   async getPools(): Promise<PoolInfo[]> {
     try {
-      // Prefer party-scoped pools for freshness and correct CID instance
-      const party = this.currentParty();
-      const partyRows = await this.fetchPoolsForParty(party);
-      let allPools: PoolInfo[];
-      if (partyRows.length > 0) {
-        // Fetch directory mapping ONCE to avoid spamming the endpoint
-        let directoryMap: Record<string, { poolCid: string }> = {};
-        try {
-          const dirRes = await this.client.get('/api/clearportx/debug/directory');
-          directoryMap = (dirRes.data?.mapping as Record<string, { poolCid: string }>) || {};
-        } catch {
-          directoryMap = {};
-        }
+      const res = await this.client.get('/api/pools');
+      const poolData = Array.isArray(res.data) ? res.data : [];
+      const allPools = poolData.map((data: any) => this.mapPool(data));
 
-        // Group by token pair and select the latest instance per pair:
-        // 1) If preferred package prefix configured, prefer rows with that package
-        // 2) Else prefer directory-latest for each poolId
-        // 3) Else fallback to highest TVL
-        const preferredPkgPrefix =
-          (process.env.REACT_APP_AMM_POOL_PACKAGE_ID || '').trim() ||
-          (BUILD_INFO?.features as any)?.ammPackageId ||
-          '';
-        const groups = new Map<string, any[]>();
-        for (const row of partyRows) {
-          const key = [String(row.symbolA), String(row.symbolB)].sort().join('/');
-          const arr = groups.get(key) || [];
-          arr.push(row);
-          groups.set(key, arr);
-        }
-        const chosenRows: any[] = [];
-        for (const entry of Array.from(groups.entries())) {
-          const rows = entry[1];
-          let picked: any | null = null;
-          // 1) Preferred package check (best-effort; minimal calls)
-          if (!picked && preferredPkgPrefix) {
-            for (const r of rows) {
-              try {
-                const ti = await this.request<any>(() =>
-                  this.client.get('/api/debug/pool/template-id', {
-                    params: { cid: r.poolCid }, headers: { 'X-Party': party }
-                  })
-                );
-                const pkg: string = ti?.packageId || '';
-                if (pkg.toLowerCase().startsWith(String(preferredPkgPrefix).toLowerCase())) {
-                  picked = r;
-                  break;
-                }
-              } catch {
-                // ignore and continue
-              }
-            }
-          }
-          // 2) Directory-latest match for each poolId
-          if (!picked) {
-            const latestMatches: any[] = [];
-            for (const r of rows) {
-              const latest = directoryMap[r.poolId]?.poolCid;
-              if (latest && latest === r.poolCid) latestMatches.push(r);
-            }
-            if (latestMatches.length > 0) {
-              picked = [...latestMatches].sort((a, b) =>
-                (parseFloat(b.reserveA) * parseFloat(b.reserveB)) -
-                (parseFloat(a.reserveA) * parseFloat(a.reserveB))
-              )[0];
-            }
-          }
-          if (!picked) {
-            // Fallback to highest TVL (reserveA * reserveB)
-            picked = [...rows].sort((a, b) =>
-              (parseFloat(b.reserveA) * parseFloat(b.reserveB)) -
-              (parseFloat(a.reserveA) * parseFloat(a.reserveB))
-            )[0];
-          }
-          if (picked) chosenRows.push(picked);
-        }
-        allPools = chosenRows.map((row: any) => this.mapPartyPool(row));
-      } else {
-        // Fallback to global pools endpoint for public browsing
-        const res = await this.client.get('/api/pools');
-        const poolData = Array.isArray(res.data) ? res.data : [];
-        allPools = poolData.map((data: any) => this.mapPool(data));
-      }
-
-      // Filter pools with liquidity (reserveA > 0 and reserveB > 0)
       const activePools = allPools.filter((pool: PoolInfo) =>
         pool.reserveA > 0 && pool.reserveB > 0
       );
 
-      // Group by token pair and select the highest TVL pool per pair
       const pairToBest: Record<string, PoolInfo> = {};
       for (const pool of activePools) {
         const pairKey = [pool.tokenA.symbol, pool.tokenB.symbol].sort().join('/');
         const tvl = pool.reserveA * pool.reserveB;
-        const cur = pairToBest[pairKey];
-        if (!cur) {
+        const current = pairToBest[pairKey];
+        if (!current || tvl > current.reserveA * current.reserveB) {
           pairToBest[pairKey] = pool;
-        } else {
-          const curTvl = cur.reserveA * cur.reserveB;
-          if (tvl > curTvl) pairToBest[pairKey] = pool;
         }
       }
 
-      // Sort selected pools by TVL descending
-      const bestPools = Object.values(pairToBest).sort((a, b) => {
+      return Object.values(pairToBest).sort((a, b) => {
         const tvlA = a.reserveA * a.reserveB;
         const tvlB = b.reserveA * b.reserveB;
         return tvlB - tvlA;
       });
-
-      return bestPools;
     } catch (error) {
       console.error('Error loading pools:', error);
       return [];

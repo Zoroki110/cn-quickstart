@@ -103,6 +103,19 @@ const SwapInterface: React.FC = () => {
     lastConnectedParty.current = partyId;
   }, [partyId, reloadLegacyBalances]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const handleWalletConnected = () => {
+      reloadLegacyBalances();
+    };
+    window.addEventListener('clearportx:wallet:connected', handleWalletConnected as EventListener);
+    return () => {
+      window.removeEventListener('clearportx:wallet:connected', handleWalletConnected as EventListener);
+    };
+  }, [reloadLegacyBalances]);
+
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
     const loadTokens = async () => {

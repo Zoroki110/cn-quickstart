@@ -26,16 +26,22 @@ export type WalletSession = {
 };
 
 let walletAuthToken: string | null = null;
+let activeWalletSession: WalletSession | null = null;
+let sessionHydrated = false;
 
 export function setAuthToken(token: string | null) {
   walletAuthToken = token && token.trim().length > 0 ? token : null;
 }
 
 export function getAuthToken(): string | null {
+  ensureSessionHydrated();
   return walletAuthToken;
 }
 
 export function persistWalletSession(session: WalletSession | null) {
+  sessionHydrated = true;
+  activeWalletSession = session;
+  walletAuthToken = session?.token ?? null;
   if (typeof window === "undefined") {
     return;
   }
@@ -51,27 +57,20 @@ export function persistWalletSession(session: WalletSession | null) {
 }
 
 export function loadWalletSession(): WalletSession | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const raw = window.localStorage.getItem(WALLET_SESSION_KEY);
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as WalletSession;
-    if (parsed?.token && parsed?.partyId) {
-      return parsed;
-    }
-  } catch (err) {
-    console.warn("Failed to parse wallet session", err);
-  }
-  window.localStorage.removeItem(WALLET_SESSION_KEY);
-  return null;
+  ensureSessionHydrated();
+  return activeWalletSession;
 }
 
 export function clearWalletSession() {
+  sessionHydrated = true;
+  activeWalletSession = null;
+  walletAuthToken = null;
   persistWalletSession(null);
+}
+
+export function getActiveWalletParty(): string | null {
+  ensureSessionHydrated();
+  return activeWalletSession?.partyId ?? null;
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -126,4 +125,33 @@ async function parseJson(response: Response): Promise<ErrorPayload | null> {
   } catch {
     return null;
   }
+}
+
+function ensureSessionHydrated() {
+  if (sessionHydrated || typeof window === "undefined") {
+    return;
+  }
+  sessionHydrated = true;
+  const stored = readSessionFromStorage();
+  if (stored) {
+    activeWalletSession = stored;
+    walletAuthToken = stored.token;
+  }
+}
+
+function readSessionFromStorage(): WalletSession | null {
+  const raw = window.localStorage.getItem(WALLET_SESSION_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as WalletSession;
+    if (parsed?.token && parsed?.partyId) {
+      return parsed;
+    }
+  } catch (err) {
+    console.warn("Failed to parse wallet session", err);
+  }
+  window.localStorage.removeItem(WALLET_SESSION_KEY);
+  return null;
 }

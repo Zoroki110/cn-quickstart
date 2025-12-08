@@ -26,16 +26,43 @@ export interface WalletAuthState {
   disconnect: () => void;
 }
 
+type AuthInternalState = {
+  token: string | null;
+  partyId: string | null;
+  walletType: "loop" | "zoro" | "dev" | "unknown" | null;
+  loading: boolean;
+  error: string | null;
+};
+
+const initialAuthState: AuthInternalState = {
+  token: null,
+  partyId: null,
+  walletType: null,
+  loading: false,
+  error: null,
+};
+
+type AuthListener = (state: AuthInternalState) => void;
+
+let authState: AuthInternalState = initialAuthState;
+const authListeners = new Set<AuthListener>();
+let authHydratedFromSession = false;
+
 export function useWalletAuth(): WalletAuthState {
-  const [token, setToken] = useState<string | null>(null);
-  const [partyId, setPartyId] = useState<string | null>(null);
-  const [walletType, setWalletType] = useState<"loop" | "zoro" | "dev" | "unknown" | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  hydrateAuthStateFromSession();
+
+  const [state, setState] = useState<AuthInternalState>(authState);
+
+  useEffect(() => {
+    const listener: AuthListener = (next) => setState(next);
+    authListeners.add(listener);
+    return () => {
+      authListeners.delete(listener);
+    };
+  }, []);
 
   const runAuthFlow = useCallback(async (connect: () => Promise<IWalletConnector>) => {
-    setLoading(true);
-    setError(null);
+    updateAuthState({ loading: true, error: null });
 
     try {
       const connector = await connect();
@@ -50,24 +77,33 @@ export function useWalletAuth(): WalletAuthState {
       });
 
       const connectorType = normalizeWalletType(connector.getType());
-      setToken(verification.token);
-      setPartyId(verification.partyId);
       setAuthToken(verification.token);
-      setWalletType(connectorType);
       persistWalletSession({
         token: verification.token,
         partyId: verification.partyId,
         walletType: connectorType,
       });
+      updateAuthState({
+        token: verification.token,
+        partyId: verification.partyId,
+        walletType: connectorType,
+      });
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("clearportx:wallet:connected", {
+            detail: { partyId: verification.partyId, walletType: connectorType },
+          })
+        );
+      }
 
       return verification;
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Wallet authentication failed";
-      setError(message);
+      const message = err instanceof Error ? err.message : "Wallet authentication failed";
+      updateAuthState({ error: message });
       throw err;
     } finally {
-      setLoading(false);
+      updateAuthState({ loading: false });
     }
   }, []);
 
@@ -87,30 +123,22 @@ export function useWalletAuth(): WalletAuthState {
   );
 
   const disconnect = useCallback(() => {
-    setToken(null);
-    setPartyId(null);
-    setWalletType(null);
-    setAuthToken(null);
     clearWalletSession();
-    setError(null);
-  }, []);
-
-  useEffect(() => {
-    const session = loadWalletSession();
-    if (session?.token && session.partyId) {
-      setToken(session.token);
-      setPartyId(session.partyId);
-      setWalletType(normalizeWalletType(session.walletType));
-      setAuthToken(session.token);
-    }
+    setAuthToken(null);
+    updateAuthState({
+      token: null,
+      partyId: null,
+      walletType: null,
+      error: null,
+    });
   }, []);
 
   return {
-    token,
-    partyId,
-    walletType,
-    loading,
-    error,
+    token: state.token,
+    partyId: state.partyId,
+    walletType: state.walletType,
+    loading: state.loading,
+    error: state.error,
     authenticateWithLoop,
     authenticateWithDev,
     authenticateWithZoro,
@@ -137,4 +165,26 @@ function normalizeWalletType(value: string | null | undefined): "loop" | "zoro" 
     return value;
   }
   return "unknown";
+}
+
+function hydrateAuthStateFromSession() {
+  if (authHydratedFromSession) {
+    return;
+  }
+  authHydratedFromSession = true;
+  const session = loadWalletSession();
+  if (session?.token && session.partyId) {
+    setAuthToken(session.token);
+    authState = {
+      ...authState,
+      token: session.token,
+      partyId: session.partyId,
+      walletType: normalizeWalletType(session.walletType),
+    };
+  }
+}
+
+function updateAuthState(patch: Partial<AuthInternalState>) {
+  authState = { ...authState, ...patch };
+  authListeners.forEach((listener) => listener(authState));
 }

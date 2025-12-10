@@ -152,28 +152,6 @@ const Header: React.FC = () => {
                       {walletType ? walletType.toUpperCase() : 'Unknown'}
                     </p>
                   )}
-                  {connected && (
-                    <div className="mt-2 text-xs text-gray-700 dark:text-gray-200">
-                      <div className="font-semibold mb-1 text-sm">Balances</div>
-                      {holdingsLoading && (
-                        <div className="text-[11px] opacity-70">
-                          Loading on-ledger balances…
-                        </div>
-                      )}
-                      {!holdingsLoading &&
-                        holdings.slice(0, 5).map((h) => (
-                          <div key={h.symbol} className="flex justify-between text-sm">
-                            <span>{h.symbol}</span>
-                            <span>{formatAmount(h.quantity, h.decimals)}</span>
-                          </div>
-                        ))}
-                      {!holdingsLoading && holdings.length > 5 && (
-                        <div className="text-[11px] opacity-70 mt-1">
-                          + {holdings.length - 5} more
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
                 <svg
                   className={`w-4 h-4 transition-transform ${menuOpen ? 'rotate-180' : ''}`}
@@ -193,6 +171,22 @@ const Header: React.FC = () => {
                         <p className="text-xs uppercase tracking-wide text-emerald-600 dark:text-emerald-300">Connecté</p>
                         <p className="font-semibold text-gray-900 dark:text-white break-all">{partyId}</p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Wallet: {walletType ?? 'unknown'}</p>
+                      </div>
+                      <div className="mt-3 text-sm text-gray-700 dark:text-gray-200">
+                        <div className="font-semibold mb-1">Balances</div>
+                        {holdingsLoading && (
+                          <div className="text-xs opacity-70">Loading on-ledger balances…</div>
+                        )}
+                        {!holdingsLoading &&
+                          holdings.slice(0, 5).map((h) => (
+                            <div key={h.symbol} className="flex justify-between">
+                              <span>{h.symbol}</span>
+                              <span>{formatAmount(h.quantity, h.decimals)}</span>
+                            </div>
+                          ))}
+                        {!holdingsLoading && holdings.length > 5 && (
+                          <div className="text-xs opacity-70 mt-1">+ {holdings.length - 5} more</div>
+                        )}
                       </div>
                       <button
                         type="button"

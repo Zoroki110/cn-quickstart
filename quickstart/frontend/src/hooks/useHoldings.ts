@@ -48,12 +48,18 @@ export function useHoldings(partyId: string | null) {
 }
 
 function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
+  const instrument = (raw as any)?.instrument;
+  const metadata = (raw as any)?.metadata ?? instrument?.metadata;
+
   const symbolCandidate =
+    instrument?.instrumentId?.id ??
+    instrument?.symbol ??
+    instrument?.assetCode ??
+    metadata?.symbol ??
+    metadata?.code ??
     (raw as any)?.symbol ??
     (raw as any)?.token ??
     (raw as any)?.assetCode ??
-    (raw as any)?.metadata?.symbol ??
-    (raw as any)?.metadata?.code ??
     "UNKNOWN";
   const symbol = typeof symbolCandidate === "string" ? symbolCandidate.toUpperCase() : "UNKNOWN";
 
@@ -69,8 +75,9 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
   const decimalsCandidate =
     (raw as any)?.decimals ??
     (raw as any)?.precision ??
-    (raw as any)?.metadata?.decimals ??
-    (raw as any)?.metadata?.precision ??
+    instrument?.decimals ??
+    metadata?.decimals ??
+    metadata?.precision ??
     10;
   const decimals =
     typeof decimalsCandidate === "number" && Number.isFinite(decimalsCandidate)
@@ -79,8 +86,9 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
 
   const displayName =
     (raw as any)?.displayName ??
+    instrument?.name ??
     (raw as any)?.name ??
-    (raw as any)?.metadata?.name ??
+    metadata?.name ??
     undefined;
 
   return { symbol, quantity, decimals, displayName };

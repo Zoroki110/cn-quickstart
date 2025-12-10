@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { useWalletAuth } from '../wallet';
+import { useHoldings } from '../hooks/useHoldings';
 
 const Header: React.FC = () => {
   const location = useLocation();
@@ -16,6 +17,7 @@ const Header: React.FC = () => {
     authenticateWithZoro,
     disconnect,
   } = useWalletAuth();
+  const { holdings, loading: holdingsLoading } = useHoldings(partyId || null);
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -150,6 +152,28 @@ const Header: React.FC = () => {
                       {walletType ? walletType.toUpperCase() : 'Unknown'}
                     </p>
                   )}
+                  {connected && (
+                    <div className="mt-2 text-xs text-gray-700 dark:text-gray-200">
+                      <div className="font-semibold mb-1 text-sm">Balances</div>
+                      {holdingsLoading && (
+                        <div className="text-[11px] opacity-70">
+                          Loading on-ledger balances…
+                        </div>
+                      )}
+                      {!holdingsLoading &&
+                        holdings.slice(0, 5).map((h) => (
+                          <div key={h.symbol} className="flex justify-between text-sm">
+                            <span>{h.symbol}</span>
+                            <span>{formatAmount(h.quantity, h.decimals)}</span>
+                          </div>
+                        ))}
+                      {!holdingsLoading && holdings.length > 5 && (
+                        <div className="text-[11px] opacity-70 mt-1">
+                          + {holdings.length - 5} more
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <svg
                   className={`w-4 h-4 transition-transform ${menuOpen ? 'rotate-180' : ''}`}
@@ -240,6 +264,19 @@ const Header: React.FC = () => {
     </header>
   );
 };
+
+function formatAmount(quantity: string, decimals?: number) {
+  const num = Number(quantity);
+  if (!Number.isFinite(num)) {
+    return quantity;
+  }
+  const maxFraction = Math.min(4, Math.max(0, decimals ?? 4));
+  const minFraction = num >= 1 ? 2 : 0;
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: minFraction,
+    maximumFractionDigits: maxFraction,
+  }).format(num);
+}
 
 function formatPartyId(party?: string | null) {
   if (!party) return 'Not connected';

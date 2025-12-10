@@ -50,9 +50,14 @@ export function useHoldings(partyId: string | null) {
 function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
   const instrument = (raw as any)?.instrument;
   const metadata = (raw as any)?.metadata ?? instrument?.metadata;
+  const rawInstrumentId =
+    instrument?.instrumentId?.id ??
+    (raw as any)?.instrumentId ??
+    null;
 
   const symbolCandidate =
     instrument?.instrumentId?.id ??
+    rawInstrumentId ??
     instrument?.symbol ??
     instrument?.assetCode ??
     metadata?.symbol ??
@@ -61,7 +66,19 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
     (raw as any)?.token ??
     (raw as any)?.assetCode ??
     "UNKNOWN";
-  const symbol = typeof symbolCandidate === "string" ? symbolCandidate.toUpperCase() : "UNKNOWN";
+
+  let symbol = typeof symbolCandidate === "string" ? symbolCandidate.toUpperCase() : "UNKNOWN";
+  let displayName =
+    (raw as any)?.displayName ??
+    instrument?.name ??
+    (raw as any)?.name ??
+    metadata?.name ??
+    undefined;
+
+  if (rawInstrumentId === "Amulet" || symbol === "AMULET") {
+    symbol = "CC";
+    displayName = "Canton Coin";
+  }
 
   const quantityCandidate =
     (raw as any)?.quantity ??
@@ -83,13 +100,6 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
     typeof decimalsCandidate === "number" && Number.isFinite(decimalsCandidate)
       ? decimalsCandidate
       : parseInt(String(decimalsCandidate), 10) || 10;
-
-  const displayName =
-    (raw as any)?.displayName ??
-    instrument?.name ??
-    (raw as any)?.name ??
-    metadata?.name ??
-    undefined;
 
   return { symbol, quantity, decimals, displayName };
 }

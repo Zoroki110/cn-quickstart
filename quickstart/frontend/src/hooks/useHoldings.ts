@@ -10,7 +10,7 @@ export type HoldingSummary = {
 
 type HoldingsResponse = Array<Record<string, unknown>>;
 
-export function useHoldings(partyId: string | null) {
+export function useHoldings(partyId?: string | null) {
   const [holdings, setHoldings] = useState<HoldingSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -44,7 +44,7 @@ export function useHoldings(partyId: string | null) {
     load();
   }, [load]);
 
-  return { holdings, loading, error, reload: load };
+  return { holdings, loading, error };
 }
 
 function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
@@ -57,7 +57,6 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
 
   const symbolCandidate =
     instrument?.instrumentId?.id ??
-    rawInstrumentId ??
     instrument?.symbol ??
     instrument?.assetCode ??
     metadata?.symbol ??
@@ -65,15 +64,17 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
     (raw as any)?.symbol ??
     (raw as any)?.token ??
     (raw as any)?.assetCode ??
+    (raw as any)?.currencyCode ??
+    rawInstrumentId ??
     "UNKNOWN";
 
-  let symbol = typeof symbolCandidate === "string" ? symbolCandidate.toUpperCase() : "UNKNOWN";
+  let symbol = String(symbolCandidate ?? "UNKNOWN").toUpperCase();
   let displayName =
-    (raw as any)?.displayName ??
-    instrument?.name ??
     (raw as any)?.name ??
+    (raw as any)?.metadata?.name ??
     metadata?.name ??
-    undefined;
+    instrument?.name ??
+    (symbol === "CC" ? "Canton Coin" : undefined);
 
   if (rawInstrumentId === "Amulet" || symbol === "AMULET") {
     symbol = "CC";
@@ -81,10 +82,10 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
   }
 
   const quantityCandidate =
-    (raw as any)?.quantity ??
     (raw as any)?.amount ??
     (raw as any)?.balance ??
     (raw as any)?.holdingAmount ??
+    (raw as any)?.quantity ??
     "0";
   const quantity =
     typeof quantityCandidate === "string" ? quantityCandidate : String(quantityCandidate ?? "0");
@@ -92,9 +93,6 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
   const decimalsCandidate =
     (raw as any)?.decimals ??
     (raw as any)?.precision ??
-    instrument?.decimals ??
-    metadata?.decimals ??
-    metadata?.precision ??
     10;
   const decimals =
     typeof decimalsCandidate === "number" && Number.isFinite(decimalsCandidate)

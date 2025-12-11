@@ -177,7 +177,10 @@ const Header: React.FC = () => {
                         {holdingsLoading && (
                           <div className="text-xs opacity-70">Loading on-ledger balances…</div>
                         )}
-                        {!holdingsLoading &&
+                        {!holdingsLoading && holdings.length === 0 && (
+                          <div className="text-xs opacity-70">No holdings visible</div>
+                        )}
+                        {!holdingsLoading && holdings.length > 0 &&
                           holdings.slice(0, 5).map((h) => (
                             <div key={h.symbol} className="flex justify-between">
                               <span>{h.symbol}</span>
@@ -262,13 +265,11 @@ const Header: React.FC = () => {
 function formatAmount(quantity: string, decimals?: number) {
   const num = Number(quantity);
   if (!Number.isFinite(num)) {
-    return quantity;
+    return '0';
   }
-  const maxFraction = Math.min(4, Math.max(0, decimals ?? 4));
-  const minFraction = num >= 1 ? 2 : 0;
   return new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: minFraction,
-    maximumFractionDigits: maxFraction,
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
   }).format(num);
 }
 

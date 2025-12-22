@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { useWalletAuth } from '../wallet';
 import { useHoldings } from '../hooks/useHoldings';
+import toast from 'react-hot-toast';
 
 const Header: React.FC = () => {
   const location = useLocation();
@@ -85,6 +86,7 @@ const Header: React.FC = () => {
       await action();
       setMenuOpen(false);
     } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Wallet connection failed');
       console.error('Wallet connection failed', err);
     }
   };

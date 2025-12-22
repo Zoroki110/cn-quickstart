@@ -77,6 +77,9 @@ export function useWalletAuth(): WalletAuthState {
 
     try {
       const connector = await connect();
+      if (typeof connector.connect === "function") {
+        await connector.connect();
+      }
       const walletParty = await connector.getParty();
       const challenge = await requestChallenge(walletParty);
       const signature = await connector.signMessage(challenge.challenge);

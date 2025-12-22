@@ -23,7 +23,7 @@ export class LoopWalletConnector implements IWalletConnector {
   private loopApi: LoopApi | null = null;
   private provider: LoopProvider | null = null;
   private initPromise?: Promise<void>;
-  private connectWaiters: Array<(p: LoopProvider) => void> = [];
+  private connectWaiters: Array<{ resolve: (p: LoopProvider | null) => void; reject: (err: any) => void }> = [];
 
   async connect(): Promise<void> {
     await this.ensureInitialized();
@@ -37,9 +37,19 @@ export class LoopWalletConnector implements IWalletConnector {
       const timeout = setTimeout(() => {
         reject(new Error("Loop connect timeout"));
       }, 120000);
-      this.connectWaiters.push((p) => {
+      this.connectWaiters.push({
+        resolve: (p) => {
         clearTimeout(timeout);
-        resolve();
+          if (!p) {
+            reject(new Error("Loop provider not returned"));
+          } else {
+            resolve();
+          }
+        },
+        reject: (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        },
       });
       try {
         const res = connectFn();
@@ -91,6 +101,7 @@ export class LoopWalletConnector implements IWalletConnector {
     if (this.provider) return;
     await this.connect();
     if (!this.provider) {
+      console.warn("Loop provider missing after connect()");
       throw new Error("Loop wallet did not provide a provider after connect()");
     }
   }
@@ -113,29 +124,28 @@ export class LoopWalletConnector implements IWalletConnector {
 
     this.loopApi = loopApi;
 
+    if (!loopApi || typeof loopApi.init !== "function" || typeof loopApi.connect !== "function") {
+      throw new Error("Loop SDK is unavailable (missing init/connect)");
+    }
+
     const capture = (provider: LoopProvider) => {
       this.provider = provider;
-      this.connectWaiters.forEach((fn) => fn(provider));
+      this.connectWaiters.forEach((p) => p.resolve(provider));
       this.connectWaiters = [];
     };
 
-    if (typeof loopApi.init === "function") {
-      loopApi.init({
-        appName: "ClearportX",
-        network: "devnet",
-        options: {
-          openMode: "popup",
-        },
-        onAccept: capture,
-        onReject: () => {
-          this.connectWaiters.forEach((fn) =>
-            fn({
-              party_id: undefined,
-            })
-          );
-          this.connectWaiters = [];
-        },
-      });
-    }
+    loopApi.init({
+      appName: "ClearportX",
+      network: "devnet",
+      options: {
+        openMode: "popup",
+      },
+      onAccept: capture,
+      onReject: () => {
+        this.provider = null;
+        this.connectWaiters.forEach((p) => p.reject(new Error("Loop connection rejected by user")));
+        this.connectWaiters = [];
+      },
+    });
   }
 }

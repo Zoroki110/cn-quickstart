@@ -152,10 +152,13 @@ export class BackendApiService {
       const url = config.url ?? '';
       const isPublicEndpoint = publicEndpoints.some(endpoint => url.includes(endpoint));
 
-      if (token) {
+      if (isPublicEndpoint) {
+        // Force public calls to stay unauthenticated to avoid 401s when logged out.
+        delete (config.headers as any).Authorization;
+      } else if (token) {
         config.headers.Authorization = `Bearer ${token}`;
         console.log('🔐 Adding JWT to request:', config.url);
-      } else if (!isPublicEndpoint) {
+      } else {
         console.warn('⚠️ No JWT token found for protected endpoint:', config.url);
       }
 

@@ -40,6 +40,8 @@ const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
   minute: '2-digit',
 });
 
+// Keep compact formatter available if needed later; suppress unused lint for now.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const formatCompact = (value?: string) => {
   if (!value) return '—';
   const num = Number(value);

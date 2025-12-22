@@ -13,6 +13,9 @@ class WalletManager {
     if (!this.loopConnector) {
       this.loopConnector = new LoopWalletConnector();
     }
+    if (typeof this.loopConnector.connect === "function") {
+      await this.loopConnector.connect();
+    }
     this.activeConnector = this.loopConnector;
     return this.activeConnector;
   }
@@ -35,6 +38,10 @@ class WalletManager {
 
   getConnector(): IWalletConnector | null {
     return this.activeConnector;
+  }
+
+  getLoopProvider(): unknown {
+    return this.loopConnector?.getProvider ? this.loopConnector.getProvider() : null;
   }
 }
 

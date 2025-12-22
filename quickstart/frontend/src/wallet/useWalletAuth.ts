@@ -52,6 +52,7 @@ export function useWalletAuth(): WalletAuthState {
   hydrateAuthStateFromSession();
 
   const [state, setState] = useState<AuthInternalState>(authState);
+  const [loopRehydrateTried, setLoopRehydrateTried] = useState(false);
 
   useEffect(() => {
     const listener: AuthListener = (next) => setState(next);
@@ -60,6 +61,16 @@ export function useWalletAuth(): WalletAuthState {
       authListeners.delete(listener);
     };
   }, []);
+
+  // Rehydrate Loop provider (SDK can reuse cached session without QR).
+  useEffect(() => {
+    if (state.walletType === "loop" && !loopRehydrateTried) {
+      setLoopRehydrateTried(true);
+      walletManager
+        .connectLoop()
+        .catch((err) => console.warn("Loop rehydrate failed", err));
+    }
+  }, [state.walletType, loopRehydrateTried]);
 
   const runAuthFlow = useCallback(async (connect: () => Promise<IWalletConnector>) => {
     updateAuthState({ loading: true, error: null });

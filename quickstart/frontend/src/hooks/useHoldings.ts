@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { apiGet } from "../api/client";
+import { walletManager } from "../wallet";
 
 export type HoldingSummary = {
   symbol: string;
@@ -10,10 +11,12 @@ export type HoldingSummary = {
 
 type HoldingsResponse = Array<Record<string, unknown>>;
 
-export function useHoldings(partyId?: string | null) {
+export function useHoldings(params: { partyId?: string | null; walletType?: string | null }) {
+  const { partyId, walletType } = params;
   const [holdings, setHoldings] = useState<HoldingSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [loopRetry, setLoopRetry] = useState(0);
 
   const load = useCallback(async () => {
     if (!partyId) {
@@ -26,6 +29,30 @@ export function useHoldings(partyId?: string | null) {
     setLoading(true);
     setError(null);
     try {
+      // Loop path: use SDK provider to fetch holdings directly.
+      if (walletType === "loop") {
+        const provider = walletManager.getLoopProvider() as any;
+        if (!provider) {
+          // Retry a few times to give the SDK a chance to rehydrate silently.
+          if (loopRetry < 3) {
+            setLoopRetry((r) => r + 1);
+            setTimeout(() => load(), 500);
+          }
+          setLoading(false);
+          return;
+        }
+        if (provider?.getHolding) {
+          const loopHoldings = await provider.getHolding();
+          const normalized = Array.isArray(loopHoldings)
+            ? (loopHoldings.map(normalizeLoopHolding).filter(Boolean) as HoldingSummary[])
+            : [];
+          setHoldings(normalized);
+          setLoading(false);
+          return;
+        }
+      }
+
+      // Default path: backend API.
       const data = await apiGet<HoldingsResponse>(`/api/holdings/${encodeURIComponent(partyId)}`);
       const normalized = Array.isArray(data)
         ? (data.map(normalizeHolding).filter(Boolean) as HoldingSummary[])
@@ -38,7 +65,7 @@ export function useHoldings(partyId?: string | null) {
     } finally {
       setLoading(false);
     }
-  }, [partyId]);
+  }, [partyId, walletType, loopRetry]);
 
   useEffect(() => {
     load();
@@ -89,6 +116,52 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
     "0";
   const quantity =
     typeof quantityCandidate === "string" ? quantityCandidate : String(quantityCandidate ?? "0");
+
+  const decimalsCandidate =
+    (raw as any)?.decimals ??
+    (raw as any)?.precision ??
+    10;
+  const decimals =
+    typeof decimalsCandidate === "number" && Number.isFinite(decimalsCandidate)
+      ? decimalsCandidate
+      : parseInt(String(decimalsCandidate), 10) || 10;
+
+  return { symbol, quantity, decimals, displayName };
+}
+
+function normalizeLoopHolding(raw: Record<string, unknown>): HoldingSummary | null {
+  const instrument = (raw as any)?.instrument_id ?? (raw as any)?.instrumentId ?? (raw as any)?.instrument;
+  const instrumentId =
+    instrument?.id ??
+    instrument?.instrumentId?.id ??
+    instrument?.assetCode ??
+    instrument?.symbol ??
+    instrument?.code ??
+    "UNKNOWN";
+
+  let symbol = String(instrumentId ?? "UNKNOWN").toUpperCase();
+  let displayName: string | undefined =
+    (raw as any)?.name ??
+    instrument?.name ??
+    (symbol === "CC" ? "Canton Coin" : undefined);
+
+  if (instrumentId === "Amulet" || symbol === "AMULET") {
+    symbol = "CC";
+    displayName = "Canton Coin";
+  }
+  if (instrumentId === "CBTC" || symbol === "CBTC") {
+    symbol = "CBTC";
+  }
+
+  const quantityCandidate =
+    (raw as any)?.amount ??
+    (raw as any)?.quantity ??
+    (raw as any)?.balance ??
+    "0";
+  const quantity =
+    typeof quantityCandidate === "string"
+      ? quantityCandidate
+      : String(quantityCandidate ?? "0");
 
   const decimalsCandidate =
     (raw as any)?.decimals ??

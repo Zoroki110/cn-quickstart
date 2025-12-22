@@ -17,7 +17,7 @@ const Header: React.FC = () => {
     authenticateWithZoro,
     disconnect,
   } = useWalletAuth();
-  const { holdings, loading: holdingsLoading } = useHoldings(partyId || null);
+  const { holdings, loading: holdingsLoading } = useHoldings({ partyId: partyId || null, walletType });
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 

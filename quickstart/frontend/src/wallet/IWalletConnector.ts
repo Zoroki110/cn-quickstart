@@ -1,4 +1,7 @@
 export interface IWalletConnector {
+  /** Initialize/rehydrate the connector (optional for some wallets). */
+  connect?(): Promise<void>;
+
   /** Resolve the active Canton party identifier exposed by the wallet. */
   getParty(): Promise<string>;
 
@@ -7,4 +10,7 @@ export interface IWalletConnector {
 
   /** Identify the connector type so the backend can capture wallet metadata. */
   getType(): "loop" | "zoro" | "dev" | "unknown";
+
+  /** Expose the underlying provider when available (used by Loop for holdings/UTXOs). */
+  getProvider?(): unknown;
 }

@@ -6,7 +6,7 @@ type LoopProvider = {
   party?: string;
   public_key?: string;
   publicKey?: string;
-  signMessage?: (message: string) => Promise<string>;
+  signMessage?: (message: string) => Promise<any>;
   getHolding?: () => Promise<any>;
   getAccount?: () => Promise<any>;
   getActiveContracts?: (args: any) => Promise<any>;
@@ -134,7 +134,25 @@ export class LoopWalletConnector implements IWalletConnector {
     if (!signer) {
       throw new Error("Loop wallet does not expose signMessage()");
     }
-    return signer.call(this.provider, message);
+    const raw = await signer.call(this.provider, message);
+    const normalized = this.normalizeSignature(raw);
+    if (DEBUG)
+      console.debug(
+        "[Loop] signMessage result type",
+        typeof raw,
+        "len",
+        typeof normalized === "string" ? normalized.length : 0
+      );
+    return normalized;
+  }
+
+  private normalizeSignature(res: any): string {
+    if (typeof res === "string") return res;
+    if (res && typeof res.signature === "string") return res.signature;
+    if (res && typeof res.sig === "string") return res.sig;
+    if (res && typeof res.signature?.hex === "string") return res.signature.hex;
+    if (res && typeof res.signature?.value === "string") return res.signature.value;
+    throw new Error("Unsupported Loop signMessage response: " + JSON.stringify(Object.keys(res || {})));
   }
 
   async getHoldings(): Promise<any> {

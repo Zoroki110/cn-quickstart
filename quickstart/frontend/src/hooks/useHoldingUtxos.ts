@@ -29,10 +29,10 @@ export function useHoldingUtxos(params: UseHoldingUtxosParams) {
       setLoading(false);
       return;
     }
-    const provider = walletManager.getLoopProvider() as any;
-    if (!provider?.getActiveContracts) {
+    const connector = walletManager.getLoopConnector();
+    if (!connector || typeof (connector as any).getActiveContracts !== "function") {
       setUtxos([]);
-      setError(new Error("Loop provider not ready for UTXO fetch"));
+      setError(new Error("Loop connector not ready for UTXO fetch"));
       setLoading(false);
       return;
     }
@@ -40,7 +40,7 @@ export function useHoldingUtxos(params: UseHoldingUtxosParams) {
     setLoading(true);
     setError(null);
     try {
-      const contracts = await provider.getActiveContracts({
+      const contracts = await (connector as any).getActiveContracts({
         interfaceId: "#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding",
       });
       const mapped = Array.isArray(contracts)
@@ -67,20 +67,10 @@ export function useHoldingUtxos(params: UseHoldingUtxosParams) {
 }
 
 function normalizeUtxo(raw: any): HoldingUtxo | null {
-  const cid =
-    raw?.contractId ??
-    raw?.contract_id ??
-    raw?.cid ??
-    raw?.id ??
-    "";
+  const cid = raw?.contractId ?? raw?.contract_id ?? raw?.cid ?? raw?.id ?? "";
   if (!cid) return null;
 
-  const payload =
-    raw?.payload ??
-    raw?.fields ??
-    raw?.arguments ??
-    raw?.data ??
-    raw;
+  const payload = raw?.payload ?? raw?.fields ?? raw?.arguments ?? raw?.data ?? raw;
 
   const instrument = payload?.instrumentId ?? payload?.instrument_id ?? payload?.instrument ?? {};
   const instrumentId =
@@ -90,14 +80,8 @@ function normalizeUtxo(raw: any): HoldingUtxo | null {
     instrument?.symbol ??
     "UNKNOWN";
 
-  const amountCandidate =
-    payload?.amount ??
-    payload?.quantity ??
-    payload?.balance ??
-    payload?.holdingAmount ??
-    "0";
-  const amount =
-    typeof amountCandidate === "string" ? amountCandidate : String(amountCandidate ?? "0");
+  const amountCandidate = payload?.amount ?? payload?.quantity ?? payload?.balance ?? payload?.holdingAmount ?? "0";
+  const amount = typeof amountCandidate === "string" ? amountCandidate : String(amountCandidate ?? "0");
 
   const decimalsCandidate = payload?.decimals ?? payload?.precision ?? 10;
   const decimals =
@@ -106,10 +90,7 @@ function normalizeUtxo(raw: any): HoldingUtxo | null {
       : parseInt(String(decimalsCandidate), 10) || 10;
 
   const owner = payload?.owner ?? payload?.party ?? payload?.holder;
-  const observers =
-    payload?.observers ??
-    payload?.witnesses ??
-    undefined;
+  const observers = payload?.observers ?? payload?.witnesses ?? undefined;
 
   return {
     contractId: cid,
@@ -121,4 +102,3 @@ function normalizeUtxo(raw: any): HoldingUtxo | null {
     raw,
   };
 }
-

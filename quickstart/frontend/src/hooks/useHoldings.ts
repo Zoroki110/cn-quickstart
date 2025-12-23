@@ -29,11 +29,10 @@ export function useHoldings(params: { partyId?: string | null; walletType?: stri
     setLoading(true);
     setError(null);
     try {
-      // Loop path: use SDK provider to fetch holdings directly.
+      // Loop path: use connector wrapper methods to preserve provider binding.
       if (walletType === "loop") {
-        const provider = walletManager.getLoopProvider() as any;
-        if (!provider) {
-          // Retry a few times to give the SDK a chance to rehydrate silently.
+        const connector = walletManager.getLoopConnector();
+        if (!connector) {
           if (loopRetry < 3) {
             setLoopRetry((r) => r + 1);
             setTimeout(() => load(), 500);
@@ -41,14 +40,16 @@ export function useHoldings(params: { partyId?: string | null; walletType?: stri
           setLoading(false);
           return;
         }
-        if (provider?.getHolding) {
-          const loopHoldings = await provider.getHolding();
+        try {
+          const loopHoldings = await (connector as any).getHoldings();
           const normalized = Array.isArray(loopHoldings)
             ? (loopHoldings.map(normalizeLoopHolding).filter(Boolean) as HoldingSummary[])
             : [];
           setHoldings(normalized);
           setLoading(false);
           return;
+        } catch (err) {
+          console.warn("[Loop] getHoldings failed, fallback to backend", err);
         }
       }
 
@@ -77,10 +78,7 @@ export function useHoldings(params: { partyId?: string | null; walletType?: stri
 function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
   const instrument = (raw as any)?.instrument;
   const metadata = (raw as any)?.metadata ?? instrument?.metadata;
-  const rawInstrumentId =
-    instrument?.instrumentId?.id ??
-    (raw as any)?.instrumentId ??
-    null;
+  const rawInstrumentId = instrument?.instrumentId?.id ?? (raw as any)?.instrumentId ?? null;
 
   const symbolCandidate =
     instrument?.instrumentId?.id ??
@@ -117,10 +115,7 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
   const quantity =
     typeof quantityCandidate === "string" ? quantityCandidate : String(quantityCandidate ?? "0");
 
-  const decimalsCandidate =
-    (raw as any)?.decimals ??
-    (raw as any)?.precision ??
-    10;
+  const decimalsCandidate = (raw as any)?.decimals ?? (raw as any)?.precision ?? 10;
   const decimals =
     typeof decimalsCandidate === "number" && Number.isFinite(decimalsCandidate)
       ? decimalsCandidate
@@ -159,14 +154,9 @@ function normalizeLoopHolding(raw: Record<string, unknown>): HoldingSummary | nu
     (raw as any)?.balance ??
     "0";
   const quantity =
-    typeof quantityCandidate === "string"
-      ? quantityCandidate
-      : String(quantityCandidate ?? "0");
+    typeof quantityCandidate === "string" ? quantityCandidate : String(quantityCandidate ?? "0");
 
-  const decimalsCandidate =
-    (raw as any)?.decimals ??
-    (raw as any)?.precision ??
-    10;
+  const decimalsCandidate = (raw as any)?.decimals ?? (raw as any)?.precision ?? 10;
   const decimals =
     typeof decimalsCandidate === "number" && Number.isFinite(decimalsCandidate)
       ? decimalsCandidate

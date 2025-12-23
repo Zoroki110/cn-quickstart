@@ -40,8 +40,8 @@ class WalletManager {
     return this.activeConnector;
   }
 
-  getLoopProvider(): unknown {
-    return this.loopConnector?.getProvider ? this.loopConnector.getProvider() : null;
+  getLoopConnector(): LoopWalletConnector | null {
+    return this.loopConnector ?? null;
   }
 }
 

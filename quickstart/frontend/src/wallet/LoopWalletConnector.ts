@@ -9,6 +9,8 @@ type LoopProvider = {
   signMessage?: (message: string) => Promise<string>;
   getHolding?: () => Promise<any>;
   getAccount?: () => Promise<any>;
+  getActiveContracts?: (args: any) => Promise<any>;
+  submitTransaction?: (cmd: any, opts?: any) => Promise<any>;
 };
 
 type LoopApi = {
@@ -58,7 +60,15 @@ export class LoopWalletConnector implements IWalletConnector {
           redirectUrl: typeof window !== "undefined" ? window.location.origin : undefined,
         },
         onAccept: (provider: LoopProvider) => {
-          if (DEBUG) console.debug("[Loop] onAccept keys", Object.keys(provider || {}));
+          if (DEBUG)
+            console.debug(
+              "[Loop] onAccept keys",
+              Object.keys(provider || {}),
+              "signMessage?",
+              typeof provider?.signMessage,
+              "getHolding?",
+              typeof provider?.getHolding
+            );
           activeConnector?.handleAccept(provider);
         },
         onReject: () => {
@@ -104,6 +114,7 @@ export class LoopWalletConnector implements IWalletConnector {
 
   async getParty(): Promise<string> {
     await this.connect();
+    if (DEBUG) console.debug("[Loop] provider ready (getParty)");
     const party = this.provider?.party_id ?? this.provider?.partyId ?? this.provider?.party;
     if (!party) {
       throw new Error("Loop connect succeeded but partyId is missing. Allow popups and retry.");
@@ -111,26 +122,59 @@ export class LoopWalletConnector implements IWalletConnector {
     return party;
   }
 
+  // Wrapper helpers (no destructuring, keep binding)
+  async getPartyId(): Promise<string> {
+    return this.getParty();
+  }
+
   async signMessage(message: string): Promise<string> {
     await this.ensureConnected();
+    if (DEBUG) console.debug("[Loop] provider ready (signMessage)");
     const signer = this.provider?.signMessage;
     if (!signer) {
       throw new Error("Loop wallet does not expose signMessage()");
     }
-    const signature = await signer(message);
-    if (!signature) {
-      throw new Error("Loop wallet returned an empty signature");
-    }
-    return signature;
+    return signer.call(this.provider, message);
   }
 
   async getHoldings(): Promise<any> {
     await this.ensureConnected();
+    if (DEBUG) console.debug("[Loop] provider ready (getHoldings)");
     const gh = this.provider?.getHolding;
     if (typeof gh !== "function") {
       throw new Error("Loop provider does not expose getHolding()");
     }
     return gh.call(this.provider);
+  }
+
+  async getAccount(): Promise<any> {
+    await this.ensureConnected();
+    if (DEBUG) console.debug("[Loop] provider ready (getAccount)");
+    const ga = this.provider?.getAccount;
+    if (typeof ga !== "function") {
+      throw new Error("Loop provider does not expose getAccount()");
+    }
+    return ga.call(this.provider);
+  }
+
+  async getActiveContracts(args: any): Promise<any> {
+    await this.ensureConnected();
+    if (DEBUG) console.debug("[Loop] provider ready (getActiveContracts)");
+    const gac = this.provider?.getActiveContracts;
+    if (typeof gac !== "function") {
+      throw new Error("Loop provider does not expose getActiveContracts()");
+    }
+    return gac.call(this.provider, args);
+  }
+
+  async submitTransaction(cmd: any, opts?: any): Promise<any> {
+    await this.ensureConnected();
+    if (DEBUG) console.debug("[Loop] provider ready (submitTransaction)");
+    const st = this.provider?.submitTransaction;
+    if (typeof st !== "function") {
+      throw new Error("Loop provider does not expose submitTransaction()");
+    }
+    return st.call(this.provider, cmd, opts);
   }
 
   getProvider(): LoopProvider | null {
@@ -164,12 +208,6 @@ export class LoopWalletConnector implements IWalletConnector {
         this.handleReject(err);
         return;
       }
-    }
-
-    if (DEBUG) {
-      const hasSign = typeof provider.signMessage === "function";
-      const hasHold = typeof provider.getHolding === "function";
-      console.debug("[Loop] provider has signMessage:", hasSign, "getHolding:", hasHold);
     }
 
     if (this.pendingResolve) {

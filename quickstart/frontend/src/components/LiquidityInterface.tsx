@@ -324,11 +324,21 @@ const LiquidityInterface: React.FC = () => {
         minLPTokens: '0.0000000001',
       });
 
-      const lpFromResponse = response?.lpAmount ? parseFloat(response.lpAmount) : NaN;
-      const lpDisplayAmount = Number.isFinite(lpFromResponse) && lpFromResponse > 0
-        ? lpFromResponse
-        : estimatedLPTokens;
-      toast.success(`Liquidity added! LP tokens: ${lpDisplayAmount.toFixed(4)}`);
+      const toastAmount = (() => {
+        const raw = typeof response?.lpAmount === 'string' ? response.lpAmount.trim() : '';
+        if (raw) {
+          const numeric = Number(raw);
+          if (Number.isFinite(numeric) && numeric > 0) {
+            if (numeric >= 1) {
+              return numeric.toLocaleString('en-US', { maximumFractionDigits: 4 });
+            }
+            return numeric.toPrecision(4);
+          }
+          return raw;
+        }
+        return estimatedLPTokens.toFixed(4);
+      })();
+      toast.success(`Liquidity added! LP tokens: ${toastAmount}`);
 
       const updatedPools = await backendApi.getPools();
       setRawPools(updatedPools);

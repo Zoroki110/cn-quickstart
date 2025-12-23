@@ -1,0 +1,8 @@
+[build]
+# Netlify build settings for the active frontend only.
+# Ensures we build from the correct base directory and publish the right bundle.
+base = "quickstart/frontend"
+publish = "quickstart/frontend/build"
+command = "npm install && echo '--- LoopWalletConnector.ts (head) ---' && sed -n '1,120p' src/wallet/LoopWalletConnector.ts && npm run build"
+
+

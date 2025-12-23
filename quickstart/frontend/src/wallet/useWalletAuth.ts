@@ -52,7 +52,6 @@ export function useWalletAuth(): WalletAuthState {
   hydrateAuthStateFromSession();
 
   const [state, setState] = useState<AuthInternalState>(authState);
-  const [loopRehydrateTried, setLoopRehydrateTried] = useState(false);
 
   useEffect(() => {
     const listener: AuthListener = (next) => setState(next);
@@ -61,16 +60,6 @@ export function useWalletAuth(): WalletAuthState {
       authListeners.delete(listener);
     };
   }, []);
-
-  // Rehydrate Loop provider (SDK can reuse cached session without QR).
-  useEffect(() => {
-    if (state.walletType === "loop" && !loopRehydrateTried) {
-      setLoopRehydrateTried(true);
-      walletManager
-        .connectLoop()
-        .catch((err) => console.warn("Loop rehydrate failed", err));
-    }
-  }, [state.walletType, loopRehydrateTried]);
 
   const runAuthFlow = useCallback(async (connect: () => Promise<IWalletConnector>) => {
     updateAuthState({ loading: true, error: null });
@@ -114,8 +103,14 @@ export function useWalletAuth(): WalletAuthState {
       return verification;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Wallet authentication failed";
-      updateAuthState({ error: message });
-      throw err;
+      const lower = (message || "").toLowerCase();
+      const hint =
+        lower.includes("popup") || lower.includes("timeout") || lower.includes("block")
+          ? " Allow popups for this site."
+          : "";
+      const finalMessage = `${message}${hint}`;
+      updateAuthState({ error: finalMessage });
+      throw err instanceof Error ? new Error(finalMessage) : err;
     } finally {
       updateAuthState({ loading: false });
     }

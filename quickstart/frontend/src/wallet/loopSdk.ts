@@ -20,6 +20,7 @@ type LoopApi = {
     onReject?: () => void;
   }) => void;
   connect?: () => Promise<unknown>;
+  disconnect?: () => Promise<unknown>;
 };
 
 const DEBUG = false;
@@ -29,6 +30,7 @@ let initPromise: Promise<void> | null = null;
 let loopApi: LoopApi | null = null;
 let provider: LoopProvider | null = null;
 let connectWaiters: Array<{ resolve: (p: LoopProvider | null) => void; reject: (err: any) => void }> = [];
+let connectInFlight: Promise<LoopProvider> | null = null;
 
 async function loadSdk(): Promise<LoopApi> {
   const sdkModule = await import("@fivenorth/loop-sdk");
@@ -92,40 +94,84 @@ export async function connectOnce(): Promise<LoopProvider> {
   if (provider) {
     return provider;
   }
+  if (connectInFlight) {
+    return connectInFlight;
+  }
 
   const connect = connectFn;
 
-  return new Promise<LoopProvider>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`Loop connect timeout. ${POPUP_HINT}`));
-    }, 60000);
+  const attempt = (): Promise<LoopProvider> =>
+    new Promise<LoopProvider>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Loop connect timeout. ${POPUP_HINT}`));
+      }, 60000);
 
-    const waiter = {
-      resolve: (p: LoopProvider | null) => {
-        clearTimeout(timeout);
-        if (!p) {
-          reject(new Error(`Loop provider not returned. ${POPUP_HINT}`));
-        } else {
-          resolve(p);
+      connectWaiters = [];
+
+      const waiter = {
+        resolve: (p: LoopProvider | null) => {
+          clearTimeout(timeout);
+          if (!p) {
+            reject(new Error(`Loop provider not returned. ${POPUP_HINT}`));
+          } else {
+            resolve(p);
+          }
+        },
+        reject: (err: any) => {
+          clearTimeout(timeout);
+          reject(err);
+        },
+      };
+
+      connectWaiters.push(waiter);
+
+      try {
+        const res = connect();
+        if (res && typeof (res as Promise<unknown>).catch === "function") {
+          (res as Promise<unknown>).catch((err) => waiter.reject(err));
         }
-      },
-      reject: (err: any) => {
-        clearTimeout(timeout);
-        reject(err);
-      },
-    };
-
-    connectWaiters.push(waiter);
-
-    try {
-      const res = connect();
-      if (res && typeof (res as Promise<unknown>).catch === "function") {
-        (res as Promise<unknown>).catch((err) => waiter.reject(err));
+      } catch (err) {
+        waiter.reject(err);
       }
-    } catch (err) {
-      waiter.reject(err);
+    });
+
+  const run = async (): Promise<LoopProvider> => {
+    try {
+      return await attempt();
+    } catch (err: any) {
+      const msg = String(err?.message ?? err ?? "");
+      const isConn = msg.toLowerCase().includes("connection");
+      if (isConn) {
+        if (typeof api.disconnect === "function") {
+          try {
+            await api.disconnect();
+          } catch {
+            // ignore disconnect errors
+          }
+        }
+        try {
+          return await attempt();
+        } catch (err2: any) {
+          const msg2 = String(err2?.message ?? err2 ?? "");
+          const hint2 =
+            msg2.toLowerCase().includes("popup") || msg2.toLowerCase().includes("block")
+              ? ` ${POPUP_HINT}`
+              : "";
+          throw new Error(`${msg2}${hint2}`);
+        }
+      }
+      const hint =
+        msg.toLowerCase().includes("popup") || msg.toLowerCase().includes("block")
+          ? ` ${POPUP_HINT}`
+          : "";
+      throw new Error(`${msg}${hint}`);
+    } finally {
+      connectInFlight = null;
     }
-  });
+  };
+
+  connectInFlight = run();
+  return connectInFlight;
 }
 
 export type { LoopProvider, LoopApi };

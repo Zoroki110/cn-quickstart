@@ -187,3 +187,5 @@ export class LoopWalletConnector implements IWalletConnector {
   }
 }
 
+
+// Netlify redeploy marker: do not remove. This forces a fresh build.

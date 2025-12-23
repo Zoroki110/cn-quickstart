@@ -22,10 +22,13 @@ type LoopApi = {
     onReject?: () => void;
   }) => void;
   connect?: () => void;
+  disconnect?: () => Promise<void> | void;
 };
 
 const DEBUG = typeof window !== "undefined" && localStorage.getItem("clearportx.debug.loop") === "1";
 const POPUP_HINT = "Allow popups for this site.";
+const POPUP_BLOCK_MS = 2500;
+const CONNECT_TIMEOUT_MS = 30000;
 
 let loopApi: LoopApi | null = null;
 let initPromise: Promise<void> | null = null;
@@ -37,6 +40,7 @@ export class LoopWalletConnector implements IWalletConnector {
   private pendingResolve: (() => void) | null = null;
   private pendingReject: ((e: any) => void) | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  private popupWarnTimer: ReturnType<typeof setTimeout> | null = null;
 
   private static async ensureInit(): Promise<void> {
     if (initPromise) return initPromise;
@@ -98,13 +102,24 @@ export class LoopWalletConnector implements IWalletConnector {
       this.pendingTimer = setTimeout(() => {
         if (DEBUG) console.debug("[Loop] connect timeout");
         this.clearPending();
+        void this.cleanupAndDisconnect();
         reject(new Error(`Loop connect timeout. ${POPUP_HINT}`));
-      }, 90000);
+      }, CONNECT_TIMEOUT_MS);
+
+      this.popupWarnTimer = setTimeout(() => {
+        if (DEBUG) console.debug("[Loop] waiting for popup/approval…");
+        try {
+          window.dispatchEvent(new CustomEvent("clearportx:loop:popup-blocked"));
+        } catch {
+          // ignore if window not available
+        }
+      }, POPUP_BLOCK_MS);
 
       try {
         loopApi?.connect?.();
       } catch (err) {
         this.clearPending();
+        void this.cleanupAndDisconnect();
         reject(err);
       }
     });
@@ -195,6 +210,11 @@ export class LoopWalletConnector implements IWalletConnector {
     return st.call(this.provider, cmd, opts);
   }
 
+  async disconnect(): Promise<void> {
+    await this.cleanupAndDisconnect();
+    this.clearPending();
+  }
+
   getProvider(): LoopProvider | null {
     return this.provider;
   }
@@ -238,6 +258,7 @@ export class LoopWalletConnector implements IWalletConnector {
     if (this.pendingReject) {
       this.pendingReject(err);
     }
+    void this.cleanupAndDisconnect();
     this.clearPending();
   }
 
@@ -245,10 +266,34 @@ export class LoopWalletConnector implements IWalletConnector {
     if (this.pendingTimer) {
       clearTimeout(this.pendingTimer);
     }
+    if (this.popupWarnTimer) {
+      clearTimeout(this.popupWarnTimer);
+    }
     this.pendingTimer = null;
+    this.popupWarnTimer = null;
     this.pendingResolve = null;
     this.pendingReject = null;
     this.connectPromise = null;
+  }
+
+  private async cleanupAndDisconnect() {
+    this.provider = null;
+    this.clearLoopStorage();
+    try {
+      await loopApi?.disconnect?.();
+    } catch {
+      // ignore disconnect errors
+    }
+  }
+
+  private clearLoopStorage() {
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("loop_connect");
+      }
+    } catch {
+      // ignore storage errors
+    }
   }
 }
 

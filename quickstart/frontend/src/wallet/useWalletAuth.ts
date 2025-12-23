@@ -2,198 +2,230 @@ import { useCallback, useEffect, useState } from "react";
 import { walletManager } from "./WalletManager";
 import type { IWalletConnector } from "./IWalletConnector";
 import { apiPostJson, clearWalletSession, loadWalletSession, persistWalletSession, setAuthToken } from "../api/client";
+import toast from "react-hot-toast";
 
-type ChallengeResponse = {
-  challengeId: string;
-  challenge: string;
-  expiresAt: string;
-};
-
-type VerifyResponse = {
-  token: string;
-  partyId: string;
-};
-
-export interface WalletAuthState {
-  token: string | null;
-  partyId: string | null;
-  walletType: "loop" | "zoro" | "dev" | "unknown" | null;
-  loading: boolean;
-  error: string | null;
-  authenticateWithLoop: () => Promise<VerifyResponse>;
-  authenticateWithDev: () => Promise<VerifyResponse>;
-  authenticateWithZoro: () => Promise<VerifyResponse>;
-  disconnect: () => void;
-}
-
-type AuthInternalState = {
-  token: string | null;
-  partyId: string | null;
-  walletType: "loop" | "zoro" | "dev" | "unknown" | null;
-  loading: boolean;
-  error: string | null;
-};
-
-const initialAuthState: AuthInternalState = {
-  token: null,
-  partyId: null,
-  walletType: null,
-  loading: false,
-  error: null,
-};
-
-type AuthListener = (state: AuthInternalState) => void;
-
-let authState: AuthInternalState = initialAuthState;
-const authListeners = new Set<AuthListener>();
-let authHydratedFromSession = false;
-
-export function useWalletAuth(): WalletAuthState {
-  hydrateAuthStateFromSession();
-
-  const [state, setState] = useState<AuthInternalState>(authState);
-
-  useEffect(() => {
-    const listener: AuthListener = (next) => setState(next);
-    authListeners.add(listener);
-    return () => {
-      authListeners.delete(listener);
-    };
-  }, []);
-
-  const runAuthFlow = useCallback(async (connect: () => Promise<IWalletConnector>) => {
-    updateAuthState({ loading: true, error: null });
-
-    try {
-      const connector = await connect();
-      if (typeof connector.connect === "function") {
-        await connector.connect();
-      }
-      const walletParty = await connector.getParty();
-      const challenge = await requestChallenge(walletParty);
-      const signature = await connector.signMessage(challenge.challenge);
-
-      const verification = await verifyChallenge(connector, {
-        challengeId: challenge.challengeId,
-        partyId: walletParty,
-        signature,
-      });
-
-      const connectorType = normalizeWalletType(connector.getType());
-      setAuthToken(verification.token);
-      persistWalletSession({
-        token: verification.token,
-        partyId: verification.partyId,
-        walletType: connectorType,
-      });
-      updateAuthState({
-        token: verification.token,
-        partyId: verification.partyId,
-        walletType: connectorType,
-      });
-
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("clearportx:wallet:connected", {
-            detail: { partyId: verification.partyId, walletType: connectorType },
-          })
-        );
-      }
-
-      return verification;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Wallet authentication failed";
-      const lower = (message || "").toLowerCase();
-      const hint =
-        lower.includes("popup") || lower.includes("timeout") || lower.includes("block")
-          ? " Allow popups for this site."
-          : "";
-      const finalMessage = `${message}${hint}`;
-      updateAuthState({ error: finalMessage });
-      throw err instanceof Error ? new Error(finalMessage) : err;
-    } finally {
-      updateAuthState({ loading: false });
-    }
-  }, []);
-
-  const authenticateWithLoop = useCallback(
-    () => runAuthFlow(() => walletManager.connectLoop()),
-    [runAuthFlow]
-  );
-
-  const authenticateWithDev = useCallback(
-    () => runAuthFlow(() => walletManager.connectDev()),
-    [runAuthFlow]
-  );
-
-  const authenticateWithZoro = useCallback(
-    () => runAuthFlow(() => walletManager.connectZoro()),
-    [runAuthFlow]
-  );
-
-  const disconnect = useCallback(() => {
-    clearWalletSession();
-    setAuthToken(null);
-    updateAuthState({
-      token: null,
-      partyId: null,
-      walletType: null,
-      error: null,
-    });
-  }, []);
-
-  return {
-    token: state.token,
-    partyId: state.partyId,
-    walletType: state.walletType,
-    loading: state.loading,
-    error: state.error,
-    authenticateWithLoop,
-    authenticateWithDev,
-    authenticateWithZoro,
-    disconnect,
-  };
-}
-
-async function requestChallenge(partyId: string): Promise<ChallengeResponse> {
-  return apiPostJson<ChallengeResponse>("/api/auth/challenge", { partyId });
-}
-
-async function verifyChallenge(
-  connector: IWalletConnector,
-  params: { challengeId: string; partyId: string; signature: string }
-): Promise<VerifyResponse> {
-  return apiPostJson<VerifyResponse>("/api/auth/verify", {
-    ...params,
-    walletType: connector.getType(),
-  });
-}
-
-function normalizeWalletType(value: string | null | undefined): "loop" | "zoro" | "dev" | "unknown" {
-  if (value === "loop" || value === "zoro" || value === "dev" || value === "unknown") {
-    return value;
-  }
-  return "unknown";
-}
-
-function hydrateAuthStateFromSession() {
-  if (authHydratedFromSession) {
-    return;
-  }
-  authHydratedFromSession = true;
-  const session = loadWalletSession();
-  if (session?.token && session.partyId) {
-    setAuthToken(session.token);
-    authState = {
-      ...authState,
-      token: session.token,
-      partyId: session.partyId,
-      walletType: normalizeWalletType(session.walletType),
-    };
-  }
-}
-
-function updateAuthState(patch: Partial<AuthInternalState>) {
-  authState = { ...authState, ...patch };
-  authListeners.forEach((listener) => listener(authState));
-}
+ type ChallengeResponse = {
+   challengeId: string;
+   challenge: string;
+   expiresAt: string;
+ };
+ 
+ type VerifyResponse = {
+   token: string;
+   partyId: string;
+ };
+ 
+ export interface WalletAuthState {
+   token: string | null;
+   partyId: string | null;
+   walletType: "loop" | "zoro" | "dev" | "unknown" | null;
+   loading: boolean;
+   error: string | null;
+   authenticateWithLoop: () => Promise<VerifyResponse>;
+   authenticateWithDev: () => Promise<VerifyResponse>;
+   authenticateWithZoro: () => Promise<VerifyResponse>;
+   disconnect: () => void;
+ }
+ 
+ type AuthInternalState = {
+   token: string | null;
+   partyId: string | null;
+   walletType: "loop" | "zoro" | "dev" | "unknown" | null;
+   loading: boolean;
+   error: string | null;
+ };
+ 
+ const initialAuthState: AuthInternalState = {
+   token: null,
+   partyId: null,
+   walletType: null,
+   loading: false,
+   error: null,
+ };
+ 
+ type AuthListener = (state: AuthInternalState) => void;
+ 
+ let authState: AuthInternalState = initialAuthState;
+ const authListeners = new Set<AuthListener>();
+ let authHydratedFromSession = false;
+ 
+ export function useWalletAuth(): WalletAuthState {
+   hydrateAuthStateFromSession();
+ 
+   const [state, setState] = useState<AuthInternalState>(authState);
+ 
+   useEffect(() => {
+     const listener: AuthListener = (next) => setState(next);
+     authListeners.add(listener);
+     return () => {
+       authListeners.delete(listener);
+     };
+   }, []);
+ 
+   useEffect(() => {
+     const popupHandler = () => toast.error("Popup blocked — allow popups for this site, then retry.");
+     if (typeof window !== "undefined") {
+       window.addEventListener("clearportx:loop:popup-blocked", popupHandler);
+     }
+     return () => {
+       if (typeof window !== "undefined") {
+         window.removeEventListener("clearportx:loop:popup-blocked", popupHandler);
+       }
+     };
+   }, []);
+ 
+   const runAuthFlow = useCallback(async (connect: () => Promise<IWalletConnector>) => {
+     updateAuthState({ loading: true, error: null });
+ 
+     let connector: IWalletConnector | null = null;
+ 
+     try {
+       connector = await connect();
+       if (typeof connector.connect === "function") {
+         await connector.connect();
+       }
+       const walletParty = await connector.getParty();
+       const challenge = await requestChallenge(walletParty);
+       const signature = await connector.signMessage(challenge.challenge);
+ 
+       const verification = await verifyChallenge(connector, {
+         challengeId: challenge.challengeId,
+         partyId: walletParty,
+         signature,
+       });
+ 
+       const connectorType = normalizeWalletType(connector.getType());
+       setAuthToken(verification.token);
+       persistWalletSession({
+         token: verification.token,
+         partyId: verification.partyId,
+         walletType: connectorType,
+       });
+       updateAuthState({
+         token: verification.token,
+         partyId: verification.partyId,
+         walletType: connectorType,
+       });
+ 
+       if (typeof window !== "undefined") {
+         window.dispatchEvent(
+           new CustomEvent("clearportx:wallet:connected", {
+             detail: { partyId: verification.partyId, walletType: connectorType },
+           })
+         );
+       }
+ 
+       return verification;
+     } catch (err) {
+       const message = err instanceof Error ? err.message : "Wallet authentication failed";
+       const lower = (message || "").toLowerCase();
+       const hint =
+         lower.includes("popup") || lower.includes("timeout") || lower.includes("block")
+           ? " Allow popups for this site."
+           : "";
+       const finalMessage = `${message}${hint}`;
+       updateAuthState({ error: finalMessage });
+       toast.error(finalMessage);
+       // Cleanup loop session on failure
+       try {
+         if (connector?.getType && connector.getType() === "loop") {
+           await (connector as any).disconnect?.();
+         }
+       } catch {
+         // ignore cleanup errors
+       }
+       throw err instanceof Error ? new Error(finalMessage) : err;
+     } finally {
+       updateAuthState({ loading: false });
+     }
+   }, []);
+ 
+   const authenticateWithLoop = useCallback(
+     () => runAuthFlow(() => walletManager.connectLoop()),
+     [runAuthFlow]
+   );
+ 
+   const authenticateWithDev = useCallback(
+     () => runAuthFlow(() => walletManager.connectDev()),
+     [runAuthFlow]
+   );
+ 
+   const authenticateWithZoro = useCallback(
+     () => runAuthFlow(() => walletManager.connectZoro()),
+     [runAuthFlow]
+   );
+ 
+   const disconnect = useCallback(() => {
+     clearWalletSession();
+     setAuthToken(null);
+     try {
+       walletManager.getLoopConnector()?.disconnect?.();
+       if (typeof window !== "undefined") {
+         window.localStorage.removeItem("loop_connect");
+       }
+     } catch {
+       // ignore cleanup errors
+     }
+     updateAuthState({
+       token: null,
+       partyId: null,
+       walletType: null,
+       error: null,
+     });
+   }, []);
+ 
+   return {
+     token: state.token,
+     partyId: state.partyId,
+     walletType: state.walletType,
+     loading: state.loading,
+     error: state.error,
+     authenticateWithLoop,
+     authenticateWithDev,
+     authenticateWithZoro,
+     disconnect,
+   };
+ }
+ 
+ async function requestChallenge(partyId: string): Promise<ChallengeResponse> {
+   return apiPostJson<ChallengeResponse>("/api/auth/challenge", { partyId });
+ }
+ 
+ async function verifyChallenge(
+   connector: IWalletConnector,
+   params: { challengeId: string; partyId: string; signature: string }
+ ): Promise<VerifyResponse> {
+   return apiPostJson<VerifyResponse>("/api/auth/verify", {
+     ...params,
+     walletType: connector.getType(),
+   });
+ }
+ 
+ function normalizeWalletType(value: string | null | undefined): "loop" | "zoro" | "dev" | "unknown" {
+   if (value === "loop" || value === "zoro" || value === "dev" || value === "unknown") {
+     return value;
+   }
+   return "unknown";
+ }
+ 
+ function hydrateAuthStateFromSession() {
+   if (authHydratedFromSession) {
+     return;
+   }
+   authHydratedFromSession = true;
+   const session = loadWalletSession();
+   if (session?.token && session.partyId) {
+     setAuthToken(session.token);
+     authState = {
+       ...authState,
+       token: session.token,
+       partyId: session.partyId,
+       walletType: normalizeWalletType(session.walletType),
+     };
+   }
+ }
+ 
+ function updateAuthState(patch: Partial<AuthInternalState>) {
+   authState = { ...authState, ...patch };
+   authListeners.forEach((listener) => listener(authState));
+ }

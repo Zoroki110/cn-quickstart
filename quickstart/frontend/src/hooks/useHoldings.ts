@@ -11,6 +11,28 @@ export type HoldingSummary = {
 
 type HoldingsResponse = Array<Record<string, unknown>>;
 
+function decimalAddStrings(a: string, b: string): string {
+  const sa = a ?? "0";
+  const sb = b ?? "0";
+  const [ia, fa = ""] = sa.split(".");
+  const [ib, fb = ""] = sb.split(".");
+  const fracLen = Math.max(fa.length, fb.length);
+  const normFa = (fa + "0".repeat(fracLen)).slice(0, fracLen);
+  const normFb = (fb + "0".repeat(fracLen)).slice(0, fracLen);
+  const intA = BigInt(ia || "0");
+  const intB = BigInt(ib || "0");
+  const fracA = BigInt(normFa || "0");
+  const fracB = BigInt(normFb || "0");
+  const fracSum = fracA + fracB;
+  const baseStr = "1" + "0".repeat(fracLen || 0);
+  const base = BigInt(baseStr);
+  const carry = fracSum / base;
+  const fracRes = fracSum % base;
+  const intRes = intA + intB + carry;
+  const fracStr = fracLen > 0 ? fracRes.toString().padStart(fracLen, "0").replace(/0+$/, "") : "";
+  return fracStr.length > 0 ? `${intRes.toString()}.${fracStr}` : intRes.toString();
+}
+
 export function useHoldings(params: { partyId?: string | null; walletType?: string | null }) {
   const { partyId, walletType } = params;
   const [holdings, setHoldings] = useState<HoldingSummary[]>([]);
@@ -29,7 +51,7 @@ export function useHoldings(params: { partyId?: string | null; walletType?: stri
     setLoading(true);
     setError(null);
     try {
-      // Loop path: use connector wrapper methods to preserve provider binding.
+      // Loop path: use connector wrapper methods to preserve provider binding and map balances.
       if (walletType === "loop") {
         const connector = walletManager.getLoopConnector();
         if (!connector) {
@@ -125,42 +147,29 @@ function normalizeHolding(raw: Record<string, unknown>): HoldingSummary {
 }
 
 function normalizeLoopHolding(raw: Record<string, unknown>): HoldingSummary | null {
-  const instrument = (raw as any)?.instrument_id ?? (raw as any)?.instrumentId ?? (raw as any)?.instrument;
-  const instrumentId =
-    instrument?.id ??
-    instrument?.instrumentId?.id ??
-    instrument?.assetCode ??
-    instrument?.symbol ??
-    instrument?.code ??
-    "UNKNOWN";
-
-  let symbol = String(instrumentId ?? "UNKNOWN").toUpperCase();
-  let displayName: string | undefined =
-    (raw as any)?.name ??
-    instrument?.name ??
-    (symbol === "CC" ? "Canton Coin" : undefined);
-
-  if (instrumentId === "Amulet" || symbol === "AMULET") {
-    symbol = "CC";
-    displayName = "Canton Coin";
-  }
-  if (instrumentId === "CBTC" || symbol === "CBTC") {
-    symbol = "CBTC";
-  }
-
-  const quantityCandidate =
-    (raw as any)?.amount ??
-    (raw as any)?.quantity ??
-    (raw as any)?.balance ??
-    "0";
-  const quantity =
-    typeof quantityCandidate === "string" ? quantityCandidate : String(quantityCandidate ?? "0");
-
-  const decimalsCandidate = (raw as any)?.decimals ?? (raw as any)?.precision ?? 10;
+  if (!raw) return null;
+  const symbolRaw = (raw as any)?.symbol ?? (raw as any)?.instrument_id?.id ?? (raw as any)?.instrumentId?.id;
+  let symbol = String(symbolRaw ?? "UNKNOWN").toUpperCase();
+  const instrumentId = (raw as any)?.instrument_id ?? (raw as any)?.instrumentId;
+  const decimalsCandidate = (raw as any)?.decimals ?? 10;
   const decimals =
     typeof decimalsCandidate === "number" && Number.isFinite(decimalsCandidate)
       ? decimalsCandidate
       : parseInt(String(decimalsCandidate), 10) || 10;
+
+  let displayName: string | undefined = (raw as any)?.name;
+
+  if (instrumentId?.id === "Amulet" || symbol === "AMULET") {
+    symbol = "CC";
+    displayName = "Canton Coin";
+  }
+  if (symbol === "CBTC") {
+    displayName = displayName ?? "CBTC";
+  }
+
+  const totalUnlocked = String((raw as any)?.total_unlocked_coin ?? "0");
+  const totalLocked = String((raw as any)?.total_locked_coin ?? "0");
+  const quantity = decimalAddStrings(totalUnlocked, totalLocked);
 
   return { symbol, quantity, decimals, displayName };
 }

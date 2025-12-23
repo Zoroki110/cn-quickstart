@@ -2,6 +2,9 @@ import { IWalletConnector } from "./IWalletConnector";
 
 type LoopProvider = {
   party_id?: string;
+  partyId?: string;
+  party?: string;
+  connection?: { partyId?: string; party?: string };
   authToken?: string;
   signMessage?: (message: string) => Promise<string>;
   getHolding?: () => Promise<Array<Record<string, unknown>>>;
@@ -12,7 +15,7 @@ type LoopApi = {
   init?: (args: {
     appName: string;
     network: string;
-    options?: { openMode?: "popup" | "tab"; redirectUrl?: string };
+    options?: { openMode?: "popup" | "tab"; redirectUrl?: string; requestSigningMode?: "popup" | "tab" };
     onAccept?: (provider: LoopProvider) => void;
     onReject?: () => void;
   }) => void;
@@ -20,6 +23,8 @@ type LoopApi = {
 };
 
 export class LoopWalletConnector implements IWalletConnector {
+  private static readonly DEBUG = false;
+
   private loopApi: LoopApi | null = null;
   private provider: LoopProvider | null = null;
   private initPromise?: Promise<void>;
@@ -33,13 +38,14 @@ export class LoopWalletConnector implements IWalletConnector {
     if (!api || typeof connectFn !== "function") {
       throw new Error("Loop SDK connect() is not available.");
     }
+    if (LoopWalletConnector.DEBUG) console.debug("[Loop] connect start");
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("Loop connect timeout"));
       }, 120000);
       this.connectWaiters.push({
         resolve: (p) => {
-        clearTimeout(timeout);
+          clearTimeout(timeout);
           if (!p) {
             reject(new Error("Loop provider not returned"));
           } else {
@@ -53,6 +59,27 @@ export class LoopWalletConnector implements IWalletConnector {
       });
       try {
         const res = connectFn();
+        if (res && typeof (res as any).then === "function") {
+          (res as Promise<any>)
+            .then((maybeProvider) => {
+              if (maybeProvider && typeof maybeProvider === "object") {
+                this.provider = maybeProvider as LoopProvider;
+                this.connectWaiters.forEach((p) => p.resolve(this.provider));
+                this.connectWaiters = [];
+              }
+            })
+            .catch((err) => {
+              clearTimeout(timeout);
+              reject(err);
+            });
+        } else if (res && typeof res === "object") {
+          this.provider = res as LoopProvider;
+          this.connectWaiters.forEach((p) => p.resolve(this.provider));
+          this.connectWaiters = [];
+          clearTimeout(timeout);
+          resolve();
+          return;
+        }
         if (res && typeof (res as Promise<unknown>).catch === "function") {
           (res as Promise<unknown>).catch((err) => {
             clearTimeout(timeout);
@@ -68,9 +95,16 @@ export class LoopWalletConnector implements IWalletConnector {
 
   async getParty(): Promise<string> {
     await this.ensureConnected();
-    const party = this.provider?.party_id;
+    const prov: any = this.provider;
+    const party =
+      prov?.party_id ??
+      prov?.partyId ??
+      prov?.party ??
+      prov?.connection?.partyId ??
+      prov?.connection?.party;
     if (!party) {
-      throw new Error("Loop wallet returned an empty party identifier");
+      if (LoopWalletConnector.DEBUG) console.debug("[Loop] provider missing partyId", prov);
+      throw new Error("Loop connect succeeded but partyId is missing (provider.connection undefined). Check popup blocked or SDK API mismatch.");
     }
     return party;
   }
@@ -132,6 +166,7 @@ export class LoopWalletConnector implements IWalletConnector {
       this.provider = provider;
       this.connectWaiters.forEach((p) => p.resolve(provider));
       this.connectWaiters = [];
+      if (LoopWalletConnector.DEBUG) console.debug("[Loop] onAccept provider", provider);
     };
 
     loopApi.init({
@@ -139,13 +174,16 @@ export class LoopWalletConnector implements IWalletConnector {
       network: "devnet",
       options: {
         openMode: "popup",
+        requestSigningMode: "popup",
       },
       onAccept: capture,
       onReject: () => {
         this.provider = null;
         this.connectWaiters.forEach((p) => p.reject(new Error("Loop connection rejected by user")));
         this.connectWaiters = [];
+        if (LoopWalletConnector.DEBUG) console.debug("[Loop] onReject");
       },
     });
   }
 }
+

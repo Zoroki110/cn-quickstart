@@ -62,17 +62,9 @@ import toast from "react-hot-toast";
      };
    }, []);
  
-   useEffect(() => {
-     const popupHandler = () => toast.error("Popup blocked — allow popups for this site, then retry.");
-     if (typeof window !== "undefined") {
-       window.addEventListener("clearportx:loop:popup-blocked", popupHandler);
-     }
-     return () => {
-       if (typeof window !== "undefined") {
-         window.removeEventListener("clearportx:loop:popup-blocked", popupHandler);
-       }
-     };
-   }, []);
+  useEffect(() => {
+    walletManager.initLoopSdk().catch((err) => console.warn("Loop init failed", err));
+  }, []);
  
    const runAuthFlow = useCallback(async (connect: () => Promise<IWalletConnector>) => {
      updateAuthState({ loading: true, error: null });
@@ -140,11 +132,57 @@ import toast from "react-hot-toast";
      }
    }, []);
  
-   const authenticateWithLoop = useCallback(
-     () => runAuthFlow(() => walletManager.connectLoop()),
-     [runAuthFlow]
-   );
- 
+  const authenticateWithLoop = useCallback(async () => {
+    updateAuthState({ loading: true, error: null });
+    const connector = walletManager.getOrCreateLoopConnector();
+    try {
+      await (connector as any).startConnectFromClick();
+      const walletParty = await connector.getParty();
+      const challenge = await requestChallenge(walletParty);
+      const signature = await connector.signMessage(challenge.challenge);
+
+      const verification = await verifyChallenge(connector, {
+        challengeId: challenge.challengeId,
+        partyId: walletParty,
+        signature,
+      });
+
+      const connectorType = normalizeWalletType(connector.getType());
+      setAuthToken(verification.token);
+      persistWalletSession({
+        token: verification.token,
+        partyId: verification.partyId,
+        walletType: connectorType,
+      });
+      updateAuthState({
+        token: verification.token,
+        partyId: verification.partyId,
+        walletType: connectorType,
+      });
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("clearportx:wallet:connected", {
+            detail: { partyId: verification.partyId, walletType: connectorType },
+          })
+        );
+      }
+
+      return verification;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Wallet authentication failed";
+      updateAuthState({ error: message });
+      toast.error(message);
+      try {
+        await (connector as any)?.disconnect?.();
+      } catch {
+        // ignore cleanup errors
+      }
+      throw err instanceof Error ? err : new Error(message);
+    } finally {
+      updateAuthState({ loading: false });
+    }
+  }, []);
    const authenticateWithDev = useCallback(
      () => runAuthFlow(() => walletManager.connectDev()),
      [runAuthFlow]

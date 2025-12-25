@@ -27,7 +27,6 @@ type LoopApi = {
 
 const DEBUG = typeof window !== "undefined" && localStorage.getItem("clearportx.debug.loop") === "1";
 const POPUP_HINT = "Allow popups for this site.";
-const POPUP_BLOCK_MS = 2500;
 const CONNECT_TIMEOUT_MS = 30000;
 
 let loopApi: LoopApi | null = null;
@@ -40,7 +39,10 @@ export class LoopWalletConnector implements IWalletConnector {
   private pendingResolve: (() => void) | null = null;
   private pendingReject: ((e: any) => void) | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
-  private popupWarnTimer: ReturnType<typeof setTimeout> | null = null;
+
+  static async initOnce(): Promise<void> {
+    return this.ensureInit();
+  }
 
   private static async ensureInit(): Promise<void> {
     if (initPromise) return initPromise;
@@ -92,39 +94,39 @@ export class LoopWalletConnector implements IWalletConnector {
     }
 
     activeConnector = this;
-    await LoopWalletConnector.ensureInit();
+    if (!loopApi) {
+      await LoopWalletConnector.ensureInit();
+    }
 
     if (DEBUG) console.debug("[Loop] connect called");
 
-    this.connectPromise = new Promise<void>((resolve, reject) => {
-      this.pendingResolve = resolve;
-      this.pendingReject = reject;
-      this.pendingTimer = setTimeout(() => {
-        if (DEBUG) console.debug("[Loop] connect timeout");
-        this.clearPending();
-        void this.cleanupAndDisconnect();
-        reject(new Error(`Loop connect timeout. ${POPUP_HINT}`));
-      }, CONNECT_TIMEOUT_MS);
+    await this.ensureConnectPromise();
+  }
 
-      this.popupWarnTimer = setTimeout(() => {
-        if (DEBUG) console.debug("[Loop] waiting for popup/approval…");
-        try {
-          window.dispatchEvent(new CustomEvent("clearportx:loop:popup-blocked"));
-        } catch {
-          // ignore if window not available
-        }
-      }, POPUP_BLOCK_MS);
-
+  /**
+   * Must be called directly from the user click handler to keep popup in the same call stack.
+   */
+  async startConnectFromClick(): Promise<void> {
+    activeConnector = this;
+    const preflight =
+      typeof window !== "undefined"
+        ? window.open("", "clearportx_loop_preflight", "popup,width=420,height=720")
+        : null;
+    const blocked = !preflight;
+    if (preflight) {
       try {
-        loopApi?.connect?.();
-      } catch (err) {
-        this.clearPending();
-        void this.cleanupAndDisconnect();
-        reject(err);
+        preflight.close();
+      } catch {
+        // ignore
       }
-    });
-
-    await this.connectPromise;
+    }
+    if (blocked) {
+      throw new Error("Popup blocked — allow popups for this site, then retry.");
+    }
+    if (!loopApi) {
+      throw new Error("Loop SDK not initialized yet");
+    }
+    await this.ensureConnectPromise();
   }
 
   async getParty(): Promise<string> {
@@ -266,14 +268,37 @@ export class LoopWalletConnector implements IWalletConnector {
     if (this.pendingTimer) {
       clearTimeout(this.pendingTimer);
     }
-    if (this.popupWarnTimer) {
-      clearTimeout(this.popupWarnTimer);
-    }
     this.pendingTimer = null;
-    this.popupWarnTimer = null;
     this.pendingResolve = null;
     this.pendingReject = null;
     this.connectPromise = null;
+  }
+
+  private async ensureConnectPromise(): Promise<void> {
+    if (this.provider) return;
+    if (this.connectPromise) {
+      await this.connectPromise;
+      return;
+    }
+    this.connectPromise = new Promise<void>((resolve, reject) => {
+      this.pendingResolve = resolve;
+      this.pendingReject = reject;
+      this.pendingTimer = setTimeout(() => {
+        if (DEBUG) console.debug("[Loop] connect timeout");
+        this.clearPending();
+        void this.cleanupAndDisconnect();
+        reject(new Error(`Loop connect timeout. ${POPUP_HINT}`));
+      }, CONNECT_TIMEOUT_MS);
+
+      try {
+        loopApi?.connect?.();
+      } catch (err) {
+        this.clearPending();
+        void this.cleanupAndDisconnect();
+        reject(err);
+      }
+    });
+    await this.connectPromise;
   }
 
   private async cleanupAndDisconnect() {

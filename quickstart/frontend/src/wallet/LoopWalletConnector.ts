@@ -1,3 +1,4 @@
+import * as loopModule from "@fivenorth/loop-sdk";
 import { IWalletConnector } from "./IWalletConnector";
 
 type LoopProvider = {
@@ -29,8 +30,11 @@ const DEBUG = typeof window !== "undefined" && localStorage.getItem("clearportx.
 const POPUP_HINT = "Allow popups for this site.";
 const CONNECT_TIMEOUT_MS = 30000;
 
-let loopApi: LoopApi | null = null;
-let initPromise: Promise<void> | null = null;
+const sdkModule: any = loopModule as any;
+const resolvedLoopApi: LoopApi = sdkModule.loop ?? sdkModule.Loop ?? sdkModule.default ?? sdkModule;
+
+let loopApi: LoopApi | null = resolvedLoopApi;
+let initDone = false;
 let activeConnector: LoopWalletConnector | null = null;
 
 export class LoopWalletConnector implements IWalletConnector {
@@ -40,50 +44,38 @@ export class LoopWalletConnector implements IWalletConnector {
   private pendingReject: ((e: any) => void) | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
-  static async initOnce(): Promise<void> {
-    return this.ensureInit();
-  }
-
-  private static async ensureInit(): Promise<void> {
-    if (initPromise) return initPromise;
-    initPromise = (async () => {
-      if (DEBUG) console.debug("[Loop] init called");
-      const sdkModule: any = await import("@fivenorth/loop-sdk");
-      loopApi =
-        (sdkModule as any).loop ??
-        (sdkModule as any).Loop ??
-        (sdkModule as any).default ??
-        sdkModule;
-      if (!loopApi || typeof loopApi.init !== "function" || typeof loopApi.connect !== "function") {
-        throw new Error("Loop SDK is unavailable (missing init/connect)");
-      }
-      loopApi.init({
-        appName: "ClearportX",
-        network: "devnet",
-        options: {
-          openMode: "popup",
-          requestSigningMode: "popup",
-          redirectUrl: typeof window !== "undefined" ? window.location.origin : undefined,
-        },
-        onAccept: (provider: LoopProvider) => {
-          if (DEBUG)
-            console.debug(
-              "[Loop] onAccept keys",
-              Object.keys(provider || {}),
-              "signMessage?",
-              typeof provider?.signMessage,
-              "getHolding?",
-              typeof provider?.getHolding
-            );
-          activeConnector?.handleAccept(provider);
-        },
-        onReject: () => {
-          if (DEBUG) console.debug("[Loop] onReject");
-          activeConnector?.handleReject(new Error("Loop connection rejected"));
-        },
-      });
-    })();
-    return initPromise;
+  static initOnce(): void {
+    if (initDone) return;
+    if (DEBUG) console.debug("[Loop] init called");
+    if (!loopApi || typeof loopApi.init !== "function" || typeof loopApi.connect !== "function") {
+      throw new Error("Loop SDK is unavailable (missing init/connect)");
+    }
+    loopApi.init({
+      appName: "ClearportX",
+      network: "devnet",
+      options: {
+        openMode: "popup",
+        requestSigningMode: "popup",
+        redirectUrl: typeof window !== "undefined" ? window.location.origin : undefined,
+      },
+      onAccept: (provider: LoopProvider) => {
+        if (DEBUG)
+          console.debug(
+            "[Loop] onAccept keys",
+            Object.keys(provider || {}),
+            "signMessage?",
+            typeof provider?.signMessage,
+            "getHolding?",
+            typeof provider?.getHolding
+          );
+        activeConnector?.handleAccept(provider);
+      },
+      onReject: () => {
+        if (DEBUG) console.debug("[Loop] onReject");
+        activeConnector?.handleReject(new Error("Loop connection rejected"));
+      },
+    });
+    initDone = true;
   }
 
   async connect(): Promise<void> {
@@ -92,41 +84,25 @@ export class LoopWalletConnector implements IWalletConnector {
       await this.connectPromise;
       return;
     }
-
     activeConnector = this;
-    if (!loopApi) {
-      await LoopWalletConnector.ensureInit();
+    if (!initDone) {
+      LoopWalletConnector.initOnce();
     }
-
-    if (DEBUG) console.debug("[Loop] connect called");
-
-    await this.ensureConnectPromise();
+    this.ensureConnectPromise(false);
+    await this.connectPromise;
   }
 
   /**
-   * Must be called directly from the user click handler to keep popup in the same call stack.
+   * Should be called directly from the click handler (no async/await before calling).
    */
-  async startConnectFromClick(): Promise<void> {
+  connectFromClick(): Promise<void> {
     activeConnector = this;
-    const preflight =
-      typeof window !== "undefined"
-        ? window.open("", "clearportx_loop_preflight", "popup,width=420,height=720")
-        : null;
-    const blocked = !preflight;
-    if (preflight) {
-      try {
-        preflight.close();
-      } catch {
-        // ignore
-      }
+    if (!initDone) {
+      LoopWalletConnector.initOnce();
     }
-    if (blocked) {
-      throw new Error("Popup blocked — allow popups for this site, then retry.");
-    }
-    if (!loopApi) {
-      throw new Error("Loop SDK not initialized yet");
-    }
-    await this.ensureConnectPromise();
+    if (DEBUG) console.debug("[Loop] click received", Date.now(), "asyncHandler=false");
+    this.ensureConnectPromise(true);
+    return this.connectPromise as Promise<void>;
   }
 
   async getParty(): Promise<string> {
@@ -139,7 +115,6 @@ export class LoopWalletConnector implements IWalletConnector {
     return party;
   }
 
-  // Wrapper helpers (no destructuring, keep binding)
   async getPartyId(): Promise<string> {
     return this.getParty();
   }
@@ -154,12 +129,7 @@ export class LoopWalletConnector implements IWalletConnector {
     const raw = await signer.call(this.provider, message);
     const normalized = this.normalizeSignature(raw);
     if (DEBUG)
-      console.debug(
-        "[Loop] signMessage result type",
-        typeof raw,
-        "len",
-        typeof normalized === "string" ? normalized.length : 0
-      );
+      console.debug("[Loop] signMessage result type", typeof raw, "len", typeof normalized === "string" ? normalized.length : 0);
     return normalized;
   }
 
@@ -235,8 +205,7 @@ export class LoopWalletConnector implements IWalletConnector {
   }
 
   private async handleAccept(provider: LoopProvider) {
-    this.provider = provider; // store raw provider
-
+    this.provider = provider;
     const checker = provider.getAccount ?? provider.getHolding;
     if (typeof checker === "function") {
       try {
@@ -249,10 +218,7 @@ export class LoopWalletConnector implements IWalletConnector {
         return;
       }
     }
-
-    if (this.pendingResolve) {
-      this.pendingResolve();
-    }
+    if (this.pendingResolve) this.pendingResolve();
     this.clearPending();
   }
 
@@ -274,12 +240,10 @@ export class LoopWalletConnector implements IWalletConnector {
     this.connectPromise = null;
   }
 
-  private async ensureConnectPromise(): Promise<void> {
+  private ensureConnectPromise(fromClick: boolean) {
     if (this.provider) return;
-    if (this.connectPromise) {
-      await this.connectPromise;
-      return;
-    }
+    if (this.connectPromise) return;
+    const startTs = Date.now();
     this.connectPromise = new Promise<void>((resolve, reject) => {
       this.pendingResolve = resolve;
       this.pendingReject = reject;
@@ -289,8 +253,8 @@ export class LoopWalletConnector implements IWalletConnector {
         void this.cleanupAndDisconnect();
         reject(new Error(`Loop connect timeout. ${POPUP_HINT}`));
       }, CONNECT_TIMEOUT_MS);
-
       try {
+        if (DEBUG) console.debug("[Loop] calling loop.connect NOW", startTs, "fromClick", fromClick);
         loopApi?.connect?.();
       } catch (err) {
         this.clearPending();
@@ -298,7 +262,6 @@ export class LoopWalletConnector implements IWalletConnector {
         reject(err);
       }
     });
-    await this.connectPromise;
   }
 
   private async cleanupAndDisconnect() {
@@ -307,7 +270,7 @@ export class LoopWalletConnector implements IWalletConnector {
     try {
       await loopApi?.disconnect?.();
     } catch {
-      // ignore disconnect errors
+      // ignore
     }
   }
 

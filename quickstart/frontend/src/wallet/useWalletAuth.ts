@@ -63,7 +63,11 @@ import toast from "react-hot-toast";
    }, []);
  
   useEffect(() => {
-    walletManager.initLoopSdk().catch((err) => console.warn("Loop init failed", err));
+    try {
+      walletManager.initLoopSdk();
+    } catch (err) {
+      console.warn("Loop init failed", err);
+    }
   }, []);
  
    const runAuthFlow = useCallback(async (connect: () => Promise<IWalletConnector>) => {
@@ -136,7 +140,7 @@ import toast from "react-hot-toast";
     updateAuthState({ loading: true, error: null });
     const connector = walletManager.getOrCreateLoopConnector();
     try {
-      await (connector as any).startConnectFromClick();
+      connector.connectFromClick();
       const walletParty = await connector.getParty();
       const challenge = await requestChallenge(walletParty);
       const signature = await connector.signMessage(challenge.challenge);

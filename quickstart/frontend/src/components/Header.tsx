@@ -88,13 +88,19 @@ const Header: React.FC = () => {
       ]
     : baseWalletOptions;
 
-  const handleConnect = async (action: () => Promise<unknown>) => {
+  const handleConnect = (action: () => Promise<unknown> | unknown) => {
     try {
-      await action();
+      const res = action();
+      if (res && typeof (res as Promise<unknown>).catch === "function") {
+        (res as Promise<unknown>).catch((err) => {
+          toast.error(err instanceof Error ? err.message : "Wallet connection failed");
+          console.error("Wallet connection failed", err);
+        });
+      }
       setMenuOpen(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Wallet connection failed');
-      console.error('Wallet connection failed', err);
+      toast.error(err instanceof Error ? err.message : "Wallet connection failed");
+      console.error("Wallet connection failed", err);
     }
   };
 

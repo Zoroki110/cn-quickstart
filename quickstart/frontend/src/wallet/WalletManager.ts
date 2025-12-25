@@ -4,8 +4,8 @@ import { LoopWalletConnector } from "./LoopWalletConnector";
 import { ZoroWalletConnector } from "./ZoroWalletConnector";
 
 class WalletManager {
-  initLoopSdk(): Promise<void> {
-    return LoopWalletConnector.initOnce();
+  initLoopSdk(): void {
+    LoopWalletConnector.initOnce();
   }
 
   getOrCreateLoopConnector(): LoopWalletConnector {

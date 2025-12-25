@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { useWalletAuth } from '../wallet';
+import { ENABLE_MANUAL_WALLET } from '../wallet/walletConfig';
 import { useHoldings } from '../hooks/useHoldings';
 import toast from 'react-hot-toast';
 
@@ -47,7 +48,7 @@ const Header: React.FC = () => {
     setTheme(theme === 'light' ? 'dark' : 'light');
   };
 
-  const walletOptions: Array<{
+  const baseWalletOptions: Array<{
     key: string;
     label: string;
     description: string;
@@ -55,14 +56,6 @@ const Header: React.FC = () => {
     iconAlt: string;
     action: () => Promise<unknown>;
   }> = [
-    {
-      key: 'party',
-      label: 'Party ID (manuel)',
-      description: 'Saisir un party Canton et signer le challenge via Dev Wallet.',
-      iconSrc: '/clearportx-logo.svg',
-      iconAlt: 'ClearportX logo',
-      action: authenticateWithDev,
-    },
     {
       key: 'loop',
       label: 'Loop Wallet',
@@ -80,6 +73,20 @@ const Header: React.FC = () => {
       action: authenticateWithZoro,
     },
   ];
+
+  const walletOptions = ENABLE_MANUAL_WALLET
+    ? [
+        {
+          key: 'party',
+          label: 'Party ID (manuel)',
+          description: 'Saisir un party Canton et signer le challenge via Dev Wallet.',
+          iconSrc: '/clearportx-logo.svg',
+          iconAlt: 'ClearportX logo',
+          action: authenticateWithDev,
+        },
+        ...baseWalletOptions,
+      ]
+    : baseWalletOptions;
 
   const handleConnect = async (action: () => Promise<unknown>) => {
     try {

@@ -286,16 +286,15 @@ function formatHoldingAmount(symbol: string, quantity: string, decimals?: number
   const valid = Number.isFinite(num);
   const formatter = new Intl.NumberFormat('en-US', {
     useGrouping: true,
-    minimumFractionDigits: isCc ? 0 : 4,
+    minimumFractionDigits: isCc ? 0 : 0,
     maximumFractionDigits: isCc ? 0 : 4,
   });
-  const base = formatter.format(valid ? num : 0);
-  const dotIdx = base.lastIndexOf('.');
-  if (dotIdx === -1) {
-    return base;
+  const formatted = formatter.format(valid ? num : 0);
+  // For non-CC, drop trailing zeros after the decimal point.
+  if (!isCc && formatted.includes('.')) {
+    return formatted.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
   }
-  // Use comma as decimal separator while keeping comma grouping for thousands.
-  return `${base.slice(0, dotIdx)},${base.slice(dotIdx + 1)}`;
+  return formatted;
 }
 
 function formatPartyId(party?: string | null) {

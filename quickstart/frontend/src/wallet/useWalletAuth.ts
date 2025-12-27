@@ -143,7 +143,16 @@ import toast from "react-hot-toast";
       connector.connectFromClick();
       const walletParty = await connector.getParty();
       const challenge = await requestChallenge(walletParty);
-      const signature = await connector.signMessage(challenge.challenge);
+      const rawSignature = await connector.signMessage(challenge.challenge);
+      const signature = normalizeLoopSignature(rawSignature);
+
+      if (typeof window !== "undefined" && localStorage.getItem("clearportx.debug.loop") === "1") {
+        console.debug("[Loop] verify request", {
+          challengeId: challenge.challengeId,
+          partyId: walletParty,
+          signatureType: typeof signature,
+        });
+      }
 
       const verification = await verifyChallenge(connector, {
         challengeId: challenge.challengeId,
@@ -178,7 +187,12 @@ import toast from "react-hot-toast";
       updateAuthState({ error: message });
       toast.error(message);
       try {
-        await (connector as any)?.disconnect?.();
+        clearWalletSession();
+        setAuthToken(null);
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem("loop_connect");
+        }
+        await (connector as any)?.cleanupAfterFailure?.();
       } catch {
         // ignore cleanup errors
       }
@@ -248,6 +262,15 @@ import toast from "react-hot-toast";
      return value;
    }
    return "unknown";
+ }
+
+ function normalizeLoopSignature(result: any): string {
+   if (typeof result === "string") return result;
+   if (result && typeof result.signature === "string") return result.signature;
+   if (result && typeof result.sig === "string") return result.sig;
+   if (result && typeof result.signedMessage === "string") return result.signedMessage;
+   if (result && typeof result.signed_message === "string") return result.signed_message;
+   throw new Error("Loop signature is not a string");
  }
  
  function hydrateAuthStateFromSession() {

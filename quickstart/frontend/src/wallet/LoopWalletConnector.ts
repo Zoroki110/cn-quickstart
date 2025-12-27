@@ -100,7 +100,7 @@ export class LoopWalletConnector implements IWalletConnector {
     if (!initDone) {
       LoopWalletConnector.initOnce();
     }
-    if (DEBUG) console.debug("[Loop] click received", Date.now(), "asyncHandler=false");
+    if (DEBUG) console.debug("[Loop] connect called in click stack at", Date.now());
     this.ensureConnectPromise(true);
     return this.connectPromise as Promise<void>;
   }
@@ -137,6 +137,8 @@ export class LoopWalletConnector implements IWalletConnector {
     if (typeof res === "string") return res;
     if (res && typeof res.signature === "string") return res.signature;
     if (res && typeof res.sig === "string") return res.sig;
+    if (res && typeof res.signedMessage === "string") return res.signedMessage;
+    if (res && typeof res.signed_message === "string") return res.signed_message;
     if (res && typeof res.signature?.hex === "string") return res.signature.hex;
     if (res && typeof res.signature?.value === "string") return res.signature.value;
     throw new Error("Unsupported Loop signMessage response: " + JSON.stringify(Object.keys(res || {})));
@@ -187,6 +189,11 @@ export class LoopWalletConnector implements IWalletConnector {
     this.clearPending();
   }
 
+  async cleanupAfterFailure(): Promise<void> {
+    await this.cleanupAndDisconnect(true);
+    this.clearPending();
+  }
+
   getProvider(): LoopProvider | null {
     return this.provider;
   }
@@ -226,7 +233,7 @@ export class LoopWalletConnector implements IWalletConnector {
     if (this.pendingReject) {
       this.pendingReject(err);
     }
-    void this.cleanupAndDisconnect();
+    void this.cleanupAndDisconnect(true);
     this.clearPending();
   }
 
@@ -250,7 +257,7 @@ export class LoopWalletConnector implements IWalletConnector {
       this.pendingTimer = setTimeout(() => {
         if (DEBUG) console.debug("[Loop] connect timeout");
         this.clearPending();
-        void this.cleanupAndDisconnect();
+        void this.cleanupAndDisconnect(true);
         reject(new Error(`Loop connect timeout. ${POPUP_HINT}`));
       }, CONNECT_TIMEOUT_MS);
       try {
@@ -258,15 +265,15 @@ export class LoopWalletConnector implements IWalletConnector {
         loopApi?.connect?.();
       } catch (err) {
         this.clearPending();
-        void this.cleanupAndDisconnect();
+        void this.cleanupAndDisconnect(true);
         reject(err);
       }
     });
   }
 
-  private async cleanupAndDisconnect() {
+  private async cleanupAndDisconnect(clearSession = false) {
     this.provider = null;
-    this.clearLoopStorage();
+    this.clearLoopStorage(clearSession);
     try {
       await loopApi?.disconnect?.();
     } catch {
@@ -274,10 +281,13 @@ export class LoopWalletConnector implements IWalletConnector {
     }
   }
 
-  private clearLoopStorage() {
+  private clearLoopStorage(clearSession: boolean) {
     try {
       if (typeof window !== "undefined") {
         window.localStorage.removeItem("loop_connect");
+        if (clearSession) {
+          window.localStorage.removeItem("clearportx.wallet.session");
+        }
       }
     } catch {
       // ignore storage errors

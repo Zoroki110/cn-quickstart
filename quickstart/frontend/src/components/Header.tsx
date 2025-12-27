@@ -88,6 +88,7 @@ const Header: React.FC = () => {
       ]
     : baseWalletOptions;
 
+  // Keep synchronous so wallet connect runs in the click stack (needed for Loop popup).
   const handleConnect = (action: () => Promise<unknown> | unknown) => {
     try {
       const res = action();

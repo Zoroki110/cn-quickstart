@@ -289,10 +289,13 @@ function formatHoldingAmount(symbol: string, quantity: string, decimals?: number
     minimumFractionDigits: isCc ? 0 : 4,
     maximumFractionDigits: isCc ? 0 : 4,
   });
-  if (!valid) {
-    return formatter.format(0);
+  const base = formatter.format(valid ? num : 0);
+  const dotIdx = base.lastIndexOf('.');
+  if (dotIdx === -1) {
+    return base;
   }
-  return formatter.format(num);
+  // Use comma as decimal separator while keeping comma grouping for thousands.
+  return `${base.slice(0, dotIdx)},${base.slice(dotIdx + 1)}`;
 }
 
 function formatPartyId(party?: string | null) {

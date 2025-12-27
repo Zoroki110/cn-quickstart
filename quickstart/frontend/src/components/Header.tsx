@@ -200,7 +200,7 @@ const Header: React.FC = () => {
                           holdings.slice(0, 5).map((h) => (
                             <div key={h.symbol} className="flex justify-between">
                               <span>{h.symbol}</span>
-                              <span>{formatAmount(h.quantity, h.decimals)}</span>
+                              <span>{formatHoldingAmount(h.symbol, h.quantity, h.decimals)}</span>
                             </div>
                           ))}
                         {!holdingsLoading && holdings.length > 5 && (
@@ -278,15 +278,21 @@ const Header: React.FC = () => {
   );
 };
 
-function formatAmount(quantity: string, decimals?: number) {
+// Sanity: formatHoldingAmount("CC", "188800", 10) => "188,800"
+// Sanity: formatHoldingAmount("CBTC", "1.1", 8) => "1.1000"
+function formatHoldingAmount(symbol: string, quantity: string, decimals?: number) {
   const num = Number(quantity);
-  if (!Number.isFinite(num)) {
-    return '0';
+  const isCc = symbol?.toUpperCase() === 'CC';
+  const valid = Number.isFinite(num);
+  const formatter = new Intl.NumberFormat('en-US', {
+    useGrouping: true,
+    minimumFractionDigits: isCc ? 0 : 4,
+    maximumFractionDigits: isCc ? 0 : 4,
+  });
+  if (!valid) {
+    return formatter.format(0);
   }
-  return new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4,
-  }).format(num);
+  return formatter.format(num);
 }
 
 function formatPartyId(party?: string | null) {

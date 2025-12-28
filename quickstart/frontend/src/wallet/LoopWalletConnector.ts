@@ -28,7 +28,7 @@ type LoopApi = {
 
 const DEBUG = typeof window !== "undefined" && localStorage.getItem("clearportx.debug.loop") === "1";
 const POPUP_HINT = "Allow popups for this site.";
-const CONNECT_TIMEOUT_MS = 30000;
+const CONNECT_TIMEOUT_MS = 120000;
 
 const sdkModule: any = loopModule as any;
 const resolvedLoopApi: LoopApi = sdkModule.loop ?? sdkModule.Loop ?? sdkModule.default ?? sdkModule;
@@ -213,6 +213,8 @@ export class LoopWalletConnector implements IWalletConnector {
 
   private async handleAccept(provider: LoopProvider) {
     this.provider = provider;
+    const partyId = provider.party_id ?? provider.partyId ?? provider.party;
+    if (DEBUG) console.debug("[Loop] approved provider keys", Object.keys(provider || {}), "partyId", partyId);
     const checker = provider.getAccount ?? provider.getHolding;
     if (typeof checker === "function") {
       try {
@@ -245,6 +247,38 @@ export class LoopWalletConnector implements IWalletConnector {
     this.pendingResolve = null;
     this.pendingReject = null;
     this.connectPromise = null;
+  }
+
+  hasProvider(): boolean {
+    return !!this.provider;
+  }
+
+  /**
+   * Attempt to resume a session if the SDK has already stored loop_connect.
+   * This should be called when the user returns focus from the Loop tab or when storage changes.
+   */
+  async tryRehydrateFromStorage(): Promise<boolean> {
+    if (this.provider) return true;
+    if (this.connectPromise) return true;
+    if (typeof window === "undefined") return false;
+    const stored = window.localStorage.getItem("loop_connect");
+    if (!stored) return false;
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(stored);
+    } catch {
+      return false;
+    }
+    const hasSession = !!(parsed && (parsed.partyId || parsed.party_id || parsed.party) && parsed.authToken);
+    if (!hasSession) return false;
+    if (DEBUG) console.debug("[Loop] tryRehydrateFromStorage found session, calling connect()");
+    try {
+      this.ensureConnectPromise(false);
+      return true;
+    } catch (err) {
+      if (DEBUG) console.debug("[Loop] rehydrate failed", err);
+      return false;
+    }
   }
 
   private ensureConnectPromise(fromClick: boolean) {

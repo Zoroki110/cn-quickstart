@@ -66,8 +66,9 @@ import toast from "react-hot-toast";
   useEffect(() => {
     try {
       walletManager.initLoopSdk();
+      walletManager.initZoroSdk();
     } catch (err) {
-      console.warn("Loop init failed", err);
+      console.warn("Wallet init failed", err);
     }
   }, []);
  
@@ -145,9 +146,41 @@ import toast from "react-hot-toast";
       if (debug) console.debug("[Loop]", ...args);
     };
 
+    const maybeRehydrate = () => {
+      try {
+        if (!(connector as any).hasProvider?.()) {
+          void (connector as any).tryRehydrateFromStorage?.();
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    let cleanup: (() => void) | undefined;
+    if (typeof window !== "undefined") {
+      const onFocus = () => maybeRehydrate();
+      const onVisibility = () => {
+        if (document.visibilityState === "visible") maybeRehydrate();
+      };
+      const onStorage = (e: StorageEvent) => {
+        if (e.key === "loop_connect") maybeRehydrate();
+      };
+      window.addEventListener("focus", onFocus);
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("storage", onStorage);
+      cleanup = () => {
+        window.removeEventListener("focus", onFocus);
+        document.removeEventListener("visibilitychange", onVisibility);
+        window.removeEventListener("storage", onStorage);
+      };
+    }
+
     try {
+      log("connect started");
       connector.connectFromClick();
+      maybeRehydrate();
       const walletParty = await connector.getParty();
+      log("approved provider partyId", walletParty);
       log("auth: challenge requested");
       const challenge = await requestChallenge(walletParty);
 
@@ -269,6 +302,7 @@ import toast from "react-hot-toast";
         );
       }
 
+      log("auth success");
       return verification;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Wallet authentication failed";
@@ -278,6 +312,7 @@ import toast from "react-hot-toast";
       throw err instanceof Error ? err : new Error(message);
     } finally {
       updateAuthState({ loading: false });
+      if (cleanup) cleanup();
     }
   }, []);
    const authenticateWithDev = useCallback(
@@ -286,9 +321,74 @@ import toast from "react-hot-toast";
    );
  
    const authenticateWithZoro = useCallback(
-     () => runAuthFlow(() => walletManager.connectZoro()),
-     [runAuthFlow]
-   );
+    async () => {
+      updateAuthState({ loading: true, error: null });
+      const connector = walletManager.getOrCreateZoroConnector();
+      const debug = typeof window !== "undefined" && localStorage.getItem("clearportx.debug.zoro") === "1";
+      const log = (...args: any[]) => {
+        if (debug) console.debug("[Zoro]", ...args);
+      };
+
+      try {
+        connector.connectFromClick();
+        const walletParty = await connector.getParty();
+        log("auth: challenge requested");
+        const challenge = await requestChallenge(walletParty);
+        log("auth: calling wallet.signMessage");
+        const signature = await connector.signMessage(challenge.challenge);
+        log("auth: verify called", {
+          challengeId: challenge.challengeId,
+          partyId: walletParty,
+          signatureType: typeof signature,
+        });
+
+        const verification = await verifyChallenge(connector, {
+          challengeId: challenge.challengeId,
+          partyId: walletParty,
+          signature,
+        });
+
+        const connectorType = normalizeWalletType(connector.getType());
+        setAuthToken(verification.token);
+        persistWalletSession({
+          token: verification.token,
+          partyId: verification.partyId,
+          walletType: connectorType,
+        });
+        updateAuthState({
+          token: verification.token,
+          partyId: verification.partyId,
+          walletType: connectorType,
+        });
+
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("clearportx:wallet:connected", {
+              detail: { partyId: verification.partyId, walletType: connectorType },
+            })
+          );
+        }
+
+        return verification;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Wallet authentication failed";
+        updateAuthState({ error: message });
+        toast.error(message);
+        try {
+          await (connector as any).disconnect?.();
+          if (typeof window !== "undefined") {
+            window.localStorage.removeItem("zoro_connect");
+          }
+        } catch {
+          // ignore cleanup errors
+        }
+        throw err instanceof Error ? err : new Error(message);
+      } finally {
+        updateAuthState({ loading: false });
+      }
+    },
+    []
+  );
  
    const disconnect = useCallback(() => {
      clearWalletSession();
@@ -298,6 +398,10 @@ import toast from "react-hot-toast";
        if (typeof window !== "undefined") {
          window.localStorage.removeItem("loop_connect");
        }
+      walletManager.getZoroConnector()?.disconnect?.();
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("zoro_connect");
+      }
      } catch {
        // ignore cleanup errors
      }

@@ -8,11 +8,22 @@ class WalletManager {
     LoopWalletConnector.initOnce();
   }
 
+  initZoroSdk(): void {
+    ZoroWalletConnector.ensureInitOnce();
+  }
+
   getOrCreateLoopConnector(): LoopWalletConnector {
     if (!this.loopConnector) {
       this.loopConnector = new LoopWalletConnector();
     }
     return this.loopConnector;
+  }
+
+  getOrCreateZoroConnector(): ZoroWalletConnector {
+    if (!this.zoroConnector) {
+      this.zoroConnector = new ZoroWalletConnector();
+    }
+    return this.zoroConnector;
   }
 
   private activeConnector: IWalletConnector | null = null;
@@ -38,10 +49,8 @@ class WalletManager {
   }
 
   async connectZoro(): Promise<IWalletConnector> {
-    if (!this.zoroConnector) {
-      this.zoroConnector = new ZoroWalletConnector();
-    }
-    this.activeConnector = this.zoroConnector;
+    const connector = this.getOrCreateZoroConnector();
+    this.activeConnector = connector;
     return this.activeConnector;
   }
 
@@ -51,6 +60,10 @@ class WalletManager {
 
   getLoopConnector(): LoopWalletConnector | null {
     return this.loopConnector ?? null;
+  }
+
+  getZoroConnector(): ZoroWalletConnector | null {
+    return this.zoroConnector ?? null;
   }
 }
 

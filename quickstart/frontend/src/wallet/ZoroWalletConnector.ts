@@ -1,78 +1,228 @@
+import { zoro, SignRequestResponseType } from "../vendor/zoro-sdk";
 import { IWalletConnector } from "./IWalletConnector";
 
-type ZoroWalletClient = {
-  connect?: () => Promise<void>;
-  init?: () => Promise<void>;
-  getParty?: () => Promise<string>;
-  getPartyId?: () => Promise<string>;
-  signMessage?: (message: string) => Promise<string>;
+type ZoroWallet = {
+  partyId?: string;
+  publicKey?: string;
+  authToken?: string;
+  getPartyId?: () => string | Promise<string>;
+  getPublicKey?: () => string | Promise<string>;
+  getHoldingUtxos?: () => Promise<any>;
+  signMessage?: (message: string, cb: (resp: any) => void) => void;
 };
 
-/**
- * Light wrapper around the (future) Zoro wallet API.
- */
+const DEBUG = typeof window !== "undefined" && localStorage.getItem("clearportx.debug.zoro") === "1";
+const CONNECT_TIMEOUT_MS = 45000;
+
+let initDone = false;
+let activeConnector: ZoroWalletConnector | null = null;
+
 export class ZoroWalletConnector implements IWalletConnector {
-  private clientPromise?: Promise<ZoroWalletClient>;
+  private wallet: ZoroWallet | null = null;
+  private connectPromise: Promise<void> | null = null;
+  private pendingResolve: (() => void) | null = null;
+  private pendingReject: ((e: any) => void) | null = null;
+  private pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private ensureClient(): Promise<ZoroWalletClient> {
-    if (this.clientPromise) {
-      return this.clientPromise;
-    }
+  static ensureInitOnce(): void {
+    if (initDone) return;
+    const network = process.env.REACT_APP_ZORO_NETWORK || "mainnet";
+    const walletUrl = process.env.REACT_APP_ZORO_WALLET_URL || undefined;
+    const apiUrl = process.env.REACT_APP_ZORO_API_URL || undefined;
+    const iconUrl =
+      process.env.REACT_APP_ZORO_ICON_URL || (typeof window !== "undefined" ? window.location.origin : undefined);
+    const appName = process.env.REACT_APP_ZORO_APP_NAME || "ClearportX";
 
-    this.clientPromise = new Promise(async (resolve, reject) => {
-      if (typeof window === "undefined") {
-        reject(new Error("Zoro wallet can only run inside a browser context."));
-        return;
-      }
+    if (DEBUG) console.debug("[Zoro] init start", { network, walletUrl, apiUrl, iconUrl, appName });
 
-      const provider = (window as any).zoroWallet ?? (window as any).zoro;
-      if (!provider) {
-        reject(new Error("Zoro wallet extension not detected."));
-        return;
-      }
-
-      try {
-        if (typeof provider.connect === "function") {
-          await provider.connect();
-        } else if (typeof provider.init === "function") {
-          await provider.init();
-        }
-        resolve(provider as ZoroWalletClient);
-      } catch (err) {
-        reject(
-          new Error(
-            err instanceof Error ? err.message : "Unable to initialize the Zoro wallet connector."
-          )
-        );
-      }
+    zoro.init({
+      appName,
+      iconUrl,
+      network: network as "mainnet" | "local",
+      walletUrl,
+      apiUrl,
+      onAccept: (wallet: ZoroWallet) => {
+        activeConnector?.handleAccept(wallet);
+      },
+      onReject: () => {
+        activeConnector?.handleReject(new Error("Zoro connection rejected"));
+      },
+      onDisconnect: () => {
+        activeConnector?.handleDisconnect();
+      },
     });
 
-    return this.clientPromise;
+    if (DEBUG) console.debug("[Zoro] init done");
+    initDone = true;
+  }
+
+  connectFromClick(): Promise<void> {
+    activeConnector = this;
+    ZoroWalletConnector.ensureInitOnce();
+    if (DEBUG) console.debug("[Zoro] connect called");
+    this.ensureConnectPromise();
+    return this.connectPromise as Promise<void>;
+  }
+
+  async connect(): Promise<void> {
+    activeConnector = this;
+    ZoroWalletConnector.ensureInitOnce();
+    if (this.wallet) return;
+    if (this.connectPromise) {
+      await this.connectPromise;
+      return;
+    }
+    this.ensureConnectPromise();
+    await this.connectPromise;
   }
 
   async getParty(): Promise<string> {
-    const provider = await this.ensureClient();
+    await this.ensureConnected();
     const party =
-      (await provider.getPartyId?.()) ?? (await provider.getParty?.());
+      this.wallet?.partyId ??
+      (typeof this.wallet?.getPartyId === "function" ? await this.wallet.getPartyId() : null);
     if (!party) {
-      throw new Error("Zoro wallet did not return a Canton party identifier.");
+      throw new Error("Zoro connect succeeded but partyId is missing. Allow popups and retry.");
     }
-    return party.trim();
+    return party;
+  }
+
+  getType(): "loop" | "zoro" | "dev" | "unknown" {
+    return "zoro";
+  }
+
+  getProvider(): ZoroWallet | null {
+    return this.wallet;
   }
 
   async signMessage(message: string): Promise<string> {
-    const provider = await this.ensureClient();
-    if (!provider.signMessage) {
-      throw new Error("Zoro wallet does not expose a signMessage API.");
+    await this.ensureConnected();
+    if (!this.wallet || typeof this.wallet.signMessage !== "function") {
+      throw new Error("Zoro wallet does not expose signMessage()");
     }
-    const signature = await provider.signMessage(message);
-    if (!signature) {
-      throw new Error("Zoro wallet returned an empty signature.");
-    }
-    return signature;
+
+    return new Promise<string>((resolve, reject) => {
+      try {
+        this.wallet?.signMessage?.(message, (response: any) => {
+          const type = response?.type;
+          if (type === SignRequestResponseType.SIGN_REQUEST_APPROVED) {
+            const sig = response?.data?.signature;
+            if (typeof sig === "string") {
+              if (DEBUG) console.debug("[Zoro] signMessage approved");
+              resolve(sig);
+              return;
+            }
+            reject(new Error("Zoro signature missing or not a string"));
+            return;
+          }
+          if (type === SignRequestResponseType.SIGN_REQUEST_REJECTED) {
+            if (DEBUG) console.debug("[Zoro] signMessage rejected");
+            reject(new Error(response?.data?.reason || "Signature rejected"));
+            return;
+          }
+          if (type === SignRequestResponseType.SIGN_REQUEST_ERROR) {
+            if (DEBUG) console.debug("[Zoro] signMessage error");
+            reject(new Error(response?.data?.error || "Signature error"));
+            return;
+          }
+          reject(new Error("Unknown Zoro signMessage response"));
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
   }
 
-  getType(): "zoro" {
-    return "zoro";
+  async getHoldings(): Promise<any[]> {
+    await this.ensureConnected();
+    const getter = this.wallet?.getHoldingUtxos;
+    if (typeof getter !== "function") {
+      throw new Error("Zoro wallet does not expose getHoldingUtxos()");
+    }
+    const res = await getter.call(this.wallet);
+    if (DEBUG) console.debug("[Zoro] getHoldingUtxos len=", Array.isArray(res) ? res.length : "n/a");
+    return res;
+  }
+
+  async disconnect(): Promise<void> {
+    await this.cleanup();
+  }
+
+  private ensureConnectPromise() {
+    if (this.wallet || this.connectPromise) return;
+    this.connectPromise = new Promise<void>((resolve, reject) => {
+      this.pendingResolve = resolve;
+      this.pendingReject = reject;
+      this.pendingTimer = setTimeout(() => {
+        if (DEBUG) console.debug("[Zoro] connect timeout");
+        this.clearPending();
+        void this.cleanup();
+        reject(new Error("Zoro connect timeout. Allow popups for this site."));
+      }, CONNECT_TIMEOUT_MS);
+      try {
+        zoro.connect();
+      } catch (err) {
+        this.clearPending();
+        void this.cleanup();
+        reject(err);
+      }
+    });
+  }
+
+  private async ensureConnected() {
+    if (this.wallet) return;
+    await this.connect();
+    if (!this.wallet) {
+      throw new Error("Zoro wallet did not provide a provider after connect()");
+    }
+  }
+
+  private async handleAccept(wallet: ZoroWallet) {
+    this.wallet = wallet;
+    if (DEBUG) console.debug("[Zoro] onAccept wallet keys:", Object.keys(wallet || {}));
+    if (this.pendingResolve) this.pendingResolve();
+    this.clearPending();
+  }
+
+  private async handleReject(err: any) {
+    if (DEBUG) console.debug("[Zoro] onReject");
+    if (this.pendingReject) {
+      this.pendingReject(err);
+    }
+    await this.cleanup();
+    this.clearPending();
+  }
+
+  private async handleDisconnect() {
+    if (DEBUG) console.debug("[Zoro] onDisconnect");
+    await this.cleanup();
+    this.clearPending();
+  }
+
+  private async cleanup() {
+    this.wallet = null;
+    this.clearPending();
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("zoro_connect");
+      }
+    } catch {
+      // ignore storage errors
+    }
+    try {
+      await zoro.disconnect();
+    } catch {
+      // ignore
+    }
+  }
+
+  private clearPending() {
+    if (this.pendingTimer) {
+      clearTimeout(this.pendingTimer);
+    }
+    this.pendingTimer = null;
+    this.pendingResolve = null;
+    this.pendingReject = null;
+    this.connectPromise = null;
   }
 }

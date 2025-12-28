@@ -66,7 +66,6 @@ import toast from "react-hot-toast";
   useEffect(() => {
     try {
       walletManager.initLoopSdk();
-      walletManager.initZoroSdk();
     } catch (err) {
       console.warn("Wallet init failed", err);
     }

@@ -146,6 +146,22 @@ import toast from "react-hot-toast";
       if (debug) console.debug("[Loop]", ...args);
     };
 
+    let pollingTimer: number | null = null;
+    const pendingKey = "clearportx.pending.loop.auth";
+
+    const setPending = (value: boolean) => {
+      if (typeof window === "undefined") return;
+      try {
+        if (value) {
+          window.sessionStorage.setItem(pendingKey, "1");
+        } else {
+          window.sessionStorage.removeItem(pendingKey);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
     const maybeRehydrate = () => {
       try {
         if (!(connector as any).hasProvider?.()) {
@@ -172,11 +188,25 @@ import toast from "react-hot-toast";
         window.removeEventListener("focus", onFocus);
         document.removeEventListener("visibilitychange", onVisibility);
         window.removeEventListener("storage", onStorage);
+        if (pollingTimer !== null) clearInterval(pollingTimer);
+        setPending(false);
       };
+
+      // Poll up to 180s to resume without second click.
+      pollingTimer = window.setInterval(() => {
+        maybeRehydrate();
+      }, 500) as unknown as number;
+      setTimeout(() => {
+        if (pollingTimer !== null) {
+          clearInterval(pollingTimer);
+          pollingTimer = null;
+        }
+      }, 180000);
     }
 
     try {
       log("connect started");
+      setPending(true);
       connector.connectFromClick();
       maybeRehydrate();
       const walletParty = await connector.getParty();

@@ -172,7 +172,8 @@ class ZoroSDK {
   }
 
   private async createTicket(sessionId: string): Promise<string> {
-    const res = await fetch(`${this.apiBase()}/api/v1/connect/tickets`, {
+    const apiBase = this.apiBase();
+    const res = await fetch(`${apiBase}/api/v1/connect/tickets`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -182,6 +183,11 @@ class ZoroSDK {
       }),
     });
     if (!res.ok) {
+      if (res.status === 404) {
+        throw new Error(
+          `Zoro connect endpoint not found at ${apiBase}. Set REACT_APP_ZORO_API_URL / WALLET_URL to the environment provided by Zoro.`
+        );
+      }
       throw new Error("Failed to get ticket from server.");
     }
     const json = await res.json();

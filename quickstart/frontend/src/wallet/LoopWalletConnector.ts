@@ -56,7 +56,7 @@ export class LoopWalletConnector implements IWalletConnector {
       options: {
         openMode: "popup",
         requestSigningMode: "popup",
-        redirectUrl: typeof window !== "undefined" ? window.location.origin : undefined,
+        redirectUrl: typeof window !== "undefined" ? window.location.href : undefined,
       },
       onAccept: (provider: LoopProvider) => {
         if (DEBUG)

@@ -181,7 +181,16 @@ export class LoopWalletConnector implements IWalletConnector {
     if (typeof st !== "function") {
       throw new Error("Loop provider does not expose submitTransaction()");
     }
-    return st.call(this.provider, cmd, opts);
+    const res = await st.call(this.provider, cmd, opts);
+    if (typeof window !== "undefined" && (process.env.REACT_APP_ENV === "devnet" || window.location.hostname === "localhost")) {
+      try {
+        const cids = (res && (res.contractIds || res.contracts || res.events)) ?? null;
+        console.debug("[Loop][devnet] submitTransaction result", cids ?? res);
+      } catch {
+        /* ignore */
+      }
+    }
+    return res;
   }
 
   async disconnect(): Promise<void> {

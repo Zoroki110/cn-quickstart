@@ -193,6 +193,112 @@ export class LoopWalletConnector implements IWalletConnector {
     return res;
   }
 
+  /**
+   * Accept an incoming CBTC TransferOffer via Loop SDK.
+   *
+   * Flow:
+   * 1. User provides the TransferOffer contractId
+   * 2. Loop SDK submits Accept choice on the TransferInstruction (Loop has TI visibility)
+   * 3. onTransactionUpdate captures the ledger update with new Holding contractId
+   * 4. Returns the final update containing the new CBTC Holding owned by receiver
+   *
+   * @param params.transferOfferCid - Contract ID of the CBTC TransferOffer
+   * @param params.receiverParty - Party accepting the CBTC (typically ClearportX operator)
+   * @returns Promise with updateId and created contracts info
+   */
+  async acceptIncomingCbtcOffer(params: {
+    transferOfferCid: string;
+    receiverParty: string;
+  }): Promise<{
+    updateId: string;
+    createdContracts: Array<{ templateId: string; contractId: string; payload?: any }>;
+    success: boolean;
+    error?: string;
+  }> {
+    await this.ensureConnected();
+    if (DEBUG) console.debug("[Loop] acceptIncomingCbtcOffer called", params);
+
+    const st = this.provider?.submitTransaction;
+    if (typeof st !== "function") {
+      throw new Error("Loop provider does not expose submitTransaction()");
+    }
+
+    // CBTC TransferOffer template from cbtc-lib
+    // The Accept choice is on TransferInstruction, but Loop handles the routing
+    // We submit via the TransferOffer which triggers the underlying TI acceptance
+    const command = {
+      templateId: "Utility.Registry.App.V0.Model.Transfer:TransferOffer",
+      contractId: params.transferOfferCid,
+      choice: "TransferOffer_Accept",
+      argument: {
+        // TransferOffer_Accept takes no additional arguments
+        // The receiver is already specified in the TransferOffer
+      },
+    };
+
+    try {
+      // Options to capture the transaction update
+      const opts = {
+        // Request full transaction tree in response
+        disclosedContracts: true,
+        // Enable onTransactionUpdate callback if available in SDK v0.8.0+
+      };
+
+      if (DEBUG) console.debug("[Loop] Submitting CBTC Accept command:", command);
+
+      const result = await st.call(this.provider, command, opts);
+
+      if (DEBUG) console.debug("[Loop] CBTC Accept result:", result);
+
+      // Parse the result to extract created contracts
+      const createdContracts: Array<{ templateId: string; contractId: string; payload?: any }> = [];
+
+      // Result may contain different structures based on SDK version
+      if (result?.events) {
+        for (const event of result.events) {
+          if (event.created) {
+            createdContracts.push({
+              templateId: event.created.templateId || event.templateId || "",
+              contractId: event.created.contractId || event.contractId || "",
+              payload: event.created.payload,
+            });
+          }
+        }
+      } else if (result?.contractIds) {
+        // Simpler response format
+        for (const cid of result.contractIds) {
+          createdContracts.push({
+            templateId: "unknown",
+            contractId: cid,
+          });
+        }
+      } else if (result?.contracts) {
+        for (const contract of result.contracts) {
+          createdContracts.push({
+            templateId: contract.templateId || "",
+            contractId: contract.contractId || contract.cid || "",
+            payload: contract.payload,
+          });
+        }
+      }
+
+      return {
+        updateId: result?.updateId || result?.commandId || result?.transactionId || "",
+        createdContracts,
+        success: true,
+      };
+    } catch (err: any) {
+      const errorMessage = err?.message || String(err);
+      console.error("[Loop] CBTC Accept failed:", errorMessage);
+      return {
+        updateId: "",
+        createdContracts: [],
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }
+
   async disconnect(): Promise<void> {
     await this.cleanupAndDisconnect();
     this.clearPending();

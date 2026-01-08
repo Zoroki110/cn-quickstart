@@ -15,6 +15,7 @@ import {
   TransactionHistory,
   ConnectionStatus,
   LoadingScreen,
+  DevNetCbtcAccept,
 } from './components';
 import AuthCallback from './components/AuthCallback';
 
@@ -83,6 +84,7 @@ function App() {
             <Route path="/pools" element={<PoolsInterface />} />
             <Route path="/liquidity" element={<LiquidityInterface />} />
             <Route path="/history" element={<TransactionHistory />} />
+            <Route path="/devnet/cbtc" element={<DevNetCbtcAccept />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
           </Routes>
         </main>

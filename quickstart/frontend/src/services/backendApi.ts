@@ -1099,6 +1099,107 @@ export class BackendApiService {
         return 'Ledger Transaction';
     }
   }
+
+  /**
+   * Select a CBTC/Token Standard holding with polling support.
+   * Uses the backend's HoldingSelectorService for UTXO selection.
+   *
+   * @param params Selection criteria
+   * @returns Selected holding info or null if not found within timeout
+   */
+  async selectHolding(params: {
+    ownerParty: string;
+    instrumentAdmin: string;
+    instrumentId: string;
+    minAmount?: string;
+    timeoutSeconds?: number;
+    pollIntervalMs?: number;
+  }): Promise<{
+    found: boolean;
+    holdingCid: string | null;
+    instrumentAdmin: string | null;
+    instrumentId: string | null;
+    amount: string | null;
+    owner: string | null;
+    attempts: number;
+    elapsedMs: number;
+    error: string | null;
+  }> {
+    try {
+      const body = {
+        ownerParty: params.ownerParty,
+        instrumentAdmin: params.instrumentAdmin,
+        instrumentId: params.instrumentId,
+        minAmount: params.minAmount || "0",
+        timeoutSeconds: params.timeoutSeconds ?? 30,
+        pollIntervalMs: params.pollIntervalMs ?? 2000,
+      };
+
+      console.log("[BackendApi] Selecting holding with params:", body);
+
+      const res = await this.client.post('/api/devnet/holdings/select', body);
+      const data = res.data;
+
+      console.log("[BackendApi] Holding selection result:", data);
+
+      return {
+        found: data.found === true,
+        holdingCid: data.holdingCid || null,
+        instrumentAdmin: data.instrumentAdmin || null,
+        instrumentId: data.instrumentId || null,
+        amount: data.amount?.toString() || null,
+        owner: data.owner || null,
+        attempts: data.attempts || 1,
+        elapsedMs: data.elapsedMs || 0,
+        error: data.error || null,
+      };
+    } catch (error: any) {
+      const message = error?.response?.data?.message || error?.message || String(error);
+      console.error("[BackendApi] Holding selection failed:", message);
+      return {
+        found: false,
+        holdingCid: null,
+        instrumentAdmin: null,
+        instrumentId: null,
+        amount: null,
+        owner: null,
+        attempts: 1,
+        elapsedMs: 0,
+        error: message,
+      };
+    }
+  }
+
+  /**
+   * Get CBTC holdings (UTXOs) for a party.
+   * Useful for discovering available CBTC before/after acceptance.
+   */
+  async getCbtcHoldings(party: string): Promise<Array<{
+    contractId: string;
+    instrumentAdmin: string;
+    instrumentId: string;
+    amount: string;
+    owner: string;
+  }>> {
+    try {
+      const res = await this.client.get(`/api/holdings/${party}/utxos`);
+      const utxos = Array.isArray(res.data) ? res.data : [];
+
+      // Filter for CBTC holdings (instrumentId = "CBTC")
+      return utxos
+        .filter((u: any) => u.instrumentId === "CBTC")
+        .map((u: any) => ({
+          contractId: u.contractId || "",
+          instrumentAdmin: u.instrumentAdmin || "",
+          instrumentId: u.instrumentId || "",
+          amount: u.amount?.toString() || "0",
+          owner: u.owner || "",
+        }));
+    } catch (error) {
+      console.error("[BackendApi] Failed to get CBTC holdings:", error);
+      return [];
+    }
+  }
 }
 
 // Export singleton instance

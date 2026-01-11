@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { LoopWalletConnector } from '../wallet/LoopWalletConnector';
+import { walletManager } from '../wallet/WalletManager';
 import { backendApi } from '../services/backendApi';
 
 // CBTC network admin party on DevNet
@@ -109,8 +109,8 @@ export default function DevNetCbtcAccept() {
     setResult(null);
 
     try {
-      // Step 1: Accept via Loop SDK
-      const connector = new LoopWalletConnector();
+      // Step 1: Accept via Loop SDK using shared connector
+      const connector = walletManager.getOrCreateLoopConnector();
       await connector.connect();
 
       console.log(`[DevNetCbtcAccept] request_id=${requestId} Calling Loop SDK acceptIncomingCbtcOffer...`);

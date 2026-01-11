@@ -1171,6 +1171,45 @@ export class BackendApiService {
   }
 
   /**
+   * Get incoming CBTC TransferOffers for a receiver party.
+   * These are offers that can be accepted via Loop SDK.
+   */
+  async getCbtcOffers(receiverParty: string): Promise<Array<{
+    contractId: string;
+    sender: string;
+    receiver: string;
+    amount: string;
+    reason: string | null;
+    executeBefore: string | null;
+    instrumentId: string;
+    instrumentAdmin: string;
+    rawTemplateId: string;
+  }>> {
+    try {
+      console.log("[BackendApi] Fetching CBTC offers for receiver:", receiverParty);
+      const res = await this.client.get('/api/devnet/cbtc/offers', {
+        params: { receiverParty },
+      });
+      const offers = Array.isArray(res.data) ? res.data : [];
+      console.log(`[BackendApi] Found ${offers.length} CBTC offers`);
+      return offers.map((o: any) => ({
+        contractId: o.contractId || "",
+        sender: o.sender || "",
+        receiver: o.receiver || "",
+        amount: o.amount?.toString() || "0",
+        reason: o.reason || null,
+        executeBefore: o.executeBefore || null,
+        instrumentId: o.instrumentId || "",
+        instrumentAdmin: o.instrumentAdmin || "",
+        rawTemplateId: o.rawTemplateId || "",
+      }));
+    } catch (error) {
+      console.error("[BackendApi] Failed to get CBTC offers:", error);
+      return [];
+    }
+  }
+
+  /**
    * Get CBTC holdings (UTXOs) for a party.
    * Useful for discovering available CBTC before/after acceptance.
    */

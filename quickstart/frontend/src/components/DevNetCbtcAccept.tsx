@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { LoopWalletConnector } from '../wallet/LoopWalletConnector';
 import { backendApi } from '../services/backendApi';
 
@@ -16,12 +16,22 @@ interface AcceptResult {
   amount?: string;
   error?: string;
   elapsedMs?: number;
+  requestId?: string;
 }
 
 interface CbtcHolding {
   contractId: string;
   amount: string;
   owner: string;
+}
+
+interface CbtcOffer {
+  contractId: string;
+  sender: string;
+  receiver: string;
+  amount: string;
+  reason: string | null;
+  instrumentId: string;
 }
 
 /**
@@ -40,6 +50,31 @@ export default function DevNetCbtcAccept() {
   const [result, setResult] = useState<AcceptResult | null>(null);
   const [existingHoldings, setExistingHoldings] = useState<CbtcHolding[]>([]);
   const [isLoadingHoldings, setIsLoadingHoldings] = useState(false);
+  const [incomingOffers, setIncomingOffers] = useState<CbtcOffer[]>([]);
+  const [isLoadingOffers, setIsLoadingOffers] = useState(false);
+  const [acceptingOfferId, setAcceptingOfferId] = useState<string | null>(null);
+
+  // Load incoming CBTC offers for ClearportX
+  const loadIncomingOffers = useCallback(async () => {
+    setIsLoadingOffers(true);
+    try {
+      console.log('[DevNetCbtcAccept] Loading incoming CBTC offers...');
+      const offers = await backendApi.getCbtcOffers(CLEARPORTX_OPERATOR);
+      console.log('[DevNetCbtcAccept] Received offers:', offers);
+      setIncomingOffers(offers.map(o => ({
+        contractId: o.contractId,
+        sender: o.sender,
+        receiver: o.receiver,
+        amount: o.amount,
+        reason: o.reason,
+        instrumentId: o.instrumentId,
+      })));
+    } catch (err) {
+      console.error('[DevNetCbtcAccept] Failed to load offers:', err);
+    } finally {
+      setIsLoadingOffers(false);
+    }
+  }, []);
 
   // Load existing CBTC holdings for ClearportX
   const loadExistingHoldings = useCallback(async () => {
@@ -58,14 +93,19 @@ export default function DevNetCbtcAccept() {
     }
   }, []);
 
-  // Accept CBTC offer via Loop SDK
-  const handleAccept = useCallback(async () => {
-    if (!transferOfferCid.trim()) {
-      setResult({ success: false, error: 'Please enter a TransferOffer contract ID' });
-      return;
-    }
+  // Auto-load offers and holdings on mount
+  useEffect(() => {
+    loadIncomingOffers();
+    loadExistingHoldings();
+  }, [loadIncomingOffers, loadExistingHoldings]);
+
+  // Accept CBTC offer via Loop SDK (generic handler)
+  const acceptOffer = useCallback(async (offerCid: string) => {
+    const requestId = `accept-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`[DevNetCbtcAccept] request_id=${requestId} Starting acceptance for offerCid=${offerCid.substring(0, 20)}...`);
 
     setIsAccepting(true);
+    setAcceptingOfferId(offerCid);
     setResult(null);
 
     try {
@@ -73,23 +113,42 @@ export default function DevNetCbtcAccept() {
       const connector = new LoopWalletConnector();
       await connector.connect();
 
-      console.log('[DevNetCbtcAccept] Accepting CBTC offer:', transferOfferCid);
+      console.log(`[DevNetCbtcAccept] request_id=${requestId} Calling Loop SDK acceptIncomingCbtcOffer...`);
 
       const acceptResult = await connector.acceptIncomingCbtcOffer({
-        transferOfferCid: transferOfferCid.trim(),
+        transferOfferCid: offerCid,
         receiverParty: CLEARPORTX_OPERATOR,
       });
 
+      console.log(`[DevNetCbtcAccept] request_id=${requestId} Loop SDK response:`, {
+        success: acceptResult.success,
+        updateId: acceptResult.updateId,
+        error: acceptResult.error,
+      });
+
       if (!acceptResult.success) {
+        // Enhanced error logging for reject_request
+        const errorPayload = {
+          requestId,
+          offerCid: offerCid.substring(0, 30) + '...',
+          updateId: acceptResult.updateId,
+          error: acceptResult.error,
+          timestamp: new Date().toISOString(),
+        };
+        console.error(`[DevNetCbtcAccept] request_id=${requestId} REJECTION/ERROR:`, JSON.stringify(errorPayload, null, 2));
+
         setResult({
           success: false,
-          error: acceptResult.error || 'Loop SDK acceptance failed',
+          error: acceptResult.error || 'Loop SDK acceptance failed (reject_request)',
+          updateId: acceptResult.updateId,
+          requestId,
         });
         setIsAccepting(false);
+        setAcceptingOfferId(null);
         return;
       }
 
-      console.log('[DevNetCbtcAccept] Loop acceptance result:', acceptResult);
+      console.log(`[DevNetCbtcAccept] request_id=${requestId} Acceptance successful, updateId=${acceptResult.updateId}`);
 
       // Step 2: Poll backend for the new holding
       setIsAccepting(false);
@@ -105,36 +164,59 @@ export default function DevNetCbtcAccept() {
       });
 
       setIsPolling(false);
+      setAcceptingOfferId(null);
 
       if (holdingResult.found) {
+        console.log(`[DevNetCbtcAccept] request_id=${requestId} Holding found: cid=${holdingResult.holdingCid}, amount=${holdingResult.amount}`);
         setResult({
           success: true,
           updateId: acceptResult.updateId,
           holdingCid: holdingResult.holdingCid || undefined,
           amount: holdingResult.amount || undefined,
           elapsedMs: holdingResult.elapsedMs,
+          requestId,
         });
 
-        // Refresh holdings list
+        // Refresh offers and holdings lists
+        await loadIncomingOffers();
         await loadExistingHoldings();
       } else {
+        console.warn(`[DevNetCbtcAccept] request_id=${requestId} Holding not found after acceptance`);
         setResult({
           success: false,
           updateId: acceptResult.updateId,
           error: holdingResult.error || 'Holding not found after acceptance',
           elapsedMs: holdingResult.elapsedMs,
+          requestId,
         });
       }
     } catch (err: any) {
-      console.error('[DevNetCbtcAccept] Error:', err);
+      const errorMsg = err?.message || String(err);
+      console.error(`[DevNetCbtcAccept] request_id=${requestId} Exception:`, errorMsg, err);
       setResult({
         success: false,
-        error: err?.message || String(err),
+        error: errorMsg,
+        requestId,
       });
       setIsAccepting(false);
       setIsPolling(false);
+      setAcceptingOfferId(null);
     }
-  }, [transferOfferCid, loadExistingHoldings]);
+  }, [loadIncomingOffers, loadExistingHoldings]);
+
+  // Handle manual accept from input field
+  const handleAccept = useCallback(async () => {
+    if (!transferOfferCid.trim()) {
+      setResult({ success: false, error: 'Please enter a TransferOffer contract ID' });
+      return;
+    }
+    await acceptOffer(transferOfferCid.trim());
+  }, [transferOfferCid, acceptOffer]);
+
+  // Handle one-click accept from offers list
+  const handleAcceptFromList = useCallback(async (offerCid: string) => {
+    await acceptOffer(offerCid);
+  }, [acceptOffer]);
 
   // Truncate contract ID for display
   const truncateCid = (cid: string) => {
@@ -240,12 +322,112 @@ export default function DevNetCbtcAccept() {
               )}
             </div>
           ) : (
-            <p className="text-sm text-red-700 dark:text-red-300">
-              {result.error}
-            </p>
+            <div className="space-y-2 text-sm text-red-700 dark:text-red-300">
+              <p>{result.error}</p>
+              {result.requestId && (
+                <p className="text-xs opacity-75">Request ID: {result.requestId}</p>
+              )}
+              {result.updateId && (
+                <p className="text-xs opacity-75">Update ID: {result.updateId}</p>
+              )}
+            </div>
           )}
         </div>
       )}
+
+      {/* Incoming Offers Section */}
+      <div className="mt-6 pt-6 border-t border-gray-200 dark:border-dark-700">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-gray-900 dark:text-white">
+            Incoming CBTC Offers
+          </h3>
+          <button
+            onClick={loadIncomingOffers}
+            disabled={isLoadingOffers}
+            className="text-sm text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+          >
+            {isLoadingOffers ? 'Loading...' : 'Refresh'}
+          </button>
+        </div>
+
+        {isLoadingOffers ? (
+          <div className="flex items-center justify-center py-4">
+            <svg className="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span className="ml-2 text-sm text-gray-500">Loading offers...</span>
+          </div>
+        ) : incomingOffers.length === 0 ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400 py-2">
+            No incoming CBTC offers found for ClearportX.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {incomingOffers.map((offer, idx) => (
+              <div
+                key={offer.contractId || idx}
+                className="p-4 bg-gradient-to-r from-orange-50 to-yellow-50 dark:from-orange-900/20 dark:to-yellow-900/20 rounded-xl border border-orange-200 dark:border-orange-800"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-bold text-lg text-gray-900 dark:text-white">
+                        {offer.amount} CBTC
+                      </span>
+                      <span className="px-2 py-0.5 text-xs bg-orange-100 dark:bg-orange-800 text-orange-800 dark:text-orange-200 rounded-full">
+                        Pending
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
+                      <div>
+                        <span className="font-medium">From:</span>{' '}
+                        <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">
+                          {truncateCid(offer.sender)}
+                        </code>
+                      </div>
+                      <div>
+                        <span className="font-medium">Contract:</span>{' '}
+                        <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">
+                          {truncateCid(offer.contractId)}
+                        </code>
+                      </div>
+                      {offer.reason && (
+                        <div>
+                          <span className="font-medium">Reason:</span> {offer.reason}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleAcceptFromList(offer.contractId)}
+                    disabled={isAccepting || isPolling || acceptingOfferId === offer.contractId}
+                    className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${
+                      acceptingOfferId === offer.contractId
+                        ? 'bg-yellow-400 text-yellow-900 cursor-wait'
+                        : isAccepting || isPolling
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-green-500 to-emerald-600 text-white hover:from-green-600 hover:to-emerald-700 shadow hover:shadow-lg'
+                    }`}
+                  >
+                    {acceptingOfferId === offer.contractId ? (
+                      <span className="flex items-center">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Accepting...
+                      </span>
+                    ) : (
+                      'Accept'
+                    )}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Existing Holdings Section */}
       <div className="mt-6 pt-6 border-t border-gray-200 dark:border-dark-700">

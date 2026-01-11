@@ -1,8 +1,10 @@
 package com.digitalasset.quickstart.controller;
 
-import clearportx_amm_production.token.token.Token;
+import clearportx_amm_drain_credit.token.token.Token;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 import com.digitalasset.quickstart.security.devnet.DevNetAuthService;
+import com.digitalasset.quickstart.service.CbtcTransferOfferService;
+import com.digitalasset.quickstart.service.CbtcTransferOfferService.CbtcTransferOfferDto;
 import com.digitalasset.transcode.java.ContractId;
 import com.digitalasset.transcode.java.Party;
 import org.slf4j.Logger;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -40,6 +43,9 @@ public class DevNetController {
 
     @Autowired
     private DevNetAuthService authService;
+
+    @Autowired
+    private CbtcTransferOfferService cbtcTransferOfferService;
 
     /**
      * POST /api/devnet/mint
@@ -173,5 +179,60 @@ public class DevNetController {
         public String toString() {
             return String.format("MintTokenRequest{owner='%s', symbol='%s', amount=%s}", owner, symbol, amount);
         }
+    }
+
+    /**
+     * GET /api/devnet/cbtc/offers
+     *
+     * List incoming CBTC TransferOffers for a receiver party.
+     * Used by the frontend to display offers that can be accepted via Loop SDK.
+     *
+     * Query params:
+     * - receiverParty: Full party ID of the receiver (e.g., ClearportX-DEX-1::1220...)
+     *
+     * Response:
+     * [
+     *   {
+     *     "contractId": "00abc123...",
+     *     "sender": "cbtc-network::1220...",
+     *     "receiver": "ClearportX-DEX-1::1220...",
+     *     "amount": "0.1",
+     *     "reason": "CBTC transfer",
+     *     "executeBefore": null,
+     *     "instrumentId": "CBTC",
+     *     "instrumentAdmin": "cbtc-network::1220...",
+     *     "rawTemplateId": "Utility.Registry.App.V0.Model.Transfer:TransferOffer"
+     *   }
+     * ]
+     */
+    @GetMapping("/cbtc/offers")
+    public CompletableFuture<ResponseEntity<List<CbtcTransferOfferDto>>> getCbtcOffers(
+            @RequestParam(value = "receiverParty") String receiverParty
+    ) {
+        logger.info("[DevNetController] GET /cbtc/offers receiverParty={}", truncateParty(receiverParty));
+
+        if (receiverParty == null || receiverParty.isBlank()) {
+            logger.warn("[DevNetController] receiverParty is required");
+            return CompletableFuture.completedFuture(ResponseEntity.badRequest().build());
+        }
+
+        return cbtcTransferOfferService.getIncomingOffers(receiverParty)
+                .thenApply(offers -> {
+                    logger.info("[DevNetController] Returning {} CBTC offers for receiver", offers.size());
+                    return ResponseEntity.ok(offers);
+                })
+                .exceptionally(ex -> {
+                    logger.error("[DevNetController] Error fetching CBTC offers: {}", ex.getMessage(), ex);
+                    return ResponseEntity.status(500).build();
+                });
+    }
+
+    private String truncateParty(String party) {
+        if (party == null || party.length() <= 30) return party;
+        int sep = party.indexOf("::");
+        if (sep > 0 && sep < 20) {
+            return party.substring(0, sep + 10) + "...";
+        }
+        return party.substring(0, 20) + "...";
     }
 }

@@ -244,6 +244,7 @@ export class LoopWalletConnector implements IWalletConnector {
           },
         },
       ],
+      extraArgs: {},
     };
 
     try {

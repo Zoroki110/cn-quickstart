@@ -248,9 +248,12 @@ export class LoopWalletConnector implements IWalletConnector {
     };
 
     // Add extraArgs to command - this is required by Loop SDK command preprocessing
+    // extraArgs may need to contain disclosedContracts array (even if empty)
     const commandWithExtras = {
       ...command,
-      extraArgs: {},
+      extraArgs: {
+        disclosedContracts: [],
+      },
     };
 
     try {

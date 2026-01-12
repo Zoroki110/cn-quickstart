@@ -194,20 +194,20 @@ export class LoopWalletConnector implements IWalletConnector {
   }
 
   /**
-   * Accept an incoming CBTC TransferOffer via Loop SDK.
+   * Accept an incoming CBTC TransferInstruction via Loop SDK.
    *
    * Flow:
-   * 1. User provides the TransferOffer contractId
-   * 2. Loop SDK submits Accept choice on the TransferInstruction (Loop has TI visibility)
-   * 3. onTransactionUpdate captures the ledger update with new Holding contractId
-   * 4. Returns the final update containing the new CBTC Holding owned by receiver
+   * 1. User provides the TransferInstruction contractId (extracted from TransferOffer)
+   * 2. Loop SDK submits TransferInstruction_Accept on the TI interface
+   * 3. Loop backend automatically provides disclosedContracts via authenticated registry access
+   * 4. Returns the update containing the new CBTC Holding owned by receiver
    *
-   * @param params.transferOfferCid - Contract ID of the CBTC TransferOffer
+   * @param params.transferInstructionCid - Contract ID of the TransferInstruction to accept
    * @param params.receiverParty - Party accepting the CBTC (typically ClearportX operator)
    * @returns Promise with updateId and created contracts info
    */
   async acceptIncomingCbtcOffer(params: {
-    transferOfferCid: string;
+    transferInstructionCid: string;
     receiverParty: string;
     packageId?: string | null;
   }): Promise<{
@@ -225,25 +225,21 @@ export class LoopWalletConnector implements IWalletConnector {
       throw new Error("Loop provider does not expose submitTransaction()");
     }
 
-    // CBTC TransferOffer template from cbtc-lib
-    // The Accept choice is on TransferInstruction, but Loop handles the routing
-    // We submit via the TransferOffer which triggers the underlying TI acceptance
-    const pkgPrefix = params.packageId
-      ? `#${params.packageId}:`
-      : "";
-    const templateId = `${pkgPrefix}Utility.Registry.App.V0.Model.Transfer:TransferOffer`;
+    // Use TransferInstruction interface from Splice API token standard
+    // This is the correct template for CBTC acceptance (NOT TransferOffer)
+    const templateId = "#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction";
 
     const command = {
       commandId: requestId,
-      workflowId: `cbtc-accept-${params.transferOfferCid.slice(0, 8)}`,
+      workflowId: `cbtc-accept-${params.transferInstructionCid.slice(0, 8)}`,
       applicationId: "clearportx",
       actAs: [params.receiverParty],
       commands: [
         {
           ExerciseCommand: {
             templateId,
-            contractId: params.transferOfferCid,
-            choice: "TransferOffer_Accept",
+            contractId: params.transferInstructionCid,
+            choice: "TransferInstruction_Accept",
             choiceArgument: {},
           },
         },

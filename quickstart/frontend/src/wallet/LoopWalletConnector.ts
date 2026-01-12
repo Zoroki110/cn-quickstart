@@ -230,10 +230,12 @@ export class LoopWalletConnector implements IWalletConnector {
     const command = {
       commands: [
         {
-          templateId: "Utility.Registry.App.V0.Model.Transfer:TransferOffer",
-          contractId: params.transferOfferCid,
-          choice: "TransferOffer_Accept",
-          argument: {},
+          ExerciseCommand: {
+            templateId: "Utility.Registry.App.V0.Model.Transfer:TransferOffer",
+            contractId: params.transferOfferCid,
+            choice: "TransferOffer_Accept",
+            choiceArgument: {},
+          },
         },
       ],
     };

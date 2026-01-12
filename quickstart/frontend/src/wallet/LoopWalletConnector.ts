@@ -229,6 +229,7 @@ export class LoopWalletConnector implements IWalletConnector {
     // This is the correct template for CBTC acceptance (NOT TransferOffer)
     const templateId = "#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction";
 
+    // Build the command with extraArgs at the top level
     const command = {
       commandId: requestId,
       workflowId: `cbtc-accept-${params.transferInstructionCid.slice(0, 8)}`,
@@ -246,19 +247,24 @@ export class LoopWalletConnector implements IWalletConnector {
       ],
     };
 
+    // Add extraArgs to command - this is required by Loop SDK command preprocessing
+    const commandWithExtras = {
+      ...command,
+      extraArgs: {},
+    };
+
     try {
       // Options to capture the transaction update
       const opts = {
         // Request full transaction tree in response
         disclosedContracts: true,
         timeoutMs: 120000,
-        extraArgs: {},  // Move extraArgs to opts
         // Enable onTransactionUpdate callback if available in SDK v0.8.0+
       };
 
-      if (DEBUG) console.debug("[Loop] Submitting CBTC Accept command:", { command, opts, requestId });
+      if (DEBUG) console.debug("[Loop] Submitting CBTC Accept command:", { command: commandWithExtras, opts, requestId });
 
-      const result = await st.call(this.provider, command, opts);
+      const result = await st.call(this.provider, commandWithExtras, opts);
 
       if (DEBUG) console.debug("[Loop] CBTC Accept result:", { requestId, result });
 

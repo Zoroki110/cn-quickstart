@@ -209,6 +209,7 @@ export class LoopWalletConnector implements IWalletConnector {
   async acceptIncomingCbtcOffer(params: {
     transferOfferCid: string;
     receiverParty: string;
+    packageId?: string | null;
   }): Promise<{
     updateId: string;
     createdContracts: Array<{ templateId: string; contractId: string; payload?: any }>;
@@ -227,6 +228,11 @@ export class LoopWalletConnector implements IWalletConnector {
     // CBTC TransferOffer template from cbtc-lib
     // The Accept choice is on TransferInstruction, but Loop handles the routing
     // We submit via the TransferOffer which triggers the underlying TI acceptance
+    const pkgPrefix = params.packageId
+      ? `#${params.packageId}:`
+      : "";
+    const templateId = `${pkgPrefix}Utility.Registry.App.V0.Model.Transfer:TransferOffer`;
+
     const command = {
       commandId: requestId,
       workflowId: `cbtc-accept-${params.transferOfferCid.slice(0, 8)}`,
@@ -235,7 +241,7 @@ export class LoopWalletConnector implements IWalletConnector {
       commands: [
         {
           ExerciseCommand: {
-            templateId: "Utility.Registry.App.V0.Model.Transfer:TransferOffer",
+            templateId,
             contractId: params.transferOfferCid,
             choice: "TransferOffer_Accept",
             choiceArgument: {},

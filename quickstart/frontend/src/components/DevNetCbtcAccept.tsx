@@ -1,5 +1,4 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { walletManager } from '../wallet/WalletManager';
 import { backendApi } from '../services/backendApi';
 
 // CBTC network admin party on DevNet
@@ -10,13 +9,16 @@ const CBTC_INSTRUMENT_ID = 'CBTC';
 const CLEARPORTX_OPERATOR = 'ClearportX-DEX-1::122081f2b8e29cbe57d1037a18e6f70e57530773b3a4d1bea6bab981b7a76e943b37';
 
 interface AcceptResult {
-  success: boolean;
-  updateId?: string;
+  ok: boolean;
+  ledgerUpdateId?: string | null;
   holdingCid?: string;
   amount?: string;
-  error?: string;
+  error?: string | null;
+  hint?: string | null;
+  classification?: string | null;
   elapsedMs?: number;
   requestId?: string;
+  transferInstructionId?: string | null;
 }
 
 interface CbtcHolding {
@@ -32,6 +34,8 @@ interface CbtcOffer {
   amount: string;
   reason: string | null;
   instrumentId: string;
+  transferInstructionId?: string | null;
+  packageId?: string | null;
 }
 
 /**
@@ -39,7 +43,7 @@ interface CbtcOffer {
  *
  * Option A Flow:
  * 1. User pastes TransferOffer contractId
- * 2. Loop SDK accepts the offer (Loop has TransferInstruction visibility)
+ * 2. Backend fetches registry choice-context and exercises TransferInstruction_Accept as ClearportX
  * 3. Acceptance creates CBTC Holding owned by ClearportX
  * 4. Backend polls for the new holding using HoldingSelectorService
  */
@@ -68,6 +72,8 @@ export default function DevNetCbtcAccept() {
         amount: o.amount,
         reason: o.reason,
         instrumentId: o.instrumentId,
+        transferInstructionId: o.transferInstructionId,
+        packageId: o.packageId,
       })));
     } catch (err) {
       console.error('[DevNetCbtcAccept] Failed to load offers:', err);
@@ -99,7 +105,7 @@ export default function DevNetCbtcAccept() {
     loadExistingHoldings();
   }, [loadIncomingOffers, loadExistingHoldings]);
 
-  // Accept CBTC offer via Loop SDK (generic handler)
+  // Accept CBTC offer via backend registry-powered endpoint
   const acceptOffer = useCallback(async (offerCid: string) => {
     const requestId = `accept-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     console.log(`[DevNetCbtcAccept] request_id=${requestId} Starting acceptance for offerCid=${offerCid.substring(0, 20)}...`);
@@ -109,46 +115,25 @@ export default function DevNetCbtcAccept() {
     setResult(null);
 
     try {
-      // Step 1: Accept via Loop SDK using shared connector
-      const connector = walletManager.getOrCreateLoopConnector();
-      await connector.connect();
+      console.log(`[DevNetCbtcAccept] request_id=${requestId} Calling backend accept...`);
+      const acceptResult = await backendApi.acceptCbtcOffer(offerCid, CLEARPORTX_OPERATOR);
+      console.log(`[DevNetCbtcAccept] request_id=${requestId} Backend accept response:`, acceptResult);
 
-      console.log(`[DevNetCbtcAccept] request_id=${requestId} Calling Loop SDK acceptIncomingCbtcOffer...`);
-
-      const acceptResult = await connector.acceptIncomingCbtcOffer({
-        transferOfferCid: offerCid,
-        receiverParty: CLEARPORTX_OPERATOR,
-      });
-
-      console.log(`[DevNetCbtcAccept] request_id=${requestId} Loop SDK response:`, {
-        success: acceptResult.success,
-        updateId: acceptResult.updateId,
-        error: acceptResult.error,
-      });
-
-      if (!acceptResult.success) {
-        // Enhanced error logging for reject_request
-        const errorPayload = {
-          requestId,
-          offerCid: offerCid.substring(0, 30) + '...',
-          updateId: acceptResult.updateId,
-          error: acceptResult.error,
-          timestamp: new Date().toISOString(),
-        };
-        console.error(`[DevNetCbtcAccept] request_id=${requestId} REJECTION/ERROR:`, JSON.stringify(errorPayload, null, 2));
-
+      if (!acceptResult.ok) {
         setResult({
-          success: false,
-          error: acceptResult.error || 'Loop SDK acceptance failed (reject_request)',
-          updateId: acceptResult.updateId,
-          requestId,
+          ok: false,
+          error: acceptResult.rawError || 'Acceptance failed',
+          hint: acceptResult.hint,
+          classification: acceptResult.classification,
+          requestId: acceptResult.requestId || requestId,
+          transferInstructionId: acceptResult.transferInstructionId,
         });
         setIsAccepting(false);
         setAcceptingOfferId(null);
         return;
       }
 
-      console.log(`[DevNetCbtcAccept] request_id=${requestId} Acceptance successful, updateId=${acceptResult.updateId}`);
+      console.log(`[DevNetCbtcAccept] request_id=${requestId} Acceptance successful, ledgerUpdateId=${acceptResult.ledgerUpdateId}`);
 
       // Step 2: Poll backend for the new holding
       setIsAccepting(false);
@@ -169,12 +154,13 @@ export default function DevNetCbtcAccept() {
       if (holdingResult.found) {
         console.log(`[DevNetCbtcAccept] request_id=${requestId} Holding found: cid=${holdingResult.holdingCid}, amount=${holdingResult.amount}`);
         setResult({
-          success: true,
-          updateId: acceptResult.updateId,
+          ok: true,
+          ledgerUpdateId: acceptResult.ledgerUpdateId || undefined,
           holdingCid: holdingResult.holdingCid || undefined,
           amount: holdingResult.amount || undefined,
           elapsedMs: holdingResult.elapsedMs,
-          requestId,
+          requestId: acceptResult.requestId || requestId,
+          transferInstructionId: acceptResult.transferInstructionId,
         });
 
         // Refresh offers and holdings lists
@@ -183,18 +169,19 @@ export default function DevNetCbtcAccept() {
       } else {
         console.warn(`[DevNetCbtcAccept] request_id=${requestId} Holding not found after acceptance`);
         setResult({
-          success: false,
-          updateId: acceptResult.updateId,
+          ok: false,
+          ledgerUpdateId: acceptResult.ledgerUpdateId || undefined,
           error: holdingResult.error || 'Holding not found after acceptance',
           elapsedMs: holdingResult.elapsedMs,
-          requestId,
+          requestId: acceptResult.requestId || requestId,
+          transferInstructionId: acceptResult.transferInstructionId,
         });
       }
     } catch (err: any) {
       const errorMsg = err?.message || String(err);
       console.error(`[DevNetCbtcAccept] request_id=${requestId} Exception:`, errorMsg, err);
       setResult({
-        success: false,
+        ok: false,
         error: errorMsg,
         requestId,
       });
@@ -207,7 +194,7 @@ export default function DevNetCbtcAccept() {
   // Handle manual accept from input field
   const handleAccept = useCallback(async () => {
     if (!transferOfferCid.trim()) {
-      setResult({ success: false, error: 'Please enter a TransferOffer contract ID' });
+      setResult({ ok: false, error: 'Please enter a TransferOffer contract ID' });
       return;
     }
     await acceptOffer(transferOfferCid.trim());
@@ -236,7 +223,7 @@ export default function DevNetCbtcAccept() {
       </div>
 
       <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        Accept incoming CBTC TransferOffers via Loop SDK. The acceptance creates a
+        Accept incoming CBTC TransferOffers via backend registry choice-context. The acceptance creates a
         CBTC Holding owned by ClearportX operator.
       </p>
 
@@ -271,7 +258,7 @@ export default function DevNetCbtcAccept() {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
-              Accepting via Loop...
+              Accepting via backend...
             </span>
           ) : isPolling ? (
             <span className="flex items-center justify-center">
@@ -290,18 +277,26 @@ export default function DevNetCbtcAccept() {
       {/* Result Section */}
       {result && (
         <div className={`mt-6 p-4 rounded-xl ${
-          result.success
+          result.ok
             ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800'
             : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
         }`}>
           <h3 className={`font-semibold mb-2 ${
-            result.success ? 'text-green-800 dark:text-green-200' : 'text-red-800 dark:text-red-200'
+            result.ok ? 'text-green-800 dark:text-green-200' : 'text-red-800 dark:text-red-200'
           }`}>
-            {result.success ? 'Success!' : 'Failed'}
+            {result.ok ? 'Success!' : 'Failed'}
           </h3>
 
-          {result.success ? (
+          {result.ok ? (
             <div className="space-y-2 text-sm text-green-700 dark:text-green-300">
+              {result.transferInstructionId && (
+                <div>
+                  <span className="font-medium">TI CID:</span>{' '}
+                  <code className="bg-green-100 dark:bg-green-800 px-2 py-0.5 rounded text-xs">
+                    {truncateCid(result.transferInstructionId)}
+                  </code>
+                </div>
+              )}
               {result.holdingCid && (
                 <div>
                   <span className="font-medium">Holding CID:</span>{' '}
@@ -324,11 +319,17 @@ export default function DevNetCbtcAccept() {
           ) : (
             <div className="space-y-2 text-sm text-red-700 dark:text-red-300">
               <p>{result.error}</p>
+              {result.hint && (
+                <p className="text-xs opacity-75">Hint: {result.hint}</p>
+              )}
               {result.requestId && (
                 <p className="text-xs opacity-75">Request ID: {result.requestId}</p>
               )}
-              {result.updateId && (
-                <p className="text-xs opacity-75">Update ID: {result.updateId}</p>
+              {result.ledgerUpdateId && (
+                <p className="text-xs opacity-75">Update ID: {result.ledgerUpdateId}</p>
+              )}
+              {result.classification && (
+                <p className="text-xs opacity-75">Classification: {result.classification}</p>
               )}
             </div>
           )}
@@ -392,6 +393,14 @@ export default function DevNetCbtcAccept() {
                           {truncateCid(offer.contractId)}
                         </code>
                       </div>
+                      {offer.transferInstructionId && (
+                        <div>
+                          <span className="font-medium">TI:</span>{' '}
+                          <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">
+                            {truncateCid(offer.transferInstructionId)}
+                          </code>
+                        </div>
+                      )}
                       {offer.reason && (
                         <div>
                           <span className="font-medium">Reason:</span> {offer.reason}

@@ -1184,6 +1184,8 @@ export class BackendApiService {
     instrumentId: string;
     instrumentAdmin: string;
     rawTemplateId: string;
+    transferInstructionId?: string | null;
+    packageId?: string | null;
   }>> {
     try {
       console.log("[BackendApi] Fetching CBTC offers for receiver:", receiverParty);
@@ -1202,10 +1204,48 @@ export class BackendApiService {
         instrumentId: o.instrumentId || "",
         instrumentAdmin: o.instrumentAdmin || "",
         rawTemplateId: o.rawTemplateId || "",
+        transferInstructionId: o.transferInstructionId || null,
+        packageId: o.packageId || null,
       }));
     } catch (error) {
       console.error("[BackendApi] Failed to get CBTC offers:", error);
       return [];
+    }
+  }
+
+  /**
+   * Accept a CBTC offer via backend registry-powered acceptance.
+   */
+  async acceptCbtcOffer(offerCid: string, actAsParty?: string): Promise<{
+    requestId: string;
+    offerCid: string;
+    transferInstructionId?: string | null;
+    actAsParty: string;
+    ok: boolean;
+    classification?: string | null;
+    rawError?: string | null;
+    hint?: string | null;
+    ledgerUpdateId?: string | null;
+  }> {
+    try {
+      const res = await this.client.post(`/api/devnet/cbtc/offers/${offerCid}/accept`, {
+        actAsParty,
+      });
+      return res.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.message || error?.message || String(error);
+      console.error("[BackendApi] CBTC accept failed:", message);
+      return {
+        requestId: "unknown",
+        offerCid,
+        transferInstructionId: null,
+        actAsParty: actAsParty || "",
+        ok: false,
+        classification: "NETWORK",
+        rawError: message,
+        hint: "Backend accept endpoint failed",
+        ledgerUpdateId: null,
+      };
     }
   }
 

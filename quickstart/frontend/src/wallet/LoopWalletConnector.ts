@@ -244,7 +244,6 @@ export class LoopWalletConnector implements IWalletConnector {
           },
         },
       ],
-      extraArgs: {},
     };
 
     try {
@@ -253,6 +252,7 @@ export class LoopWalletConnector implements IWalletConnector {
         // Request full transaction tree in response
         disclosedContracts: true,
         timeoutMs: 120000,
+        extraArgs: {},  // Move extraArgs to opts
         // Enable onTransactionUpdate callback if available in SDK v0.8.0+
       };
 

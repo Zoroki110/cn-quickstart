@@ -120,7 +120,7 @@ export class LoopWalletConnector implements IWalletConnector {
   }
 
   async signMessage(message: string): Promise<string> {
-    await this.ensureConnected();
+    await this.ensureConnectedOrThrow();
     if (DEBUG) console.debug("[Loop] provider ready (signMessage)");
     const signer = this.provider?.signMessage;
     if (!signer) {
@@ -145,7 +145,7 @@ export class LoopWalletConnector implements IWalletConnector {
   }
 
   async getHoldings(): Promise<any> {
-    await this.ensureConnected();
+    await this.ensureConnectedOrThrow();
     if (DEBUG) console.debug("[Loop] provider ready (getHoldings)");
     const gh = this.provider?.getHolding;
     if (typeof gh !== "function") {
@@ -155,7 +155,7 @@ export class LoopWalletConnector implements IWalletConnector {
   }
 
   async getAccount(): Promise<any> {
-    await this.ensureConnected();
+    await this.ensureConnectedOrThrow();
     if (DEBUG) console.debug("[Loop] provider ready (getAccount)");
     const ga = this.provider?.getAccount;
     if (typeof ga !== "function") {
@@ -165,7 +165,7 @@ export class LoopWalletConnector implements IWalletConnector {
   }
 
   async getActiveContracts(args: any): Promise<any> {
-    await this.ensureConnected();
+    await this.ensureConnectedOrThrow();
     if (DEBUG) console.debug("[Loop] provider ready (getActiveContracts)");
     const gac = this.provider?.getActiveContracts;
     if (typeof gac !== "function") {
@@ -175,7 +175,7 @@ export class LoopWalletConnector implements IWalletConnector {
   }
 
   async submitTransaction(cmd: any, opts?: any): Promise<any> {
-    await this.ensureConnected();
+    await this.ensureConnectedOrThrow();
     if (DEBUG) console.debug("[Loop] provider ready (submitTransaction)");
     const st = this.provider?.submitTransaction;
     if (typeof st !== "function") {
@@ -215,8 +215,9 @@ export class LoopWalletConnector implements IWalletConnector {
     success: boolean;
     error?: string;
   }> {
-    await this.ensureConnected();
-    if (DEBUG) console.debug("[Loop] acceptIncomingCbtcOffer called", params);
+    await this.ensureConnectedOrThrow();
+    const requestId = `loop-accept-${Date.now()}`;
+    if (DEBUG) console.debug("[Loop] acceptIncomingCbtcOffer called", { ...params, requestId });
 
     const st = this.provider?.submitTransaction;
     if (typeof st !== "function") {
@@ -227,13 +228,14 @@ export class LoopWalletConnector implements IWalletConnector {
     // The Accept choice is on TransferInstruction, but Loop handles the routing
     // We submit via the TransferOffer which triggers the underlying TI acceptance
     const command = {
-      templateId: "Utility.Registry.App.V0.Model.Transfer:TransferOffer",
-      contractId: params.transferOfferCid,
-      choice: "TransferOffer_Accept",
-      argument: {
-        // TransferOffer_Accept takes no additional arguments
-        // The receiver is already specified in the TransferOffer
-      },
+      commands: [
+        {
+          templateId: "Utility.Registry.App.V0.Model.Transfer:TransferOffer",
+          contractId: params.transferOfferCid,
+          choice: "TransferOffer_Accept",
+          argument: {},
+        },
+      ],
     };
 
     try {
@@ -241,14 +243,15 @@ export class LoopWalletConnector implements IWalletConnector {
       const opts = {
         // Request full transaction tree in response
         disclosedContracts: true,
+        timeoutMs: 120000,
         // Enable onTransactionUpdate callback if available in SDK v0.8.0+
       };
 
-      if (DEBUG) console.debug("[Loop] Submitting CBTC Accept command:", command);
+      if (DEBUG) console.debug("[Loop] Submitting CBTC Accept command:", { command, opts, requestId });
 
       const result = await st.call(this.provider, command, opts);
 
-      if (DEBUG) console.debug("[Loop] CBTC Accept result:", result);
+      if (DEBUG) console.debug("[Loop] CBTC Accept result:", { requestId, result });
 
       // Parse the result to extract created contracts
       const createdContracts: Array<{ templateId: string; contractId: string; payload?: any }> = [];
@@ -317,7 +320,47 @@ export class LoopWalletConnector implements IWalletConnector {
     return "loop";
   }
 
-  private async ensureConnected() {
+  /**
+   * Non-intrusive connectivity check (no prompts).
+   * Returns current connection status without triggering UI.
+   */
+  async checkConnected(): Promise<{ connected: boolean; error?: string }> {
+    if (this.provider) {
+      return { connected: true };
+    }
+    try {
+      const rehydrated = await this.tryRehydrateFromStorage();
+      if (rehydrated && this.provider) {
+        return { connected: true };
+      }
+    } catch {
+      /* ignore */
+    }
+    return { connected: false, error: "Not connected." };
+  }
+
+  /**
+   * Ensure Loop session is usable. Tries reconnect once if needed.
+   */
+  async ensureConnected(requestId?: string): Promise<{ connected: boolean; error?: string }> {
+    const status = await this.checkConnected();
+    if (status.connected) return status;
+    if (DEBUG) console.debug("[Loop] ensureConnected attempt connect", { requestId });
+    try {
+      await this.connect();
+    } catch (err: any) {
+      const msg = err?.message || "Not connected.";
+      if (DEBUG) console.debug("[Loop] ensureConnected connect failed", msg, { requestId });
+      return { connected: false, error: msg };
+    }
+    const after = await this.checkConnected();
+    if (!after.connected && DEBUG) {
+      console.debug("[Loop] ensureConnected still not connected", { requestId });
+    }
+    return after.connected ? after : { connected: false, error: "Not connected." };
+  }
+
+  private async ensureConnectedOrThrow() {
     if (this.provider) return;
     await this.connect();
     if (!this.provider) {

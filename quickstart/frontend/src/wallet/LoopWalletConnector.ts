@@ -228,6 +228,10 @@ export class LoopWalletConnector implements IWalletConnector {
     // The Accept choice is on TransferInstruction, but Loop handles the routing
     // We submit via the TransferOffer which triggers the underlying TI acceptance
     const command = {
+      commandId: requestId,
+      workflowId: `cbtc-accept-${params.transferOfferCid.slice(0, 8)}`,
+      applicationId: "clearportx",
+      actAs: [params.receiverParty],
       commands: [
         {
           ExerciseCommand: {

@@ -652,7 +652,7 @@ const LiquidityInterface: React.FC = () => {
 
         {pools.filter(p => p.userLiquidity && p.userLiquidity > 0).length === 0 ? (
           <div className="text-center py-8">
-            <div className="text-4xl mb-3">💧</div>
+          <div className="text-4xl mb-3"></div>
             <p className="text-gray-500 dark:text-gray-400">
               You don't have any liquidity positions yet
             </p>

@@ -310,7 +310,7 @@ const TransactionHistory: React.FC = () => {
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8">
+    <div className="max-w-5xl mx-auto space-y-8 pb-24 min-h-[calc(100vh-220px)]">
       <div className="card">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
           <div>

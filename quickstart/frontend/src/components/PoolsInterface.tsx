@@ -306,7 +306,7 @@ const PoolsInterface: React.FC = () => {
       {/* Info Card */}
       <div className="glass-subtle rounded-2xl p-6">
         <div className="flex items-start space-x-3">
-          <div className="text-2xl">💡</div>
+          <div className="text-2xl"></div>
           <div>
             <h3 className="font-semibold mb-2 text-gray-900 dark:text-gray-100">
               About Liquidity Pools

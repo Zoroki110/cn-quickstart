@@ -885,24 +885,26 @@ export class BackendApiService {
     // Legacy mapper (kept for compatibility if called elsewhere)
     const tokenA = data.tokenA || { symbol: data.symbolA, name: data.symbolA, decimals: 10 };
     const tokenB = data.tokenB || { symbol: data.symbolB, name: data.symbolB, decimals: 10 };
+    const displayA = this.displaySymbol(tokenA.symbol);
+    const displayB = this.displaySymbol(tokenB.symbol);
     return {
       contractId: data.poolId || data.contractId || '',
       poolId: data.poolId || data.contractId || '',
       tokenA: {
-        symbol: tokenA.symbol,
-        name: tokenA.name,
+        symbol: displayA,
+        name: displayA,
         decimals: tokenA.decimals,
         balance: 0,
         contractId: '',
-        logoUrl: this.getTokenLogo(tokenA.symbol),
+        logoUrl: this.getTokenLogo(displayA),
       },
       tokenB: {
-        symbol: tokenB.symbol,
-        name: tokenB.name,
+        symbol: displayB,
+        name: displayB,
         decimals: tokenB.decimals,
         balance: 0,
         contractId: '',
-        logoUrl: this.getTokenLogo(tokenB.symbol),
+        logoUrl: this.getTokenLogo(displayB),
       },
       reserveA: parseFloat(data.reserveA ?? data.reserveAmountA ?? 0),
       reserveB: parseFloat(data.reserveB ?? data.reserveAmountB ?? 0),
@@ -914,8 +916,10 @@ export class BackendApiService {
   }
 
   private mapHoldingPool(row: any): PoolInfo {
-    const tokenA = { symbol: row.instrumentA?.id || 'A', name: row.instrumentA?.id || 'A', decimals: 10 };
-    const tokenB = { symbol: row.instrumentB?.id || 'B', name: row.instrumentB?.id || 'B', decimals: 10 };
+    const symA = this.displaySymbol(row.instrumentA?.id || 'A');
+    const symB = this.displaySymbol(row.instrumentB?.id || 'B');
+    const tokenA = { symbol: symA, name: symA, decimals: 10 };
+    const tokenB = { symbol: symB, name: symB, decimals: 10 };
     const feeRate = row.feeBps ? Number(row.feeBps) / 10000 : 0.003;
     return {
       contractId: row.contractId || '',
@@ -943,6 +947,10 @@ export class BackendApiService {
       apr: 0,
       volume24h: 0,
     };
+  }
+
+  private displaySymbol(symbol: string): string {
+    return symbol === 'Amulet' ? 'CC' : symbol;
   }
 
   // Map party-scoped row to PoolInfo (row contains poolId, poolCid, symbolA/B, reserveA/B)

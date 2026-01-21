@@ -124,7 +124,7 @@ const TransactionHistory: React.FC = () => {
       setTransactions(entries);
     } catch (err) {
       console.error('Failed to load transaction history:', err);
-      setError('Impossible de charger l’historique. Réessayez dans un instant.');
+      setError('Unable to load history. Please try again shortly.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -322,7 +322,7 @@ const TransactionHistory: React.FC = () => {
             className="btn-secondary flex items-center justify-center gap-2 px-4 py-2"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-            Actualiser
+            Refresh
           </button>
         </div>
         {error && (
@@ -332,8 +332,8 @@ const TransactionHistory: React.FC = () => {
         )}
         {visibleTransactions.length === 0 ? (
           <div className="text-center py-20">
-            <p className="text-gray-500 dark:text-gray-400 mb-2">Aucune transaction disponible pour le moment.</p>
-            <p className="text-sm text-gray-400">Exécutez un swap ou un ajout de liquidité pour voir l'historique.</p>
+            <p className="text-gray-500 dark:text-gray-400 mb-2">No transactions available yet.</p>
+            <p className="text-sm text-gray-400">Run a swap or add liquidity to see your history.</p>
           </div>
         ) : (
           <div className="space-y-8">
@@ -374,7 +374,7 @@ const TransactionHistory: React.FC = () => {
                   <div>
                     <p className="text-sm text-accent-600 font-semibold uppercase tracking-wide">{selectedTransaction.title}</p>
                     <h3 className="text-responsive-lg font-semibold mt-1 text-gray-900 dark:text-gray-100">
-                      {selectedTransaction.tokenA}/{selectedTransaction.tokenB}
+                      {(selectedTransaction.tokenA === 'Amulet' ? 'CC' : selectedTransaction.tokenA)}/{selectedTransaction.tokenB}
                     </h3>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
                       Created {formatDateTime(selectedTransaction.createdAt)}

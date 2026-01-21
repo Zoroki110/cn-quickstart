@@ -35,39 +35,7 @@ const PARTY_MAPPING: Record<string, string> = {
   'app-provider': DEVNET_PARTY,
 };
 
-const FALLBACK_TRANSACTIONS: TransactionHistoryEntry[] = [
-  {
-    id: 'demo-add-liquidity-001',
-    title: 'AddLiquidity Transaction',
-    type: 'ADD_LIQUIDITY',
-    status: 'settled',
-    createdAt: '2025-11-15T19:45:00Z',
-    expiresAt: '2025-11-15T20:46:00Z',
-    tokenA: 'CC',
-    tokenB: 'PP',
-    amountADesired: '1950',
-    amountBDesired: '1950',
-    minLpAmount: '1940',
-    lpTokenSymbol: 'LP-CC-PP',
-    contractId: '00b69dbaaa12f291cc65c5377c7b5d11baba199397af2bfdc5ed5757d50d2806d3ca111220d53ee8f31b108591e1517f7787c6adedc2b2386e86c65da1bf100e112392dc9f',
-    eventTimeline: [
-      {
-        id: 'demo-add-liquidity-001-evt-1',
-        title: 'Add Liquidity Settled',
-        description: 'Added 1.95K CC / 1.95K PP and received 1.95K LP tokens.',
-        status: 'completed',
-        timestamp: '2025-11-15T19:46:00Z',
-      },
-      {
-        id: 'demo-add-liquidity-001-evt-2',
-        title: 'Intent Archived',
-        description: 'Transaction was archived.',
-        status: 'completed',
-        timestamp: '2025-11-15T19:47:00Z',
-      },
-    ],
-  },
-];
+const FALLBACK_TRANSACTIONS: TransactionHistoryEntry[] = [];
 
 /**
  * Map frontend party name to Canton party ID
@@ -438,33 +406,18 @@ export class BackendApiService {
   }
 
   /**
-   * Get all active pools, preferring the public directory but falling back to the party-specific view when needed.
+   * Get all active pools from holding-pools endpoint (single source of truth).
    */
   async getPools(): Promise<PoolInfo[]> {
-    let publicPools: PoolInfo[] = [];
-
     try {
-      const res = await this.client.get('/api/pools');
-      const poolData = Array.isArray(res.data) ? res.data : [];
-      publicPools = poolData.map((data: any) => this.mapPool(data));
-    } catch (error) {
-      console.warn('Public pools fetch failed', error);
+      const res = await this.client.get('/api/holding-pools');
+      const rows = Array.isArray(res.data) ? res.data : [];
+      const pools = rows.map((row: any) => this.mapHoldingPool(row));
+      return this.normalizePools(pools);
+    } catch (err) {
+      console.error('holding-pools fetch failed', err);
+      return [];
     }
-
-    if (publicPools.length > 0) {
-      return this.normalizePools(publicPools);
-    }
-
-    try {
-      const fallbackPools = await this.loadPartyScopedPools();
-      if (fallbackPools.length > 0) {
-        return this.normalizePools(fallbackPools);
-      }
-    } catch (fallbackErr) {
-      console.error('Fallback pool loader failed', fallbackErr);
-    }
-
-    return [];
   }
 
   private async loadPartyScopedPools(): Promise<PoolInfo[]> {
@@ -929,13 +882,12 @@ export class BackendApiService {
 
   // Helper: Map backend pool DTO to frontend PoolInfo
   private mapPool(data: any): PoolInfo {
-    // Use new tokenA/tokenB objects if available, fallback to deprecated symbolA/symbolB
+    // Legacy mapper (kept for compatibility if called elsewhere)
     const tokenA = data.tokenA || { symbol: data.symbolA, name: data.symbolA, decimals: 10 };
     const tokenB = data.tokenB || { symbol: data.symbolB, name: data.symbolB, decimals: 10 };
-
     return {
-      contractId: data.poolId || '',
-      poolId: data.poolId || '',
+      contractId: data.poolId || data.contractId || '',
+      poolId: data.poolId || data.contractId || '',
       tokenA: {
         symbol: tokenA.symbol,
         name: tokenA.name,
@@ -952,12 +904,44 @@ export class BackendApiService {
         contractId: '',
         logoUrl: this.getTokenLogo(tokenB.symbol),
       },
-      reserveA: parseFloat(data.reserveA),
-      reserveB: parseFloat(data.reserveB),
-      totalLiquidity: parseFloat(data.totalLPSupply || 0),
-      feeRate: data.feeRate || 0.003,
-      apr: 0, // TODO: Calculate from volume/liquidity metrics
-      volume24h: parseFloat(data.volume24h || 0), // Real 24h volume from backend
+      reserveA: parseFloat(data.reserveA ?? data.reserveAmountA ?? 0),
+      reserveB: parseFloat(data.reserveB ?? data.reserveAmountB ?? 0),
+      totalLiquidity: parseFloat(data.totalLPSupply ?? data.lpSupply ?? 0),
+      feeRate: data.feeRate ?? (data.feeBps ? Number(data.feeBps) / 10000 : 0.003),
+      apr: 0,
+      volume24h: parseFloat(data.volume24h ?? 0),
+    };
+  }
+
+  private mapHoldingPool(row: any): PoolInfo {
+    const tokenA = { symbol: row.instrumentA?.id || 'A', name: row.instrumentA?.id || 'A', decimals: 10 };
+    const tokenB = { symbol: row.instrumentB?.id || 'B', name: row.instrumentB?.id || 'B', decimals: 10 };
+    const feeRate = row.feeBps ? Number(row.feeBps) / 10000 : 0.003;
+    return {
+      contractId: row.contractId || '',
+      poolId: row.contractId || '',
+      tokenA: {
+        symbol: tokenA.symbol,
+        name: tokenA.name,
+        decimals: tokenA.decimals,
+        balance: 0,
+        contractId: '',
+        logoUrl: this.getTokenLogo(tokenA.symbol),
+      },
+      tokenB: {
+        symbol: tokenB.symbol,
+        name: tokenB.name,
+        decimals: tokenB.decimals,
+        balance: 0,
+        contractId: '',
+        logoUrl: this.getTokenLogo(tokenB.symbol),
+      },
+      reserveA: parseFloat(row.reserveAmountA ?? 0),
+      reserveB: parseFloat(row.reserveAmountB ?? 0),
+      totalLiquidity: parseFloat(row.lpSupply ?? 0),
+      feeRate,
+      apr: 0,
+      volume24h: 0,
     };
   }
 

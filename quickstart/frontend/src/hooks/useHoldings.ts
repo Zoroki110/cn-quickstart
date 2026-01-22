@@ -39,6 +39,7 @@ export function useHoldings(params: { partyId?: string | null; walletType?: stri
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [loopRetry, setLoopRetry] = useState(0);
+  const [zoroRetry, setZoroRetry] = useState(0);
 
   const load = useCallback(async () => {
     if (!partyId) {
@@ -75,6 +76,30 @@ export function useHoldings(params: { partyId?: string | null; walletType?: stri
         }
       }
 
+      if (walletType === "zoro") {
+        const connector = (walletManager as any).getZoroConnector?.();
+        if (!connector) {
+          if (zoroRetry < 3) {
+            setZoroRetry((r) => r + 1);
+            setTimeout(() => load(), 500);
+          }
+          setLoading(false);
+          return;
+        }
+        try {
+          const zoroHoldings = await (connector as any).getHoldings();
+          const normalized = Array.isArray(zoroHoldings)
+            ? (zoroHoldings.map(normalizeZoroHolding).filter(Boolean) as HoldingSummary[])
+            : [];
+          const aggregated = aggregateHoldings(normalized);
+          setHoldings(aggregated);
+          setLoading(false);
+          return;
+        } catch (err) {
+          console.warn("[Zoro] getHoldings failed, fallback to backend", err);
+        }
+      }
+
       // Default path: backend API.
       const data = await apiGet<HoldingsResponse>(`/api/holdings/${encodeURIComponent(partyId)}`);
       const normalized = Array.isArray(data)
@@ -88,7 +113,7 @@ export function useHoldings(params: { partyId?: string | null; walletType?: stri
     } finally {
       setLoading(false);
     }
-  }, [partyId, walletType, loopRetry]);
+  }, [partyId, walletType, loopRetry, zoroRetry]);
 
   useEffect(() => {
     load();
@@ -172,4 +197,55 @@ function normalizeLoopHolding(raw: Record<string, unknown>): HoldingSummary | nu
   const quantity = decimalAddStrings(totalUnlocked, totalLocked);
 
   return { symbol, quantity, decimals, displayName };
+}
+
+function normalizeZoroHolding(raw: Record<string, unknown>): HoldingSummary | null {
+  if (!raw) return null;
+  const instrumentId =
+    (raw as any)?.instrument?.id ??
+    (raw as any)?.instrumentId?.id ??
+    (raw as any)?.instrument_id?.id ??
+    (raw as any)?.instrumentId ??
+    (raw as any)?.assetCode ??
+    (raw as any)?.symbol;
+
+  let symbol = String(instrumentId ?? "UNKNOWN").toUpperCase();
+  let displayName: string | undefined = (raw as any)?.name ?? (raw as any)?.displayName;
+
+  if (instrumentId === "Amulet" || symbol === "AMULET") {
+    symbol = "CC";
+    displayName = "Canton Coin";
+  }
+
+  const quantityCandidate =
+    (raw as any)?.amount ?? (raw as any)?.quantity ?? (raw as any)?.balance ?? (raw as any)?.value ?? "0";
+  const quantity =
+    typeof quantityCandidate === "string" ? quantityCandidate : String(quantityCandidate ?? "0");
+
+  const decimalsCandidate = (raw as any)?.decimals ?? (raw as any)?.precision ?? 10;
+  const decimals =
+    typeof decimalsCandidate === "number" && Number.isFinite(decimalsCandidate)
+      ? decimalsCandidate
+      : parseInt(String(decimalsCandidate), 10) || 10;
+
+  return { symbol, quantity, decimals, displayName };
+}
+
+function aggregateHoldings(items: HoldingSummary[]): HoldingSummary[] {
+  const map = new Map<string, HoldingSummary>();
+  for (const item of items) {
+    const existing = map.get(item.symbol);
+    if (!existing) {
+      map.set(item.symbol, { ...item });
+      continue;
+    }
+    const quantity = decimalAddStrings(existing.quantity, item.quantity);
+    map.set(item.symbol, {
+      symbol: item.symbol,
+      quantity,
+      decimals: existing.decimals ?? item.decimals,
+      displayName: existing.displayName || item.displayName,
+    });
+  }
+  return Array.from(map.values());
 }

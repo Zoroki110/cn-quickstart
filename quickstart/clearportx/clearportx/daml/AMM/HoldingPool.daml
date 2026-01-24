@@ -1,0 +1,48 @@
+module AMM.HoldingPool where
+
+import DA.Time (Time)
+import Splice.Api.Token.HoldingV1.Holding (Holding)
+
+data PoolStatus = Uninitialized | Active | Paused
+
+template HoldingPool
+  with
+    poolId : Text
+    operator : Party
+    instrumentA : {admin : Party, id : Text}
+    instrumentB : {admin : Party, id : Text}
+    status : PoolStatus
+    feeBps : Int
+    createdAt : Time
+    reserveHoldingA : Optional (ContractId Holding)
+    reserveHoldingB : Optional (ContractId Holding)
+  where
+    signatory operator
+
+    -- Pause the pool
+    nonconsuming choice SetPaused : ContractId HoldingPool
+      controller operator
+      do
+        archive self
+        create this with status = Paused
+
+    -- Resume the pool
+    nonconsuming choice SetActive : ContractId HoldingPool
+      controller operator
+      do
+        archive self
+        create this with status = Active
+
+    -- Placeholder bootstrap: record reserve holding CIDs without moving tokens.
+    nonconsuming choice Bootstrap : ContractId HoldingPool
+      with
+        reserveA : Optional (ContractId Holding)
+        reserveB : Optional (ContractId Holding)
+      controller operator
+      do
+        archive self
+        create this with
+          status = Active
+          reserveHoldingA = reserveA
+          reserveHoldingB = reserveB
+

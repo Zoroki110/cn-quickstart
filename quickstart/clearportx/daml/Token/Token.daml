@@ -97,6 +97,18 @@ template Token
         archive self
         return newCid
 
+    -- Drain : deduct from token balance (safe for concurrent swaps)
+    -- Archives old CID immediately after creating new one, preventing double-spend
+    nonconsuming choice Drain : ContractId Token
+      with qty : Numeric 10
+      controller owner
+      do
+        assertMsg "Positive drain" (qty > 0.0)
+        assertMsg "Sufficient balance for drain" (qty <= amount)
+        newCid <- create this with amount = amount - qty
+        archive self
+        return newCid
+
     -- Merge: Consolidate two tokens into one (for reserve consolidation)
     -- Used to prevent token fragmentation after multiple transfers
     nonconsuming choice Merge : ContractId Token

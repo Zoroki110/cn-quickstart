@@ -30,6 +30,7 @@ createPoolWithLiquidity poolOperator poolParty lpIssuer issuerA issuerB provider
     protocolFeeReceiver = clearportx
     maxInBps = 10000
     maxOutBps = 5000
+    extraObservers = []
 
   -- Create tokens for provider
   tokenA <- submit issuerA $ createCmd T.Token with

@@ -72,6 +72,11 @@ ledger:
   port: ${LEDGER_API_PORT:5001}
   tls: false  # Local participant doesn't use TLS
   max-inbound-message-size: 10000000  # 10 MB
+  registry-base-uri: ${LEDGER_REGISTRY_BASE_URI:https://scan.sv-1.dev.global.canton.network.digitalasset-dev.com}
+  registry:
+    by-admin: ${LEDGER_REGISTRY_BY_ADMIN:{"cbtc-network::12202a83c6f4082217c175e29bc53da5f2703ba2675778ab99217a5a881a949203ff":{"baseUri":"https://api.utilities.digitalasset-dev.com","kind":"UTILITIES_TOKEN_STANDARD"}}}
+  registry-auth-header: ${LEDGER_REGISTRY_AUTH_HEADER:}
+  registry-auth-token: ${LEDGER_REGISTRY_AUTH_TOKEN:}
 
 # PQS Configuration
 pqs:

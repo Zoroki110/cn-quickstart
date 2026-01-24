@@ -48,9 +48,10 @@ template Pool
     protocolFeeReceiver : Party -- ClearportX treasury (receives 25% of fees)
     maxInBps : Int              -- Max input as % of reserve (e.g., 10000 = 100%)
     maxOutBps : Int             -- Max output as % of reserve (e.g., 5000 = 50%)
+    extraObservers : [Party]    -- Dynamic observers granted via GrantVisibility
   where
     signatory poolOperator
-    observer poolParty, lpIssuer, issuerA, issuerB, protocolFeeReceiver
+    observer poolParty, lpIssuer, issuerA, issuerB, protocolFeeReceiver, extraObservers
 
     -- NO KEY: DAML 3.x does not support contract keys
     -- Pool discovery is handled by PoolAnnouncement template
@@ -114,15 +115,13 @@ template Pool
         -- Slippage protection
         assertMsg "Slippage: LP tokens below minimum" (lpTokensToMint >= minLPTokens)
 
-        -- Transfer tokens to pool (skip transfer if provider == poolParty for bootstrap)
+        -- Transfer tokens to pool (always create fresh CIDs for consolidation)
         -- Token.Transfer has controller owner (provider), so provider authorizes
-        newTokenAFromProvider <- if provider == poolParty
-          then return tokenACid  -- Bootstrap: provider owns pool, just use tokens directly
-          else exercise tokenACid T.Transfer with recipient = poolParty, qty = amountA
+        newTokenAFromProvider <-
+          exercise tokenACid T.Transfer with recipient = poolParty, qty = amountA
 
-        newTokenBFromProvider <- if provider == poolParty
-          then return tokenBCid  -- Bootstrap: provider owns pool, just use tokens directly
-          else exercise tokenBCid T.Transfer with recipient = poolParty, qty = amountB
+        newTokenBFromProvider <-
+          exercise tokenBCid T.Transfer with recipient = poolParty, qty = amountB
 
         -- CONSOLIDATION: Merge with existing pool tokens if they exist
         -- Use 'this.tokenACid' to refer to the Pool's field (not the choice parameter)
@@ -330,6 +329,17 @@ template Pool
           tokenACid = updatedTokenACid
           tokenBCid = updatedTokenBCid
 
+    -- Grant visibility to a new party
+    -- This is essential for traders to see the pool and execute swaps
+    choice GrantVisibility : ContractId Pool
+      with
+        newObserver : Party
+      controller poolOperator
+      do
+        -- Add the new observer to the pool
+        create this with
+          extraObservers = newObserver :: extraObservers
+
     -- ATOMIC SWAP: Single-step swap without intermediate SwapReady contract
     -- This avoids the poolCid staleness issue with the two-step PrepareSwap/ExecuteSwap flow
     nonconsuming choice AtomicSwap : (ContractId T.Token, ContractId Pool)
@@ -375,17 +385,21 @@ template Pool
         let poolFeeAmount = totalFeeAmount - protocolFeeAmount
         let amountAfterProtocolFee = inputAmount - protocolFeeAmount
 
-        -- Split trader's input token: protocol fee + amount for pool
-        (maybeProtocolFeeCid, remainderCid) <- exercise traderInputTokenCid T.TransferSplit with
-          recipient = protocolFeeReceiver
-          qty = protocolFeeAmount
+        -- DRAIN+CREDIT PATTERN: Safe token operations preventing double-spend
+        -- Step 1: Drain trader's input token (deduct full amount, archives old CID)
+        newTraderInputCid <- exercise traderInputTokenCid T.Drain with qty = inputAmount
 
-        let Some protocolFeeCid = maybeProtocolFeeCid
+        -- Step 2: Create protocol fee token (new token for treasury)
+        let inputIssuer = if isAtoB then issuerA else issuerB
+        protocolFeeCid <- create T.Token with
+          issuer = inputIssuer
+          owner = protocolFeeReceiver
+          symbol = inputSymbol
+          amount = protocolFeeAmount
 
-        -- Transfer remainder to poolParty
-        poolInputTokenCid <- exercise remainderCid T.Transfer with
-          recipient = poolParty
-          qty = amountAfterProtocolFee
+        -- Step 3: Credit pool's canonical input token (add to existing pool reserve)
+        let Some poolInCanonical = poolInCidCanonical
+        newPoolInCid <- exercise poolInCanonical T.Credit with qty = amountAfterProtocolFee
 
         -- Calculate swap output with pool fee applied
         let feeMul = (10000.0 - intToDecimal feeBps) / 10000.0
@@ -408,18 +422,21 @@ template Pool
         let impBps = abs(pAfter - pBefore) / pBefore * 10000.0
         assertMsg "Price impact too high" (impBps <= intToDecimal maxPriceImpactBps)
 
-        -- Consolidate pool's input tokens
-        consolidatedInCid <- case poolInCidCanonical of
-          None -> return poolInputTokenCid
-          Some canonicalCid -> exercise canonicalCid T.Merge with otherTokenCid = poolInputTokenCid
-
-        -- Transfer output to trader
+        -- Step 4: Drain pool's output token (deduct swap output)
         let Some canonicalOutCid = poolOutCidCanonical
-        (maybePoolOutRemainder, traderOutputCid) <- exercise canonicalOutCid T.TransferSplit with
-          recipient = trader
-          qty = aout
+        newPoolOutCid <- exercise canonicalOutCid T.Drain with qty = aout
 
-        let Some poolOutRemainderCid = maybePoolOutRemainder
+        -- Step 5: Create trader's output token (new token for trader)
+        let outputIssuer = if isAtoB then issuerB else issuerA
+        traderOutputCid <- create T.Token with
+          issuer = outputIssuer
+          owner = trader
+          symbol = outputSymbol
+          amount = aout
+
+        -- No need to consolidate since we used Credit on pool's canonical token
+        let consolidatedInCid = newPoolInCid
+        let poolOutRemainderCid = newPoolOutCid
 
         -- Calculate new reserves
         let newReserveA = if isAtoB

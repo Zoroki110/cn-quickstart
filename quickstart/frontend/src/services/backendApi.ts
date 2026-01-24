@@ -1253,7 +1253,8 @@ export class BackendApiService {
     owner: string;
   }>> {
     try {
-      const res = await this.client.get(`/api/holdings/${party}/utxos`);
+      const encodedParty = encodeURIComponent(party);
+      const res = await this.client.get(`/api/holdings/${encodedParty}/utxos`);
       const utxos = Array.isArray(res.data) ? res.data : [];
 
       // Filter for CBTC holdings (instrumentId = "CBTC")
@@ -1293,7 +1294,8 @@ export class BackendApiService {
 
   async getHoldingUtxos(party: string, ownerOnly = true): Promise<any> {
     try {
-      const res = await this.client.get(`/api/holdings/${party}/utxos`, {
+      const encodedParty = encodeURIComponent(party);
+      const res = await this.client.get(`/api/holdings/${encodedParty}/utxos`, {
         params: { ownerOnly },
       });
       return res.data;

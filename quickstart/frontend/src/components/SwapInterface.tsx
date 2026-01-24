@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../stores';
 import { useContractStore } from '../stores/useContractStore';
 import { backendApi } from '../services/backendApi';
@@ -7,15 +6,28 @@ import { TokenInfo, SwapQuote, PoolInfo } from '../types/canton';
 import TokenSelector from './TokenSelector';
 import SlippageSettings from './SlippageSettings';
 import toast from 'react-hot-toast';
-import { useWalletAuth } from '../wallet';
-import { useLegacyBalances } from '../hooks';
+import { useWalletAuth, walletManager } from '../wallet';
+import { useUtxoBalances } from '../hooks';
+import { submitTx } from '../loop/submitTx';
+import { getLoopProvider } from '../loop/loopProvider';
 import { calculateSwapQuoteFromPool } from '../utils/poolMath';
 
+const AMULET_ADMIN = 'DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a';
+const AMULET_ID = 'Amulet';
+const CBTC_ADMIN = 'cbtc-network::12202a83c6f4082217c175e29bc53da5f2703ba2675778ab99217a5a881a949203ff';
+const CBTC_ID = 'CBTC';
+const OPERATOR_PARTY =
+  process.env.REACT_APP_OPERATOR_PARTY_ID ||
+  process.env.REACT_APP_PARTY_ID ||
+  'ClearportX-DEX-1::122081f2b8e29cbe57d1037a18e6f70e57530773b3a4d1bea6bab981b7a76e943b37';
+
 const SwapInterface: React.FC = () => {
-  const queryClient = useQueryClient();
   const { selectedTokens, setSelectedTokens, swapTokens: swapSelectedTokens, slippage } = useAppStore();
-  const { partyId } = useWalletAuth();
-  const { balances: legacyBalances, reload: reloadLegacyBalances } = useLegacyBalances(partyId || null);
+  const { partyId, walletType } = useWalletAuth();
+  const { balances: utxoBalances, reload: reloadBalances } = useUtxoBalances(partyId || null, {
+    ownerOnly: true,
+    refreshIntervalMs: 15000,
+  });
   const [inputAmount, setInputAmount] = useState('');
   const [outputAmount, setOutputAmount] = useState('');
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
@@ -25,6 +37,8 @@ const SwapInterface: React.FC = () => {
   const [showFromSelector, setShowFromSelector] = useState(false);
   const [showToSelector, setShowToSelector] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [swapResult, setSwapResult] = useState<any>(null);
+  const [swapStatus, setSwapStatus] = useState<string | null>(null);
   const [pools, setPools] = useState<PoolInfo[]>([]);
   const [volume24h, setVolume24h] = useState<number>(0);
   const lastConnectedParty = useRef<string | null>(null);
@@ -58,12 +72,25 @@ const SwapInterface: React.FC = () => {
     return `$${value.toFixed(0)}`;
   };
 
+  const balancesBySymbol = useMemo(() => {
+    const map: Record<string, { amount: string; decimals: number }> = {};
+    Object.values(utxoBalances).forEach((entry) => {
+      const symbol = instrumentIdToSymbol(entry.instrumentId);
+      const existing = map[symbol];
+      map[symbol] = {
+        amount: existing ? decimalAddStrings(existing.amount, entry.amount) : entry.amount,
+        decimals: existing?.decimals ?? entry.decimals,
+      };
+    });
+    return map;
+  }, [utxoBalances]);
+
   const getBalanceEntry = useCallback((symbol?: string) => {
     if (!symbol) {
       return undefined;
     }
-    return legacyBalances[symbol.toUpperCase()];
-  }, [legacyBalances]);
+    return balancesBySymbol[symbol.toUpperCase()];
+  }, [balancesBySymbol]);
 
   const formatBalanceDisplay = useCallback((symbol?: string) => {
     const entry = getBalanceEntry(symbol);
@@ -88,33 +115,35 @@ const SwapInterface: React.FC = () => {
 
   const parsedInputAmount = parseFloat(inputAmount || '0');
   const normalizedInputAmount = Number.isFinite(parsedInputAmount) ? parsedInputAmount : 0;
-  const insufficientBalance = Boolean(partyId && selectedTokens.from && normalizedInputAmount > getNumericBalance(selectedTokens.from.symbol));
+  const insufficientBalance = Boolean(
+    partyId && selectedTokens.from && normalizedInputAmount > getNumericBalance(selectedTokens.from.symbol)
+  );
   const disableSwap = loading || !partyId || !selectedTokens.from || !selectedTokens.to || !inputAmount || !quote || insufficientBalance;
 
   useEffect(() => {
     const previous = lastConnectedParty.current;
     if (partyId && partyId !== previous) {
-      reloadLegacyBalances();
+      reloadBalances();
     }
     if (!partyId) {
       lastConnectedParty.current = null;
       return;
     }
     lastConnectedParty.current = partyId;
-  }, [partyId, reloadLegacyBalances]);
+  }, [partyId, reloadBalances]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
     const handleWalletConnected = () => {
-      reloadLegacyBalances();
+      reloadBalances();
     };
     window.addEventListener('clearportx:wallet:connected', handleWalletConnected as EventListener);
     return () => {
       window.removeEventListener('clearportx:wallet:connected', handleWalletConnected as EventListener);
     };
-  }, [reloadLegacyBalances]);
+  }, [reloadBalances]);
 
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
@@ -132,26 +161,9 @@ const SwapInterface: React.FC = () => {
             uniqueTokensMap.set(pool.tokenB.symbol, { ...pool.tokenB, balance: 0 });
           }
         });
-
-        let tokensWithBalances = Array.from(uniqueTokensMap.values()).map(token => ({ ...token, balance: 0 }));
-
-        if (partyId) {
-          try {
-            const userTokens = await backendApi.getWalletTokens(partyId);
-            tokensWithBalances = tokensWithBalances.map(token => {
-              const userToken = userTokens.find(t => t.symbol === token.symbol);
-              return {
-                ...token,
-                balance: userToken?.balance || 0,
-              };
-            });
-          } catch (balanceError) {
-            console.warn('Failed to load wallet tokens for party', balanceError);
-          }
-        }
-
-        setTokens(tokensWithBalances);
-        useContractStore.getState().setTokens(tokensWithBalances);
+        const tokensList = Array.from(uniqueTokensMap.values()).map(token => ({ ...token, balance: 0 }));
+        setTokens(tokensList);
+        useContractStore.getState().setTokens(tokensList);
       } catch (error) {
         console.error('Error loading tokens:', error);
         toast.error('Failed to load tokens from backend');
@@ -159,7 +171,7 @@ const SwapInterface: React.FC = () => {
     };
 
     loadTokens();
-  }, [partyId]);
+  }, []);
 
   // Compute 24h volume for selected pair from current pools
   useEffect(() => {
@@ -229,6 +241,11 @@ const SwapInterface: React.FC = () => {
       return;
     }
 
+    if (walletType && walletType !== 'loop') {
+      toast.error('Loop wallet required to submit swaps');
+      return;
+    }
+
     const amount = parseFloat(inputAmount);
     if (isNaN(amount) || amount <= 0) {
       toast.error('Please enter a valid amount');
@@ -248,88 +265,99 @@ const SwapInterface: React.FC = () => {
 
     try {
       setLoading(true);
-      const minOutput = quote.outputAmount * (1 - slippage / 100);
+      setSwapResult(null);
+      setSwapStatus(null);
 
-      const response = await backendApi.executeAtomicSwap({
-        poolId: resolvedPoolId,
-        inputSymbol: selectedTokens.from.symbol,
-        outputSymbol: selectedTokens.to.symbol,
-        inputAmount: amount.toFixed(10),
-        minOutput: minOutput.toFixed(10),
-        maxPriceImpactBps: Math.round(slippage * 100),
-      });
-
-      const rawAmountOut = Number(response.amountOut);
-      const fallbackAmount = quote?.outputAmount ?? 0;
-      const displayAmount =
-        Number.isFinite(rawAmountOut) && rawAmountOut < 1_000
-          ? rawAmountOut
-          : fallbackAmount;
-      toast.success(`Swap successful! Received ${displayAmount.toFixed(4)} ${response.outputSymbol}`);
-
-      if (partyId) {
-        let updatedTokens = await backendApi.getWalletTokens(partyId);
-        for (let i = 0; i < 6; i++) {
-          await new Promise(resolve => setTimeout(resolve, 600));
-          const next = await backendApi.getWalletTokens(partyId);
-          const fromBal = next.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
-          const toBal = next.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;
-          const prevFromBal = updatedTokens.find(t => t.symbol === selectedTokens.from?.symbol)?.balance ?? 0;
-          const prevToBal = updatedTokens.find(t => t.symbol === selectedTokens.to?.symbol)?.balance ?? 0;
-          if (fromBal !== prevFromBal || toBal !== prevToBal) {
-            updatedTokens = next;
-            break;
-          }
-          updatedTokens = next;
-        }
-        setTokens(updatedTokens);
-        useContractStore.getState().setTokens(updatedTokens);
-
-        const updatedFrom = updatedTokens.find(t => t.symbol === selectedTokens.from?.symbol);
-        const updatedTo = updatedTokens.find(t => t.symbol === selectedTokens.to?.symbol);
-        if (updatedFrom && updatedTo) {
-          setSelectedTokens({ from: updatedFrom, to: updatedTo });
-        }
+      const instrument = resolveInstrumentForSymbol(selectedTokens.from.symbol);
+      if (!instrument) {
+        toast.error('Unsupported token for swap');
+        return;
       }
 
-      await reloadLegacyBalances();
-      queryClient.invalidateQueries({ queryKey: ['tokens'] });
-      queryClient.invalidateQueries({ queryKey: ['pools'] });
+      const minOutput = quote.outputAmount * (1 - slippage / 100);
+      const minOutputStr = minOutput.toFixed(10);
+      const poolCid = activePool?.contractId || resolvedPoolId;
+      const direction = resolveSwapDirection(activePool, selectedTokens.from.symbol, selectedTokens.to.symbol);
+      if (!direction) {
+        toast.error('Token selection does not match active pool');
+        return;
+      }
 
-      setInputAmount('');
-      setOutputAmount('');
-      setQuote(null);
+      const deadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+      const memoPayload = {
+        v: 1,
+        poolCid,
+        direction,
+        minOut: minOutputStr,
+        receiverParty: partyId,
+        deadline,
+      };
+      const memo = JSON.stringify(memoPayload);
+
+      const connector = walletManager.getOrCreateLoopConnector();
+      const status = await connector.ensureConnected(`swap-${Date.now()}`);
+      if (!status.connected || !getLoopProvider()) {
+        const message = status.error || 'Loop not connected';
+        setSwapResult({ ok: false, error: { code: 'CONNECT', message } });
+        toast.error(message);
+        return;
+      }
+
+      const prepared = await prepareLoopTransfer(getLoopProvider(), {
+        recipient: OPERATOR_PARTY,
+        amount: amount.toFixed(10),
+        instrument,
+        memo,
+        executeBefore: deadline,
+      });
+
+      const commands = extractPreparedCommands(prepared);
+      if (commands.length === 0) {
+        setSwapResult({
+          ok: false,
+          error: { code: 'PREPARE', message: 'Transfer preparation returned no commands', details: prepared },
+        });
+        toast.error('Transfer preparation failed');
+        return;
+      }
+
+      setSwapStatus('Transaction submitted');
+      const result = await submitTx({
+        commands,
+        actAs: extractPreparedActAs(prepared, partyId),
+        readAs: extractPreparedReadAs(prepared, partyId),
+        deduplicationKey: `swap-${Date.now()}`,
+        memo,
+        mode: 'WAIT',
+        disclosedContracts: extractPreparedDisclosedContracts(prepared),
+        packageIdSelectionPreference: extractPreparedPackagePreference(prepared),
+        synchronizerId: extractPreparedSynchronizerId(prepared),
+      });
+      console.log('[Swap submitTx]', result);
+      setSwapResult(result);
+
+      if (result.ok && result.value.txStatus === 'SUCCEEDED') {
+        toast.success(`Transaction submitted (update ${result.value.ledgerUpdateId || 'pending'})`);
+        setInputAmount('');
+        setOutputAmount('');
+        setQuote(null);
+      } else if (result.ok) {
+        toast.error('Swap transaction failed');
+      } else {
+        toast.error(result.error.message);
+      }
     } catch (error: any) {
       console.error('Error executing swap:', error);
-
-      const httpStatus: number | undefined =
-        error?.httpStatus ?? error?.response?.status;
-      const code: string | undefined =
-        error?.code ?? error?.response?.data?.error;
       const message: string =
         error?.message ??
         error?.response?.data?.message ??
         error?.response?.data?.error ??
         'Unknown error';
-
-      if (httpStatus === 422 ||
-          /slippage|price impact|Min output not met/i.test(message) ||
-          code === 'SLIPPAGE_MIN_OUTPUT_NOT_MET' ||
-          code === 'PRICE_IMPACT_TOO_HIGH') {
-        toast.error(`Slippage/price impact too high. Try increasing tolerance in settings ⚙️`);
-      } else if (httpStatus === 429) {
-        toast.error('Rate limit exceeded. Please wait and try again.');
-      } else if (httpStatus === 401) {
-        toast.error('Authentication required. Please connect your wallet.');
-      } else if (httpStatus === 400) {
-        toast.error('Invalid swap parameters. Try reducing amount or increasing slippage ⚙️');
-      } else if (httpStatus === 409) {
-        toast.error('Temporary ledger visibility issue. Please try again.');
-      } else {
-        toast.error(`Swap failed: ${message}`);
-      }
+      setSwapResult({ ok: false, error: { code: 'ERROR', message, details: error } });
+      toast.error(`Swap failed: ${message}`);
     } finally {
       setLoading(false);
+      await reloadBalances();
     }
   };
 
@@ -549,7 +577,7 @@ const SwapInterface: React.FC = () => {
           {loading ? (
             <>
               <div className="spinner w-5 h-5"></div>
-              <span>Swapping...</span>
+              <span>Submitting...</span>
             </>
           ) : !partyId ? (
             'Connect Wallet'
@@ -559,6 +587,19 @@ const SwapInterface: React.FC = () => {
             'Swap Tokens'
           )}
         </button>
+
+        {(swapStatus || swapResult) && (
+          <div className="mt-4 glass-subtle rounded-xl p-4 text-sm">
+            {swapStatus && (
+              <div className="font-semibold text-gray-900 dark:text-gray-100">{swapStatus}</div>
+            )}
+            {swapResult && (
+              <pre className="mt-2 text-xs bg-gray-900 text-emerald-200 rounded-lg p-3 overflow-auto">
+                {JSON.stringify(swapResult, null, 2)}
+              </pre>
+            )}
+          </div>
+        )}
 
         {/* Quick Stats */}
         <div className="mt-6 grid grid-cols-3 gap-4">
@@ -591,7 +632,7 @@ const SwapInterface: React.FC = () => {
       <TokenSelector
         isOpen={showFromSelector}
         onClose={() => setShowFromSelector(false)}
-        balances={legacyBalances}
+        balances={balancesBySymbol}
         onSelect={(token) => {
           setSelectedTokens({ from: token });
           setShowFromSelector(false);
@@ -604,7 +645,7 @@ const SwapInterface: React.FC = () => {
       <TokenSelector
         isOpen={showToSelector}
         onClose={() => setShowToSelector(false)}
-        balances={legacyBalances}
+        balances={balancesBySymbol}
         onSelect={(token) => {
           setSelectedTokens({ to: token });
           setShowToSelector(false);
@@ -617,5 +658,145 @@ const SwapInterface: React.FC = () => {
     </div>
   );
 };
+
+type PreparedTransfer = Record<string, any>;
+
+type InstrumentRef = {
+  instrumentAdmin: string;
+  instrumentId: string;
+};
+
+function instrumentIdToSymbol(instrumentId?: string): string {
+  const raw = instrumentId || '';
+  const upper = raw.toUpperCase();
+  if (upper === 'AMULET') return 'CC';
+  return upper;
+}
+
+function resolveInstrumentForSymbol(symbol?: string): InstrumentRef | null {
+  if (!symbol) return null;
+  const upper = symbol.toUpperCase();
+  if (upper === 'CC' || upper === 'AMULET') {
+    return { instrumentAdmin: AMULET_ADMIN, instrumentId: AMULET_ID };
+  }
+  if (upper === 'CBTC') {
+    return { instrumentAdmin: CBTC_ADMIN, instrumentId: CBTC_ID };
+  }
+  return null;
+}
+
+function resolveSwapDirection(
+  pool: PoolInfo | null,
+  fromSymbol: string,
+  toSymbol: string
+): 'A2B' | 'B2A' | null {
+  if (!pool) return null;
+  const a = pool.tokenA.symbol.toUpperCase();
+  const b = pool.tokenB.symbol.toUpperCase();
+  const from = fromSymbol.toUpperCase();
+  const to = toSymbol.toUpperCase();
+  if (from === a && to === b) return 'A2B';
+  if (from === b && to === a) return 'B2A';
+  return null;
+}
+
+async function prepareLoopTransfer(
+  provider: any,
+  params: {
+    recipient: string;
+    amount: string;
+    instrument: InstrumentRef;
+    memo?: string;
+    executeBefore?: string;
+  }
+): Promise<PreparedTransfer> {
+  if (!provider) {
+    throw new Error('Loop provider is not connected');
+  }
+  const authToken = provider.auth_token ?? provider.authToken;
+  const connection = provider.connection ?? provider?.sdk?.connection;
+  const prepareTransfer = connection?.prepareTransfer;
+  if (!authToken || typeof prepareTransfer !== 'function') {
+    throw new Error('Loop provider does not expose transfer preparation');
+  }
+  const payload = {
+    recipient: params.recipient,
+    amount: params.amount,
+    instrument: {
+      instrument_admin: params.instrument.instrumentAdmin,
+      instrument_id: params.instrument.instrumentId,
+    },
+    requested_at: new Date().toISOString(),
+    execute_before: params.executeBefore,
+    memo: params.memo,
+  };
+  return prepareTransfer.call(connection, authToken, payload);
+}
+
+function extractPreparedCommands(prepared: PreparedTransfer): any[] {
+  const commands =
+    prepared?.commands ??
+    prepared?.payload?.commands ??
+    prepared?.commandPayload?.commands ??
+    prepared?.command_payload?.commands ??
+    [];
+  return Array.isArray(commands) ? commands : [];
+}
+
+function extractPreparedDisclosedContracts(prepared: PreparedTransfer): any[] | undefined {
+  const disclosed =
+    prepared?.disclosedContracts ??
+    prepared?.disclosed_contracts ??
+    prepared?.extraArgs?.disclosedContracts ??
+    prepared?.extra_args?.disclosed_contracts ??
+    [];
+  return Array.isArray(disclosed) && disclosed.length > 0 ? disclosed : undefined;
+}
+
+function extractPreparedPackagePreference(prepared: PreparedTransfer): string[] | undefined {
+  const pref =
+    prepared?.packageIdSelectionPreference ??
+    prepared?.package_id_selection_preference ??
+    prepared?.packageIdSelection ??
+    prepared?.package_id_selection ??
+    undefined;
+  return Array.isArray(pref) && pref.length > 0 ? pref : undefined;
+}
+
+function extractPreparedSynchronizerId(prepared: PreparedTransfer): string | undefined {
+  return prepared?.synchronizerId ?? prepared?.synchronizer_id ?? undefined;
+}
+
+function extractPreparedActAs(prepared: PreparedTransfer, fallback: string): string | string[] {
+  const actAs = prepared?.actAs ?? prepared?.act_as ?? prepared?.actAsParties ?? prepared?.act_as_parties;
+  return actAs || fallback;
+}
+
+function extractPreparedReadAs(prepared: PreparedTransfer, fallback: string): string | string[] | undefined {
+  const readAs = prepared?.readAs ?? prepared?.read_as ?? prepared?.readAsParties ?? prepared?.read_as_parties;
+  return readAs || fallback;
+}
+
+function decimalAddStrings(a: string, b: string): string {
+  const sa = a ?? '0';
+  const sb = b ?? '0';
+  const [ia, fa = ''] = sa.split('.');
+  const [ib, fb = ''] = sb.split('.');
+  const fracLen = Math.max(fa.length, fb.length);
+  const normFa = (fa + '0'.repeat(fracLen)).slice(0, fracLen);
+  const normFb = (fb + '0'.repeat(fracLen)).slice(0, fracLen);
+  const intA = BigInt(ia || '0');
+  const intB = BigInt(ib || '0');
+  const fracA = BigInt(normFa || '0');
+  const fracB = BigInt(normFb || '0');
+  const fracSum = fracA + fracB;
+  const baseStr = '1' + '0'.repeat(fracLen || 0);
+  const base = BigInt(baseStr);
+  const carry = fracSum / base;
+  const fracRes = fracSum % base;
+  const intRes = intA + intB + carry;
+  const fracStr = fracLen > 0 ? fracRes.toString().padStart(fracLen, '0').replace(/0+$/, '') : '';
+  return fracStr.length > 0 ? `${intRes.toString()}.${fracStr}` : intRes.toString();
+}
 
 export default SwapInterface;

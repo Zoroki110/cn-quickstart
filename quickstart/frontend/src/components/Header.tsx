@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { useWalletAuth } from '../wallet';
 import { ENABLE_MANUAL_WALLET } from '../wallet/walletConfig';
-import { useHoldings } from '../hooks/useHoldings';
+import { useUtxoBalances } from '../hooks';
 import toast from 'react-hot-toast';
 
 const Header: React.FC = () => {
@@ -19,7 +19,27 @@ const Header: React.FC = () => {
     authenticateWithZoro,
     disconnect,
   } = useWalletAuth();
-  const { holdings, loading: holdingsLoading } = useHoldings({ partyId: partyId || null, walletType });
+  const { balances, loading: balancesLoading } = useUtxoBalances(partyId || null, {
+    ownerOnly: true,
+    refreshIntervalMs: 15000,
+  });
+  const balanceEntries = useMemo(() => {
+    const acc = new Map<string, { symbol: string; amount: string; decimals: number }>();
+    Object.values(balances).forEach((entry) => {
+      const symbol = instrumentIdToSymbol(entry.instrumentId);
+      const existing = acc.get(symbol);
+      if (!existing) {
+        acc.set(symbol, { symbol, amount: entry.amount, decimals: entry.decimals });
+        return;
+      }
+      acc.set(symbol, {
+        symbol,
+        amount: decimalAddStrings(existing.amount, entry.amount),
+        decimals: existing.decimals ?? entry.decimals,
+      });
+    });
+    return Array.from(acc.values()).sort((a, b) => Number(b.amount) - Number(a.amount));
+  }, [balances]);
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -190,21 +210,21 @@ const Header: React.FC = () => {
                       </div>
                       <div className="mt-3 text-sm text-gray-700 dark:text-gray-200">
                         <div className="font-semibold mb-1">Balances</div>
-                        {holdingsLoading && (
+                        {balancesLoading && (
                           <div className="text-xs opacity-70">Loading on-ledger balances…</div>
                         )}
-                        {!holdingsLoading && holdings.length === 0 && (
+                        {!balancesLoading && balanceEntries.length === 0 && (
                           <div className="text-xs opacity-70">No holdings visible</div>
                         )}
-                        {!holdingsLoading && holdings.length > 0 &&
-                          holdings.slice(0, 5).map((h) => (
+                        {!balancesLoading && balanceEntries.length > 0 &&
+                          balanceEntries.slice(0, 5).map((h) => (
                             <div key={h.symbol} className="flex justify-between">
                               <span>{h.symbol}</span>
-                              <span>{formatHoldingAmount(h.symbol, h.quantity, h.decimals)}</span>
+                              <span>{formatHoldingAmount(h.symbol, h.amount, h.decimals)}</span>
                             </div>
                           ))}
-                        {!holdingsLoading && holdings.length > 5 && (
-                          <div className="text-xs opacity-70 mt-1">+ {holdings.length - 5} more</div>
+                        {!balancesLoading && balanceEntries.length > 5 && (
+                          <div className="text-xs opacity-70 mt-1">+ {balanceEntries.length - 5} more</div>
                         )}
                       </div>
                       <button
@@ -295,6 +315,37 @@ function formatHoldingAmount(symbol: string, quantity: string, decimals?: number
     return formatted.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
   }
   return formatted;
+}
+
+function instrumentIdToSymbol(instrumentId?: string) {
+  const raw = instrumentId || '';
+  const upper = raw.toUpperCase();
+  if (upper === 'AMULET') {
+    return 'CC';
+  }
+  return upper;
+}
+
+function decimalAddStrings(a: string, b: string): string {
+  const sa = a ?? '0';
+  const sb = b ?? '0';
+  const [ia, fa = ''] = sa.split('.');
+  const [ib, fb = ''] = sb.split('.');
+  const fracLen = Math.max(fa.length, fb.length);
+  const normFa = (fa + '0'.repeat(fracLen)).slice(0, fracLen);
+  const normFb = (fb + '0'.repeat(fracLen)).slice(0, fracLen);
+  const intA = BigInt(ia || '0');
+  const intB = BigInt(ib || '0');
+  const fracA = BigInt(normFa || '0');
+  const fracB = BigInt(normFb || '0');
+  const fracSum = fracA + fracB;
+  const baseStr = '1' + '0'.repeat(fracLen || 0);
+  const base = BigInt(baseStr);
+  const carry = fracSum / base;
+  const fracRes = fracSum % base;
+  const intRes = intA + intB + carry;
+  const fracStr = fracLen > 0 ? fracRes.toString().padStart(fracLen, '0').replace(/0+$/, '') : '';
+  return fracStr.length > 0 ? `${intRes.toString()}.${fracStr}` : intRes.toString();
 }
 
 function formatPartyId(party?: string | null) {

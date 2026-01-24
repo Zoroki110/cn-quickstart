@@ -2,7 +2,10 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Search } from 'lucide-react';
 import { TokenInfo } from '../types/canton';
-import { LegacyBalanceMap } from '../hooks/useLegacyBalances';
+type BalanceEntry = {
+  amount: string;
+  decimals: number;
+};
 
 interface TokenSelectorProps {
   isOpen: boolean;
@@ -11,7 +14,7 @@ interface TokenSelectorProps {
   tokens: TokenInfo[];
   selectedToken: TokenInfo | null;
   type: 'from' | 'to';
-  balances?: LegacyBalanceMap;
+  balances?: Record<string, BalanceEntry>;
 }
 
 const TokenSelector: React.FC<TokenSelectorProps> = ({

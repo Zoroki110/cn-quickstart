@@ -34,6 +34,9 @@ export type SubmitTxInput = {
   memo?: string;
   estimateTraffic?: boolean;
   mode?: SubmitTxMode;
+  disclosedContracts?: any[];
+  packageIdSelectionPreference?: string[];
+  synchronizerId?: string;
 };
 
 const DEFAULT_APP_ID = "clearportx";
@@ -114,6 +117,7 @@ function buildEnvelope(input: SubmitTxInput, commands: any[]) {
   const workflowId = input.deduplicationKey ? `wf-${input.deduplicationKey}` : `wf-${Date.now()}`;
   const actAs = normalizePartyList(input.actAs) ?? [];
   const readAs = normalizePartyList(input.readAs);
+  const disclosedContracts = Array.isArray(input.disclosedContracts) ? input.disclosedContracts : [];
   const envelope: any = {
     commandId,
     workflowId,
@@ -121,9 +125,15 @@ function buildEnvelope(input: SubmitTxInput, commands: any[]) {
     actAs,
     commands,
     extraArgs: {
-      disclosedContracts: [],
+      disclosedContracts,
     },
   };
+  if (Array.isArray(input.packageIdSelectionPreference) && input.packageIdSelectionPreference.length > 0) {
+    envelope.packageIdSelectionPreference = input.packageIdSelectionPreference;
+  }
+  if (input.synchronizerId) {
+    envelope.synchronizerId = input.synchronizerId;
+  }
   if (readAs && readAs.length > 0) {
     envelope.readAs = readAs;
   }

@@ -1322,6 +1322,20 @@ export class BackendApiService {
       return data || { ok: false, error: { message } };
     }
   }
+
+  async consumeDevnetSwap(payload: {
+    requestId: string;
+    maxAgeSeconds?: number;
+  }): Promise<any> {
+    try {
+      const res = await this.client.post('/api/devnet/swap/consume', payload);
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
 }
 
 // Export singleton instance

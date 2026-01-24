@@ -302,8 +302,10 @@ const SwapInterface: React.FC = () => {
       }
 
       const deadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+      const requestId = `swap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const memoPayload = {
         v: 1,
+        requestId,
         poolCid,
         direction,
         minOut: minOutputStr,
@@ -338,6 +340,7 @@ const SwapInterface: React.FC = () => {
         disclosedContractsCount: disclosedContracts?.length ?? 0,
         contractId: exerciseContractId,
         synchronizerId,
+        requestId,
       };
       console.log('[Swap submitTx debug]', debugInfo);
       if (commands.length === 0) {
@@ -354,20 +357,25 @@ const SwapInterface: React.FC = () => {
         commands,
         actAs: extractPreparedActAs(prepared, partyId),
         readAs: extractPreparedReadAs(prepared, partyId),
-        deduplicationKey: `swap-${Date.now()}`,
+        deduplicationKey: requestId,
         memo,
         mode: 'WAIT',
         disclosedContracts,
         packageIdSelectionPreference: packagePreference,
         synchronizerId,
       });
+      let consumeResult: any = null;
+      if (result.ok && result.value.txStatus === 'SUCCEEDED' && process.env.REACT_APP_ENV === 'devnet') {
+        consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+      }
+
       if (result.ok) {
         console.log('[Swap submitTx status]', {
           txStatus: result.value.txStatus,
           ledgerUpdateId: result.value.ledgerUpdateId,
         });
       }
-      const resultWithDebug = { ...result, debug: debugInfo };
+      const resultWithDebug = { ...result, debug: debugInfo, consume: consumeResult };
       console.log('[Swap submitTx]', resultWithDebug);
       setSwapResult(resultWithDebug);
 

@@ -44,13 +44,13 @@ export function useUtxoBalances(
     setLoading(true);
     try {
       const res = await backendApi.getHoldingUtxos(partyId, ownerOnly);
-      const rows = Array.isArray(res)
+      const rows: any[] = Array.isArray(res)
         ? res
         : Array.isArray((res as any)?.result)
           ? (res as any).result
           : [];
 
-      const map = rows.reduce<UtxoBalanceMap>((acc, row) => {
+      const map = rows.reduce((acc: UtxoBalanceMap, row: any) => {
         const instrumentAdmin =
           row?.instrumentAdmin ??
           row?.instrument_admin ??

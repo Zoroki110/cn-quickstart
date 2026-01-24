@@ -7,7 +7,7 @@ import TokenSelector from './TokenSelector';
 import SlippageSettings from './SlippageSettings';
 import toast from 'react-hot-toast';
 import { useWalletAuth, walletManager } from '../wallet';
-import { useUtxoBalances } from '../hooks';
+import { useLoopBalances, useUtxoBalances } from '../hooks';
 import { submitTx } from '../loop/submitTx';
 import { getLoopProvider } from '../loop/loopProvider';
 import { calculateSwapQuoteFromPool } from '../utils/poolMath';
@@ -24,10 +24,21 @@ const OPERATOR_PARTY =
 const SwapInterface: React.FC = () => {
   const { selectedTokens, setSelectedTokens, swapTokens: swapSelectedTokens, slippage } = useAppStore();
   const { partyId, walletType } = useWalletAuth();
-  const { balances: utxoBalances, reload: reloadBalances } = useUtxoBalances(partyId || null, {
+  const partyForBackend = walletType === 'loop' ? null : partyId || null;
+  const { balances: loopBalances, reload: reloadLoopBalances } = useLoopBalances(partyId || null, walletType, {
+    refreshIntervalMs: 15000,
+  });
+  const { balances: utxoBalances, reload: reloadUtxoBalances } = useUtxoBalances(partyForBackend, {
     ownerOnly: true,
     refreshIntervalMs: 15000,
   });
+  const reloadBalances = useCallback(async () => {
+    if (walletType === 'loop') {
+      await reloadLoopBalances();
+      return;
+    }
+    await reloadUtxoBalances();
+  }, [walletType, reloadLoopBalances, reloadUtxoBalances]);
   const [inputAmount, setInputAmount] = useState('');
   const [outputAmount, setOutputAmount] = useState('');
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
@@ -73,6 +84,13 @@ const SwapInterface: React.FC = () => {
   };
 
   const balancesBySymbol = useMemo(() => {
+    if (walletType === 'loop') {
+      const map: Record<string, { amount: string; decimals: number }> = {};
+      Object.entries(loopBalances).forEach(([symbol, entry]) => {
+        map[symbol.toUpperCase()] = { amount: entry.amount, decimals: entry.decimals };
+      });
+      return map;
+    }
     const map: Record<string, { amount: string; decimals: number }> = {};
     Object.values(utxoBalances).forEach((entry) => {
       const symbol = instrumentIdToSymbol(entry.instrumentId);
@@ -83,7 +101,7 @@ const SwapInterface: React.FC = () => {
       };
     });
     return map;
-  }, [utxoBalances]);
+  }, [walletType, loopBalances, utxoBalances]);
 
   const getBalanceEntry = useCallback((symbol?: string) => {
     if (!symbol) {

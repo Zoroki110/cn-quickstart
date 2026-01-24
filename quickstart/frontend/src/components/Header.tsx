@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { useWalletAuth } from '../wallet';
 import { ENABLE_MANUAL_WALLET } from '../wallet/walletConfig';
-import { useUtxoBalances } from '../hooks';
+import { useLoopBalances, useUtxoBalances } from '../hooks';
 import toast from 'react-hot-toast';
 
 const Header: React.FC = () => {
@@ -19,13 +19,27 @@ const Header: React.FC = () => {
     authenticateWithZoro,
     disconnect,
   } = useWalletAuth();
-  const { balances, loading: balancesLoading } = useUtxoBalances(partyId || null, {
+  const partyForBackend = walletType === 'loop' ? null : partyId || null;
+  const { balances: loopBalances, loading: loopLoading } = useLoopBalances(partyId || null, walletType, {
+    refreshIntervalMs: 15000,
+  });
+  const { balances: utxoBalances, loading: utxoLoading } = useUtxoBalances(partyForBackend, {
     ownerOnly: true,
     refreshIntervalMs: 15000,
   });
+  const balancesLoading = walletType === 'loop' ? loopLoading : utxoLoading;
   const balanceEntries = useMemo(() => {
+    if (walletType === 'loop') {
+      return Object.entries(loopBalances)
+        .map(([symbol, entry]) => ({
+          symbol: symbol.toUpperCase(),
+          amount: entry.amount,
+          decimals: entry.decimals,
+        }))
+        .sort((a, b) => Number(b.amount) - Number(a.amount));
+    }
     const acc = new Map<string, { symbol: string; amount: string; decimals: number }>();
-    Object.values(balances).forEach((entry) => {
+    Object.values(utxoBalances).forEach((entry) => {
       const symbol = instrumentIdToSymbol(entry.instrumentId);
       const existing = acc.get(symbol);
       if (!existing) {
@@ -39,7 +53,7 @@ const Header: React.FC = () => {
       });
     });
     return Array.from(acc.values()).sort((a, b) => Number(b.amount) - Number(a.amount));
-  }, [balances]);
+  }, [walletType, loopBalances, utxoBalances]);
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 

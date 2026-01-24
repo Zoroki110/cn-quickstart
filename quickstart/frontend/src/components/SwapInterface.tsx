@@ -17,8 +17,8 @@ const AMULET_ID = 'Amulet';
 const CBTC_ADMIN = 'cbtc-network::12202a83c6f4082217c175e29bc53da5f2703ba2675778ab99217a5a881a949203ff';
 const CBTC_ID = 'CBTC';
 const OPERATOR_PARTY =
+  process.env.REACT_APP_OPERATOR_PARTY ||
   process.env.REACT_APP_OPERATOR_PARTY_ID ||
-  process.env.REACT_APP_PARTY_ID ||
   'ClearportX-DEX-1::122081f2b8e29cbe57d1037a18e6f70e57530773b3a4d1bea6bab981b7a76e943b37';
 
 const SwapInterface: React.FC = () => {
@@ -330,6 +330,16 @@ const SwapInterface: React.FC = () => {
       });
 
       const commands = extractPreparedCommands(prepared);
+      const disclosedContracts = extractPreparedDisclosedContracts(prepared);
+      const packagePreference = extractPreparedPackagePreference(prepared);
+      const synchronizerId = extractPreparedSynchronizerId(prepared);
+      const exerciseContractId = extractExerciseContractId(commands);
+      const debugInfo = {
+        disclosedContractsCount: disclosedContracts?.length ?? 0,
+        contractId: exerciseContractId,
+        synchronizerId,
+      };
+      console.log('[Swap submitTx debug]', debugInfo);
       if (commands.length === 0) {
         setSwapResult({
           ok: false,
@@ -347,12 +357,19 @@ const SwapInterface: React.FC = () => {
         deduplicationKey: `swap-${Date.now()}`,
         memo,
         mode: 'WAIT',
-        disclosedContracts: extractPreparedDisclosedContracts(prepared),
-        packageIdSelectionPreference: extractPreparedPackagePreference(prepared),
-        synchronizerId: extractPreparedSynchronizerId(prepared),
+        disclosedContracts,
+        packageIdSelectionPreference: packagePreference,
+        synchronizerId,
       });
-      console.log('[Swap submitTx]', result);
-      setSwapResult(result);
+      if (result.ok) {
+        console.log('[Swap submitTx status]', {
+          txStatus: result.value.txStatus,
+          ledgerUpdateId: result.value.ledgerUpdateId,
+        });
+      }
+      const resultWithDebug = { ...result, debug: debugInfo };
+      console.log('[Swap submitTx]', resultWithDebug);
+      setSwapResult(resultWithDebug);
 
       if (result.ok && result.value.txStatus === 'SUCCEEDED') {
         toast.success(`Transaction submitted (update ${result.value.ledgerUpdateId || 'pending'})`);
@@ -759,6 +776,20 @@ function extractPreparedCommands(prepared: PreparedTransfer): any[] {
     prepared?.command_payload?.commands ??
     [];
   return Array.isArray(commands) ? commands : [];
+}
+
+function extractExerciseContractId(commands: any[]): string | undefined {
+  for (const command of commands) {
+    const exercise =
+      command?.ExerciseCommand ??
+      command?.exerciseCommand ??
+      command?.exercise_command;
+    const contractId = exercise?.contractId ?? exercise?.contract_id;
+    if (contractId) {
+      return contractId;
+    }
+  }
+  return undefined;
 }
 
 function extractPreparedDisclosedContracts(prepared: PreparedTransfer): any[] | undefined {

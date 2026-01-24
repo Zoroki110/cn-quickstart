@@ -124,10 +124,10 @@ function buildEnvelope(input: SubmitTxInput, commands: any[]) {
     applicationId: DEFAULT_APP_ID,
     actAs,
     commands,
-    extraArgs: {
-      disclosedContracts,
-    },
   };
+  if (disclosedContracts.length > 0) {
+    envelope.disclosedContracts = disclosedContracts;
+  }
   if (Array.isArray(input.packageIdSelectionPreference) && input.packageIdSelectionPreference.length > 0) {
     envelope.packageIdSelectionPreference = input.packageIdSelectionPreference;
   }
@@ -264,7 +264,10 @@ export async function submitTx(input: SubmitTxInput): Promise<Result<SubmitTxSuc
     opts.estimateTraffic = true;
   }
 
-  const waitFn = (provider as any).executeAndWait || (provider as any).executeAndWaitForTransaction;
+  const waitFn =
+    (provider as any).submitAndWaitForTransaction ||
+    (provider as any).executeAndWait ||
+    (provider as any).executeAndWaitForTransaction;
   const legacyFn = (provider as any).submitTransaction;
 
   if (mode === "WAIT" && typeof waitFn !== "function" && !legacyEnabled()) {

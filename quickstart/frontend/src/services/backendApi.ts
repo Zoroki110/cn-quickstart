@@ -1271,6 +1271,55 @@ export class BackendApiService {
       return [];
     }
   }
+
+  async createDevnetPayout(
+    instrument: 'amulet' | 'cbtc',
+    payload: {
+      receiverParty: string;
+      amount: string;
+      executeBeforeSeconds?: number;
+      memo?: string;
+    }
+  ): Promise<any> {
+    try {
+      const res = await this.client.post(`/api/devnet/payout/${instrument}`, payload);
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
+
+  async getHoldingUtxos(party: string, ownerOnly = true): Promise<any> {
+    try {
+      const res = await this.client.get(`/api/holdings/${party}/utxos`, {
+        params: { ownerOnly },
+      });
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
+
+  async getOutgoingTransferInstructions(params: {
+    senderParty: string;
+    instrumentAdmin: string;
+    instrumentId: string;
+  }): Promise<any> {
+    try {
+      const res = await this.client.get('/api/devnet/transfer-instructions/outgoing', {
+        params,
+      });
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
 }
 
 // Export singleton instance

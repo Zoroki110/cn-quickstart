@@ -23,7 +23,11 @@ function getLoopConnector(): LoopWalletConnector {
 type InstrumentOption = 'Amulet' | 'CBTC';
 
 export default function DevNetLoopTxTester() {
-  const isDevnet = process.env.REACT_APP_ENV === 'devnet' || process.env.NODE_ENV === 'development';
+  const isDevnet =
+    process.env.REACT_APP_ENV === 'devnet' ||
+    process.env.NODE_ENV === 'development' ||
+    (typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname.startsWith('127.')));
   const [receiverParty, setReceiverParty] = useState('');
   const [amount, setAmount] = useState('0.0010000000');
   const [executeBeforeSeconds, setExecuteBeforeSeconds] = useState(7200);
@@ -197,7 +201,7 @@ export default function DevNetLoopTxTester() {
       <div className="card text-center py-12">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">DevNet Debug Panel</h2>
         <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-          This page is only available in DevNet.
+          This page is only available in DevNet or on localhost.
         </p>
       </div>
     );

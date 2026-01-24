@@ -1,5 +1,7 @@
 import * as loopModule from "@fivenorth/loop-sdk";
 import { IWalletConnector } from "./IWalletConnector";
+import { setLoopProvider } from "../loop/loopProvider";
+import { submitTx } from "../loop/submitTx";
 
 type LoopProvider = {
   party_id?: string;
@@ -177,20 +179,27 @@ export class LoopWalletConnector implements IWalletConnector {
   async submitTransaction(cmd: any, opts?: any): Promise<any> {
     await this.ensureConnectedOrThrow();
     if (DEBUG) console.debug("[Loop] provider ready (submitTransaction)");
-    const st = this.provider?.submitTransaction;
-    if (typeof st !== "function") {
-      throw new Error("Loop provider does not expose submitTransaction()");
-    }
-    const res = await st.call(this.provider, cmd, opts);
+    const commands = Array.isArray(cmd?.commands) ? cmd.commands : Array.isArray(cmd) ? cmd : [];
+    const actAs = cmd?.actAs ?? this.provider?.party_id ?? this.provider?.partyId ?? this.provider?.party;
+    const readAs = cmd?.readAs;
+    const deduplicationKey = cmd?.deduplicationKey ?? cmd?.commandId;
+    const result = await submitTx({
+      commands,
+      actAs,
+      readAs,
+      deduplicationKey,
+      memo: opts?.memo,
+      estimateTraffic: opts?.estimateTraffic,
+      mode: opts?.mode,
+    });
     if (typeof window !== "undefined" && (process.env.REACT_APP_ENV === "devnet" || window.location.hostname === "localhost")) {
       try {
-        const cids = (res && (res.contractIds || res.contracts || res.events)) ?? null;
-        console.debug("[Loop][devnet] submitTransaction result", cids ?? res);
+        console.debug("[Loop][devnet] submitTx result", result);
       } catch {
         /* ignore */
       }
     }
-    return res;
+    return result;
   }
 
   /**
@@ -220,21 +229,11 @@ export class LoopWalletConnector implements IWalletConnector {
     const requestId = `loop-accept-${Date.now()}`;
     if (DEBUG) console.debug("[Loop] acceptIncomingCbtcOffer called", { ...params, requestId });
 
-    const st = this.provider?.submitTransaction;
-    if (typeof st !== "function") {
-      throw new Error("Loop provider does not expose submitTransaction()");
-    }
-
     // Use TransferInstruction interface from Splice API token standard
     // This is the correct template for CBTC acceptance (NOT TransferOffer)
     const templateId = "#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction";
 
-    // Build the command with extraArgs at the top level
     const command = {
-      commandId: requestId,
-      workflowId: `cbtc-accept-${params.transferInstructionCid.slice(0, 8)}`,
-      applicationId: "clearportx",
-      actAs: [params.receiverParty],
       commands: [
         {
           ExerciseCommand: {
@@ -247,65 +246,40 @@ export class LoopWalletConnector implements IWalletConnector {
       ],
     };
 
-    // Add extraArgs to command - this is required by Loop SDK command preprocessing
-    // extraArgs may need to contain disclosedContracts array (even if empty)
-    const commandWithExtras = {
-      ...command,
-      extraArgs: {
-        disclosedContracts: [],
-      },
-    };
-
     try {
-      // Options to capture the transaction update
-      const opts = {
-        // Request full transaction tree in response
-        disclosedContracts: true,
-        timeoutMs: 120000,
-        // Enable onTransactionUpdate callback if available in SDK v0.8.0+
-      };
+      if (DEBUG) console.debug("[Loop] Submitting CBTC Accept command:", { command, requestId });
 
-      if (DEBUG) console.debug("[Loop] Submitting CBTC Accept command:", { command: commandWithExtras, opts, requestId });
-
-      const result = await st.call(this.provider, commandWithExtras, opts);
+      const result = await submitTx({
+        commands: command.commands,
+        actAs: [params.receiverParty],
+        readAs: [params.receiverParty],
+        deduplicationKey: requestId,
+        mode: "WAIT",
+      });
 
       if (DEBUG) console.debug("[Loop] CBTC Accept result:", { requestId, result });
 
-      // Parse the result to extract created contracts
-      const createdContracts: Array<{ templateId: string; contractId: string; payload?: any }> = [];
+      if (!result.ok) {
+        return {
+          updateId: "",
+          createdContracts: [],
+          success: false,
+          error: result.error.message,
+        };
+      }
 
-      // Result may contain different structures based on SDK version
-      if (result?.events) {
-        for (const event of result.events) {
-          if (event.created) {
-            createdContracts.push({
-              templateId: event.created.templateId || event.templateId || "",
-              contractId: event.created.contractId || event.contractId || "",
-              payload: event.created.payload,
-            });
-          }
-        }
-      } else if (result?.contractIds) {
-        // Simpler response format
-        for (const cid of result.contractIds) {
-          createdContracts.push({
-            templateId: "unknown",
-            contractId: cid,
-          });
-        }
-      } else if (result?.contracts) {
-        for (const contract of result.contracts) {
-          createdContracts.push({
-            templateId: contract.templateId || "",
-            contractId: contract.contractId || contract.cid || "",
-            payload: contract.payload,
-          });
-        }
+      if (result.value.txStatus !== "SUCCEEDED") {
+        return {
+          updateId: result.value.ledgerUpdateId || "",
+          createdContracts: [],
+          success: false,
+          error: result.value.failures ? JSON.stringify(result.value.failures) : "Transaction failed",
+        };
       }
 
       return {
-        updateId: result?.updateId || result?.commandId || result?.transactionId || "",
-        createdContracts,
+        updateId: result.value.ledgerUpdateId || "",
+        createdContracts: [],
         success: true,
       };
     } catch (err: any) {
@@ -389,6 +363,7 @@ export class LoopWalletConnector implements IWalletConnector {
 
   private async handleAccept(provider: LoopProvider) {
     this.provider = provider;
+    setLoopProvider(provider);
     const partyId = provider.party_id ?? provider.partyId ?? provider.party;
     if (DEBUG) console.debug("[Loop] approved provider keys", Object.keys(provider || {}), "partyId", partyId);
     const checker = provider.getAccount ?? provider.getHolding;
@@ -483,6 +458,7 @@ export class LoopWalletConnector implements IWalletConnector {
 
   private async cleanupAndDisconnect(clearSession = false) {
     this.provider = null;
+    setLoopProvider(null);
     this.clearLoopStorage(clearSession);
     try {
       await loopApi?.disconnect?.();

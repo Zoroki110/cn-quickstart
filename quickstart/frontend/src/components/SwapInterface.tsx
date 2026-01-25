@@ -365,8 +365,16 @@ const SwapInterface: React.FC = () => {
         synchronizerId,
       });
       let consumeResult: any = null;
-      if (result.ok && result.value.txStatus === 'SUCCEEDED' && process.env.REACT_APP_ENV === 'devnet') {
-        consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+      if (result.ok && result.value.txStatus === 'SUCCEEDED') {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        const shouldConsume =
+          process.env.REACT_APP_ENV === 'devnet' ||
+          host === 'localhost' ||
+          host.startsWith('127.') ||
+          host.endsWith('.ngrok-free.dev');
+        if (shouldConsume) {
+          consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+        }
       }
 
       if (result.ok) {

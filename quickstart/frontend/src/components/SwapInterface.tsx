@@ -328,6 +328,7 @@ const SwapInterface: React.FC = () => {
         amount: amount.toFixed(10),
         instrument,
         memo,
+        requestedAt: new Date().toISOString(),
         executeBefore: deadline,
       });
 
@@ -335,6 +336,8 @@ const SwapInterface: React.FC = () => {
       const disclosedContracts = extractPreparedDisclosedContracts(prepared);
       const packagePreference = extractPreparedPackagePreference(prepared);
       const synchronizerId = extractPreparedSynchronizerId(prepared);
+      const poolInstruments = resolvePoolInstruments(activePool);
+      const preparedTiCid = extractPreparedTransferInstructionCid(prepared);
       const exerciseContractId = extractExerciseContractId(commands);
       const debugInfo = {
         disclosedContractsCount: disclosedContracts?.length ?? 0,
@@ -352,50 +355,132 @@ const SwapInterface: React.FC = () => {
         return;
       }
 
-      setSwapStatus('Transaction submitted');
-      const result = await submitTx({
-        commands,
+      const inlineIntent =
+        Boolean(preparedTiCid) && Boolean(poolInstruments);
+      const inlineIntentCommand = inlineIntent
+        ? buildSwapIntentCreateCommand({
+            user: partyId,
+            operator: OPERATOR_PARTY,
+            poolInstruments: poolInstruments!,
+            transferInstructionCid: preparedTiCid!,
+            amountIn: amount.toFixed(10),
+            direction,
+            minOut: minOutputStr,
+            deadline,
+          })
+        : null;
+      const combinedCommands = inlineIntentCommand ? [inlineIntentCommand, ...commands] : commands;
+
+      setSwapStatus(inlineIntent ? 'Submitting SwapIntent + transfer' : 'Submitting inbound transfer');
+      const transferResult = await submitTx({
+        commands: combinedCommands,
         actAs: extractPreparedActAs(prepared, partyId),
         readAs: extractPreparedReadAs(prepared, partyId),
         deduplicationKey: requestId,
         memo,
         mode: 'WAIT',
         disclosedContracts,
-        packageIdSelectionPreference: packagePreference,
+        packageIdSelectionPreference: inlineIntent
+          ? mergePackagePreference(packagePreference, process.env.REACT_APP_HOLDINGPOOL_PACKAGE_ID)
+          : packagePreference,
         synchronizerId,
       });
+      let intentResult: any = null;
       let consumeResult: any = null;
-      if (result.ok && result.value.txStatus === 'SUCCEEDED') {
+      if (transferResult.ok && transferResult.value.txStatus === 'SUCCEEDED') {
         const host = typeof window !== 'undefined' ? window.location.hostname : '';
         const shouldConsume =
           process.env.REACT_APP_ENV === 'devnet' ||
           host === 'localhost' ||
           host.startsWith('127.') ||
           host.endsWith('.ngrok-free.dev');
-        if (shouldConsume) {
+        if (!shouldConsume) {
+          intentResult = {
+            ok: false,
+            error: { code: 'DEVNET_ONLY', message: 'Swap consume is only enabled in devnet' },
+          };
+        } else if (inlineIntent) {
+          intentResult = {
+            ok: true,
+            value: {
+              txStatus: transferResult.value.txStatus,
+              ledgerUpdateId: transferResult.value.ledgerUpdateId,
+              inline: true,
+            },
+          };
+          setSwapStatus('Consuming swap (backend)');
           consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+        } else {
+          setSwapStatus('Resolving inbound TI');
+          const inbound = await waitForInboundTransferInstruction(requestId);
+          if (!inbound?.ok) {
+            intentResult = inbound;
+          } else {
+          const tiCid = inbound.result?.contractId;
+          if (!tiCid || !poolInstruments) {
+            intentResult = {
+              ok: false,
+              error: {
+                code: 'INTENT',
+                message: 'Unable to resolve inbound TI or pool instruments',
+                details: { tiCid, poolInstruments },
+              },
+            };
+            } else {
+              setSwapStatus('Submitting SwapIntent');
+              const intentCommand = buildSwapIntentCreateCommand({
+                user: partyId,
+                operator: OPERATOR_PARTY,
+                poolInstruments,
+                transferInstructionCid: tiCid,
+                amountIn: amount.toFixed(10),
+                direction,
+                minOut: minOutputStr,
+                deadline,
+              });
+              console.log('[Swap CreateIntent]', {
+                actAs: [partyId],
+                readAs: [],
+                requestId,
+              });
+              intentResult = await submitTx({
+                commands: [intentCommand],
+                actAs: [partyId],
+                readAs: [],
+                deduplicationKey: `${requestId}-intent`,
+                packageIdSelectionPreference: mergePackagePreference(
+                  packagePreference,
+                  process.env.REACT_APP_HOLDINGPOOL_PACKAGE_ID
+                ),
+                synchronizerId,
+              });
+              if (intentResult.ok && intentResult.value.txStatus === 'SUCCEEDED') {
+                setSwapStatus('Consuming swap (backend)');
+                consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+              }
+            }
+          }
         }
       }
 
-      if (result.ok) {
-        console.log('[Swap submitTx status]', {
-          txStatus: result.value.txStatus,
-          ledgerUpdateId: result.value.ledgerUpdateId,
-        });
-      }
-      const resultWithDebug = { ...result, debug: debugInfo, consume: consumeResult };
+      const resultWithDebug = {
+        transfer: transferResult,
+        intent: intentResult,
+        consume: consumeResult,
+        debug: debugInfo,
+      };
       console.log('[Swap submitTx]', resultWithDebug);
       setSwapResult(resultWithDebug);
 
-      if (result.ok && result.value.txStatus === 'SUCCEEDED') {
-        toast.success(`Transaction submitted (update ${result.value.ledgerUpdateId || 'pending'})`);
+      if (transferResult.ok && transferResult.value.txStatus === 'SUCCEEDED') {
+        toast.success(`Transfer submitted (update ${transferResult.value.ledgerUpdateId || 'pending'})`);
         setInputAmount('');
         setOutputAmount('');
         setQuote(null);
-      } else if (result.ok) {
-        toast.error('Swap transaction failed');
+      } else if (transferResult.ok) {
+        toast.error('Swap transfer failed');
       } else {
-        toast.error(result.error.message);
+        toast.error(transferResult.error.message);
       }
     } catch (error: any) {
       console.error('Error executing swap:', error);
@@ -717,6 +802,11 @@ type InstrumentRef = {
   instrumentId: string;
 };
 
+type PoolInstruments = {
+  instrumentA: InstrumentRef;
+  instrumentB: InstrumentRef;
+};
+
 function instrumentIdToSymbol(instrumentId?: string): string {
   const raw = instrumentId || '';
   const upper = raw.toUpperCase();
@@ -734,6 +824,96 @@ function resolveInstrumentForSymbol(symbol?: string): InstrumentRef | null {
     return { instrumentAdmin: CBTC_ADMIN, instrumentId: CBTC_ID };
   }
   return null;
+}
+
+function resolvePoolInstruments(pool: PoolInfo | null): PoolInstruments | null {
+  if (!pool) return null;
+  const instA = resolveInstrumentForSymbol(pool.tokenA?.symbol);
+  const instB = resolveInstrumentForSymbol(pool.tokenB?.symbol);
+  if (!instA || !instB) return null;
+  return { instrumentA: instA, instrumentB: instB };
+}
+
+function resolveSwapIntentPackageId(): string {
+  const pkgId = process.env.REACT_APP_HOLDINGPOOL_PACKAGE_ID;
+  if (pkgId && pkgId.trim().length > 0) {
+    return pkgId;
+  }
+  const pkgName = process.env.REACT_APP_SWAP_INTENT_PACKAGE_NAME || 'clearportx-amm-drain-credit';
+  return `#${pkgName}`;
+}
+
+function mergePackagePreference(base?: string[], extra?: string): string[] | undefined {
+  const merged = Array.isArray(base) ? [...base] : [];
+  if (extra && extra.trim().length > 0 && !merged.includes(extra)) {
+    merged.push(extra);
+  }
+  return merged.length > 0 ? merged : undefined;
+}
+
+function buildSwapIntentCreateCommand(params: {
+  user: string;
+  operator: string;
+  poolInstruments: PoolInstruments;
+  transferInstructionCid: string;
+  amountIn: string;
+  direction: 'A2B' | 'B2A';
+  minOut: string;
+  deadline: string;
+}) {
+  const inputInstrument =
+    params.direction === 'A2B' ? params.poolInstruments.instrumentA : params.poolInstruments.instrumentB;
+  const direction = params.direction === 'A2B' ? 'AtoB' : 'BtoA';
+  return {
+    CreateCommand: {
+      templateId: {
+        packageId: resolveSwapIntentPackageId(),
+        moduleName: 'AMM.SwapIntent',
+        entityName: 'SwapIntent',
+      },
+      createArguments: {
+        user: params.user,
+        operator: params.operator,
+        poolKey: {
+          operator: params.operator,
+          instrumentA: {
+            admin: params.poolInstruments.instrumentA.instrumentAdmin,
+            id: params.poolInstruments.instrumentA.instrumentId,
+          },
+          instrumentB: {
+            admin: params.poolInstruments.instrumentB.instrumentAdmin,
+            id: params.poolInstruments.instrumentB.instrumentId,
+          },
+        },
+        transferInstructionCid: params.transferInstructionCid,
+        inputAmount: params.amountIn,
+        inputInstrument: {
+          admin: inputInstrument.instrumentAdmin,
+          id: inputInstrument.instrumentId,
+        },
+        direction,
+        minOutput: params.minOut,
+        createdAt: new Date().toISOString(),
+        expiresAt: params.deadline,
+      },
+    },
+  };
+}
+
+async function waitForInboundTransferInstruction(requestId: string) {
+  const maxAttempts = 8;
+  const delayMs = 1000;
+  let last: any = null;
+  for (let i = 0; i < maxAttempts; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    last = await backendApi.getDevnetSwapTransferInstruction(requestId);
+    if (last?.ok) {
+      return last;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return last;
 }
 
 function resolveSwapDirection(
@@ -758,6 +938,7 @@ async function prepareLoopTransfer(
     amount: string;
     instrument: InstrumentRef;
     memo?: string;
+    requestedAt?: string;
     executeBefore?: string;
   }
 ): Promise<PreparedTransfer> {
@@ -777,7 +958,7 @@ async function prepareLoopTransfer(
       instrument_admin: params.instrument.instrumentAdmin,
       instrument_id: params.instrument.instrumentId,
     },
-    requested_at: new Date().toISOString(),
+    requested_at: params.requestedAt ?? new Date().toISOString(),
     execute_before: params.executeBefore,
     memo: params.memo,
   };
@@ -792,6 +973,19 @@ function extractPreparedCommands(prepared: PreparedTransfer): any[] {
     prepared?.command_payload?.commands ??
     [];
   return Array.isArray(commands) ? commands : [];
+}
+
+function extractPreparedTransferInstructionCid(prepared: PreparedTransfer): string | undefined {
+  return (
+    prepared?.transferInstructionCid ??
+    prepared?.transfer_instruction_cid ??
+    prepared?.transferInstructionId ??
+    prepared?.transfer_instruction_id ??
+    prepared?.payload?.transferInstructionCid ??
+    prepared?.payload?.transfer_instruction_cid ??
+    prepared?.payload?.transferInstructionId ??
+    prepared?.payload?.transfer_instruction_id
+  );
 }
 
 function extractExerciseContractId(commands: any[]): string | undefined {

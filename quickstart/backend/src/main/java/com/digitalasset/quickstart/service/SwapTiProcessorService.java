@@ -38,6 +38,7 @@ public class SwapTiProcessorService {
     private final TransferInstructionAcsQueryService tiQueryService;
     private final HoldingPoolService holdingPoolService;
     private final HoldingSelectorService holdingSelectorService;
+    private final SwapIntentAcsQueryService swapIntentQueryService;
     private final PayoutService payoutService;
     private final LedgerApi ledgerApi;
     private final AuthUtils authUtils;
@@ -54,6 +55,7 @@ public class SwapTiProcessorService {
             TransferInstructionAcsQueryService tiQueryService,
             HoldingPoolService holdingPoolService,
             HoldingSelectorService holdingSelectorService,
+            SwapIntentAcsQueryService swapIntentQueryService,
             PayoutService payoutService,
             LedgerApi ledgerApi,
             AuthUtils authUtils,
@@ -64,6 +66,7 @@ public class SwapTiProcessorService {
         this.tiQueryService = tiQueryService;
         this.holdingPoolService = holdingPoolService;
         this.holdingSelectorService = holdingSelectorService;
+        this.swapIntentQueryService = swapIntentQueryService;
         this.payoutService = payoutService;
         this.ledgerApi = ledgerApi;
         this.authUtils = authUtils;
@@ -97,15 +100,12 @@ public class SwapTiProcessorService {
             return CompletableFuture.completedFuture(Result.err(domainError("Failed to query pending TIs", pending.getErrorUnsafe())));
         }
 
-        Optional<Selection> selection = selectCandidate(pending.getValueUnsafe(), request.requestId, maxAgeSeconds, operator);
-        if (selection.isEmpty()) {
-            return CompletableFuture.completedFuture(Result.err(preconditionError(
-                    "Inbound TransferInstruction not found for requestId (may be consumed already)",
-                    Map.of("requestId", request.requestId)
-            )));
+        Result<Selection, ApiError> selected = selectCandidate(pending.getValueUnsafe(), request.requestId, maxAgeSeconds, operator);
+        if (selected.isErr()) {
+            return CompletableFuture.completedFuture(Result.err(selected.getErrorUnsafe()));
         }
 
-        Selection chosen = selection.get();
+        Selection chosen = selected.getValueUnsafe();
         Candidate candidate = chosen.candidate;
         SwapMemo memo = candidate.memo;
         String memoRaw = candidate.memoRaw;
@@ -204,85 +204,139 @@ public class SwapTiProcessorService {
                     );
 
                     return holdingSelectorService.selectHoldingOnce(selectRequest)
-                            .thenCompose(selectionResult -> {
-                                if (!selectionResult.found()) {
+                            .thenCompose(holdingSelection -> {
+                                if (!holdingSelection.found()) {
                                     return completedError(preconditionError(
                                             "No output holding found for payout",
                                             Map.of("admin", outputInstrument.admin, "id", outputInstrument.id, "minAmount", amountOut.toPlainString())
                                     ));
                                 }
 
-                                String outputHoldingCid = selectionResult.holdingCid();
-                                return createSwapIntent(memo, ti, pool, direction, amountIn, minOut, deadline)
-                                        .thenCompose(intentResult -> {
-                                            if (intentResult.isErr()) {
-                                                return completedError(intentResult.getErrorUnsafe());
+                                String outputHoldingCid = holdingSelection.holdingCid();
+                                Result<ChoiceContextResult, ApiError> choiceCtx =
+                                        choiceContextService.resolveDisclosedContracts(ti.contractId(), inputInstrument.admin);
+                                if (choiceCtx.isErr()) {
+                                    return completedError(choiceCtx.getErrorUnsafe());
+                                }
+                                ChoiceContextResult ctx = choiceCtx.getValueUnsafe();
+                                Optional<SwapIntentAcsQueryService.SwapIntentDto> intent =
+                                        swapIntentQueryService.findByTransferInstructionCid(operator, ti.contractId());
+                                if (intent.isEmpty()) {
+                                    return completedError(new ApiError(
+                                            ErrorCode.NOT_FOUND,
+                                            "SWAP_INTENT_NOT_FOUND",
+                                            Map.of("requestId", request.requestId, "tiCid", ti.contractId()),
+                                            false,
+                                            null,
+                                            null
+                                    ));
+                                }
+
+                                String intentCid = intent.get().contractId();
+                                LOG.info("[SwapConsume] requestId={} operator={} inboundTiCid={} swapIntentCid={} poolCid={} amountIn={} amountOut={} actAs=[{}] readAs=[{}]",
+                                        request.requestId,
+                                        operator,
+                                        ti.contractId(),
+                                        intentCid,
+                                        pool.contractId,
+                                        amountIn.toPlainString(),
+                                        amountOut.toPlainString(),
+                                        operator,
+                                        "");
+
+                                return executeSwap(
+                                                pool.contractId,
+                                                intentCid,
+                                                outputHoldingCid,
+                                                ctx.disclosedContracts(),
+                                                ctx.synchronizerId()
+                                        )
+                                        .thenCompose(executeResult -> {
+                                            if (executeResult.isErr()) {
+                                                return completedError(annotateNoSynchronizer(executeResult.getErrorUnsafe(),
+                                                        "ExecuteSwap",
+                                                        List.of(operator),
+                                                        List.of(),
+                                                        ctx.synchronizerId()));
                                             }
-                                            String intentCid = intentResult.getValueUnsafe();
-                                            if (intentCid == null || intentCid.isBlank()) {
-                                                return completedError(ApiError.of(ErrorCode.INTERNAL, "SwapIntent creation returned no contractId"));
+                                            String updateId = extractUpdateId(executeResult.getValueUnsafe());
+                                            if (updateId == null || updateId.isBlank()) {
+                                                return completedError(ApiError.of(ErrorCode.INTERNAL, "ExecuteSwap returned no updateId"));
                                             }
-                                            return executeSwap(
-                                                            pool.contractId,
-                                                            intentCid,
-                                                            outputHoldingCid,
-                                                            ti.contractId(),
-                                                            inputInstrument.admin
-                                                    )
-                                                    .thenCompose(executeResult -> {
-                                                        if (executeResult.isErr()) {
-                                                            return completedError(executeResult.getErrorUnsafe());
-                                                        }
-                                                        String updateId = extractUpdateId(executeResult.getValueUnsafe());
-                                                        if (updateId == null || updateId.isBlank()) {
-                                                            return completedError(ApiError.of(ErrorCode.INTERNAL, "ExecuteSwap returned no updateId"));
-                                                        }
 
-                                                        Result<PayoutResponse, ApiError> payoutResult = createPayout(
-                                                                outputInstrument,
-                                                                memo.receiverParty,
-                                                                amountOut,
-                                                                memoRaw,
-                                                                deadline,
-                                                                request.requestId
-                                                        );
-                                                        if (payoutResult.isErr()) {
-                                                            return completedError(payoutResult.getErrorUnsafe());
-                                                        }
+                                            Result<PayoutResponse, ApiError> payoutResult = createPayout(
+                                                    outputInstrument,
+                                                    memo.receiverParty,
+                                                    amountOut,
+                                                    memoRaw,
+                                                    deadline,
+                                                    request.requestId
+                                            );
+                                            if (payoutResult.isErr()) {
+                                                return completedError(annotateNoSynchronizer(payoutResult.getErrorUnsafe(),
+                                                        "Payout",
+                                                        List.of(operator),
+                                                        List.of(operator),
+                                                        null));
+                                            }
 
-                                                        PayoutResponse payout = payoutResult.getValueUnsafe();
-                                                        SwapConsumeResponse response = new SwapConsumeResponse();
-                                                        response.requestId = request.requestId;
-                                                        response.inboundTiCid = ti.contractId();
-                                                        response.intentCid = intentCid;
-                                                        response.poolCid = memo.poolCid;
-                                                        response.direction = memo.direction;
-                                                        response.amountIn = amountIn.toPlainString();
-                                                        response.amountOut = amountOut.toPlainString();
-                                                        response.minOut = minOut.toPlainString();
-                                                        response.executeSwapLedgerUpdateId = updateId;
-                                                        response.payoutCid = payout.cid();
-                                                        response.payoutExecuteBefore = payout.executeBefore();
-                                                        response.nextAction = "ACCEPT_PAYOUT_IN_LOOP";
+                                            PayoutResponse payout = payoutResult.getValueUnsafe();
+                                            SwapConsumeResponse response = new SwapConsumeResponse();
+                                            response.requestId = request.requestId;
+                                            response.inboundTiCid = ti.contractId();
+                                            response.intentCid = intentCid;
+                                            response.swapIntentCid = intentCid;
+                                            response.poolCid = memo.poolCid;
+                                            response.direction = memo.direction;
+                                            response.amountIn = amountIn.toPlainString();
+                                            response.amountOut = amountOut.toPlainString();
+                                            response.minOut = minOut.toPlainString();
+                                            response.executeSwapLedgerUpdateId = updateId;
+                                            response.executeSwapStatus = "SUCCEEDED";
+                                            response.payoutCid = payout.cid();
+                                            response.payoutExecuteBefore = payout.executeBefore();
+                                            response.payoutFactoryId = payout.factoryId();
+                                            response.payoutDisclosedContractsCount = payout.disclosedContractsCount();
+                                            response.payoutStatus = "CREATED";
+                                            response.nextAction = "ACCEPT_PAYOUT_IN_LOOP";
 
-                                                        idempotencyService.registerSuccess(request.requestId, request.requestId, updateId, response);
-                                                        return CompletableFuture.completedFuture(Result.ok(response));
-                                                    });
+                                            idempotencyService.registerSuccess(request.requestId, request.requestId, updateId, response);
+                                            return CompletableFuture.completedFuture(Result.ok(response));
                                         });
                             });
                 });
     }
 
-    private Optional<Selection> selectCandidate(List<TransferInstructionWithMemo> items, String requestId, long maxAgeSeconds, String receiverParty) {
+    private Result<Selection, ApiError> selectCandidate(
+            List<TransferInstructionWithMemo> items,
+            String requestId,
+            long maxAgeSeconds,
+            String receiverParty
+    ) {
         Instant cutoff = Instant.now().minusSeconds(maxAgeSeconds);
         List<Candidate> candidates = new ArrayList<>();
+        List<String> invalidMemoCids = new ArrayList<>();
+
         for (TransferInstructionWithMemo row : items) {
             TransferInstructionDto ti = row.transferInstruction();
             if (ti == null || ti.contractId() == null) continue;
             if (receiverParty != null && !receiverParty.equals(ti.receiver())) continue;
+
             String memoRaw = row.memo();
+            if (memoRaw == null || memoRaw.isBlank()) {
+                invalidMemoCids.add(ti.contractId());
+                continue;
+            }
+
             SwapMemo memo = parseMemo(memoRaw);
-            if (memo == null || memo.poolCid == null || memo.direction == null) continue;
+            if (memo == null) {
+                if (requestId != null && memoRaw.contains(requestId)) {
+                    return Result.err(validationError("memo JSON is invalid", "memo"));
+                }
+                invalidMemoCids.add(ti.contractId());
+                continue;
+            }
+            if (memo.poolCid == null || memo.direction == null) continue;
             candidates.add(new Candidate(ti, memo, memoRaw));
         }
 
@@ -290,13 +344,32 @@ public class SwapTiProcessorService {
                 .filter(c -> requestId.equals(c.memo.requestId))
                 .max(Comparator.comparing(c -> c.transfer.executeBefore()));
         if (match.isPresent()) {
-            return Optional.of(new Selection(match.get(), true));
+            return Result.ok(new Selection(match.get(), true));
         }
 
-        return candidates.stream()
+        Optional<Selection> fallback = candidates.stream()
                 .filter(c -> c.transfer.executeBefore() != null && c.transfer.executeBefore().isAfter(cutoff))
                 .max(Comparator.comparing(c -> c.transfer.executeBefore()))
                 .map(c -> new Selection(c, false));
+        if (fallback.isPresent()) {
+            return Result.ok(fallback.get());
+        }
+
+        if (!invalidMemoCids.isEmpty()) {
+            return Result.err(new ApiError(
+                    ErrorCode.VALIDATION,
+                    "memo JSON is invalid or missing",
+                    Map.of("contractIds", invalidMemoCids),
+                    false,
+                    null,
+                    null
+            ));
+        }
+
+        return Result.err(preconditionError(
+                "Inbound TransferInstruction not found for requestId (may be consumed already)",
+                Map.of("requestId", requestId)
+        ));
     }
 
     private SwapMemo parseMemo(String memoRaw) {
@@ -316,9 +389,7 @@ public class SwapTiProcessorService {
             return Result.err(validationError("Swap memo is missing", "memo"));
         }
         if (memo.requestId == null || memo.requestId.isBlank()) {
-            if (requireRequestIdMatch) {
-                return Result.err(validationError("memo.requestId is required", "requestId"));
-            }
+            return Result.err(validationError("memo.requestId is required", "requestId"));
         } else if (requireRequestIdMatch && !memo.requestId.equals(requestId)) {
             return Result.err(preconditionError(
                     "requestId does not match memo",
@@ -387,71 +458,28 @@ public class SwapTiProcessorService {
         return available.setScale(SwapConstants.SCALE, RoundingMode.DOWN);
     }
 
-    private CompletableFuture<Result<String, ApiError>> createSwapIntent(
-            SwapMemo memo,
-            TransferInstructionDto ti,
-            HoldingPoolResponse pool,
-            SwapDirection direction,
-            BigDecimal amountIn,
-            BigDecimal minOut,
-            Instant deadline
-    ) {
-        String operator = authUtils.getAppProviderPartyId();
-        String user = memo.receiverParty;
-        ValueOuterClass.Record poolKey = ValueOuterClass.Record.newBuilder()
-                .addFields(recordField("operator", party(operator)))
-                .addFields(recordField("instrumentA", instrumentRecord(pool.instrumentA)))
-                .addFields(recordField("instrumentB", instrumentRecord(pool.instrumentB)))
-                .build();
-
-        ValueOuterClass.Record args = ValueOuterClass.Record.newBuilder()
-                .addFields(recordField("user", party(user)))
-                .addFields(recordField("operator", party(operator)))
-                .addFields(recordField("poolKey", ValueOuterClass.Value.newBuilder().setRecord(poolKey).build()))
-                .addFields(recordField("transferInstructionCid", contractIdValue(ti.contractId())))
-                .addFields(recordField("inputAmount", decimalValue(amountIn)))
-                .addFields(recordField("inputInstrument", instrumentRecord(direction == SwapDirection.A2B ? pool.instrumentA : pool.instrumentB)))
-                .addFields(recordField("direction", directionEnum(direction)))
-                .addFields(recordField("minOutput", decimalValue(minOut)))
-                .addFields(recordField("createdAt", timestampValue(Instant.now())))
-                .addFields(recordField("expiresAt", timestampValue(deadline)))
-                .build();
-
-        return ledgerApi.createRaw(swapIntentTemplateId(), args, List.of(user), List.of(operator))
-                .handle((resp, throwable) -> {
-                    if (throwable != null) {
-                        return Result.err(ApiError.of(ErrorCode.LEDGER_REJECTED, throwable.getMessage()));
-                    }
-                    String cid = extractCreatedCid(resp, swapIntentTemplateId());
-                    return Result.ok(cid);
-                });
-    }
-
     private CompletableFuture<Result<CommandServiceOuterClass.SubmitAndWaitForTransactionResponse, ApiError>> executeSwap(
             String poolCid,
             String intentCid,
             String outputHoldingCid,
-            String inboundTiCid,
-            String inputAdmin
+            List<com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> disclosedContracts,
+            String synchronizerId
     ) {
-        Result<ChoiceContextResult, ApiError> choiceCtx = choiceContextService.resolveDisclosedContracts(inboundTiCid, inputAdmin);
-        if (choiceCtx.isErr()) {
-            return CompletableFuture.completedFuture(Result.err(choiceCtx.getErrorUnsafe()));
-        }
-
         ValueOuterClass.Record choiceArgs = ValueOuterClass.Record.newBuilder()
                 .addFields(recordField("intentCid", contractIdValue(intentCid)))
                 .addFields(recordField("outputHoldingCid", contractIdValue(outputHoldingCid)))
                 .build();
 
-        return ledgerApi.exerciseRaw(
+        return ledgerApi.exerciseRawWithLabel(
+                        "ExecuteSwap",
                         holdingPoolTemplateId(),
                         poolCid,
                         "ExecuteSwap",
                         choiceArgs,
                         List.of(authUtils.getAppProviderPartyId()),
                         List.of(),
-                        choiceCtx.getValueUnsafe().disclosedContracts()
+                        disclosedContracts,
+                        synchronizerId
                 )
                 .handle((resp, throwable) -> {
                     if (throwable != null) {
@@ -497,54 +525,10 @@ public class SwapTiProcessorService {
                 .build();
     }
 
-    private ValueOuterClass.Identifier swapIntentTemplateId() {
-        return ValueOuterClass.Identifier.newBuilder()
-                .setPackageId(holdingPoolPackageId)
-                .setModuleName("AMM.SwapIntent")
-                .setEntityName("SwapIntent")
-                .build();
-    }
-
-    private ValueOuterClass.Value instrumentRecord(final HoldingPoolCreateRequest.InstrumentRef ref) {
-        ValueOuterClass.Record rec = ValueOuterClass.Record.newBuilder()
-                .addFields(recordField("admin", party(ref.admin)))
-                .addFields(recordField("id", ValueOuterClass.Value.newBuilder().setText(ref.id).build()))
-                .build();
-        return ValueOuterClass.Value.newBuilder().setRecord(rec).build();
-    }
-
-    private ValueOuterClass.Value directionEnum(SwapDirection direction) {
-        ValueOuterClass.Identifier enumId = ValueOuterClass.Identifier.newBuilder()
-                .setPackageId(holdingPoolPackageId)
-                .setModuleName("AMM.SwapIntent")
-                .setEntityName("SwapDirection")
-                .build();
-        return ValueOuterClass.Value.newBuilder()
-                .setEnum(ValueOuterClass.Enum.newBuilder()
-                        .setEnumId(enumId)
-                        .setConstructor(direction.damlConstructor)
-                        .build())
-                .build();
-    }
-
-    private ValueOuterClass.Value party(String party) {
-        return ValueOuterClass.Value.newBuilder().setParty(party).build();
-    }
-
     private ValueOuterClass.Value contractIdValue(String cid) {
         return ValueOuterClass.Value.newBuilder().setContractId(cid).build();
     }
 
-    private ValueOuterClass.Value timestampValue(Instant instant) {
-        long micros = instant.getEpochSecond() * 1_000_000L + instant.getNano() / 1_000L;
-        return ValueOuterClass.Value.newBuilder().setTimestamp(micros).build();
-    }
-
-    private ValueOuterClass.Value decimalValue(BigDecimal bd) {
-        return ValueOuterClass.Value.newBuilder()
-                .setNumeric(bd.setScale(SwapConstants.SCALE, RoundingMode.DOWN).toPlainString())
-                .build();
-    }
 
     private ValueOuterClass.RecordField recordField(String label, ValueOuterClass.Value value) {
         return ValueOuterClass.RecordField.newBuilder().setLabel(label).setValue(value).build();
@@ -562,26 +546,6 @@ public class SwapTiProcessorService {
         return resp.getTransaction().getUpdateId();
     }
 
-    private String extractCreatedCid(CommandServiceOuterClass.SubmitAndWaitForTransactionResponse resp,
-                                     ValueOuterClass.Identifier target) {
-        try {
-            if (resp == null || !resp.hasTransaction()) return null;
-            for (var event : resp.getTransaction().getEventsList()) {
-                if (event.hasCreated()) {
-                    var created = event.getCreated();
-                    ValueOuterClass.Identifier tid = created.getTemplateId();
-                    if (tid.getPackageId().equals(target.getPackageId())
-                            && tid.getModuleName().equals(target.getModuleName())
-                            && tid.getEntityName().equals(target.getEntityName())) {
-                        return created.getContractId();
-                    }
-                }
-            }
-        } catch (Exception e) {
-            LOG.warn("Failed to extract created contractId: {}", e.getMessage());
-        }
-        return null;
-    }
 
     private CompletableFuture<Result<SwapConsumeResponse, ApiError>> completedError(ApiError err) {
         return CompletableFuture.completedFuture(Result.err(err));
@@ -617,6 +581,35 @@ public class SwapTiProcessorService {
                 false,
                 null,
                 null
+        );
+    }
+
+    private ApiError annotateNoSynchronizer(ApiError error,
+                                            String step,
+                                            List<String> actAs,
+                                            List<String> readAs,
+                                            String synchronizerId) {
+        if (error == null || error.message == null) {
+            return error;
+        }
+        if (!error.message.contains("NO_SYNCHRONIZER_ON_WHICH_ALL_SUBMITTERS_CAN_SUBMIT")) {
+            return error;
+        }
+        Map<String, Object> details = new LinkedHashMap<>();
+        if (error.details != null) {
+            details.putAll(error.details);
+        }
+        details.put("step", step);
+        details.put("actAs", actAs);
+        details.put("readAs", readAs);
+        details.put("synchronizerId", synchronizerId);
+        return new ApiError(
+                error.code,
+                error.message,
+                details,
+                error.retryable,
+                error.grpcStatus,
+                error.grpcDescription
         );
     }
 

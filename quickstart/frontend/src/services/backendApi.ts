@@ -1336,6 +1336,45 @@ export class BackendApiService {
       return data || { ok: false, error: { message } };
     }
   }
+
+  async getDevnetSwapTransferInstruction(requestId: string): Promise<any> {
+    try {
+      const res = await this.client.get('/api/devnet/swap/transfer-instruction', {
+        params: { requestId },
+      });
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
+
+  async getDevnetSwapIntent(requestId: string): Promise<any> {
+    try {
+      const res = await this.client.get('/api/devnet/swap/intent', {
+        params: { requestId },
+      });
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
+
+  async inspectDevnetSwap(requestId: string): Promise<any> {
+    try {
+      const res = await this.client.get('/api/devnet/swap/inspect', {
+        params: { requestId },
+      });
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
 }
 
 // Export singleton instance

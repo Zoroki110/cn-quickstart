@@ -215,6 +215,114 @@ template HoldingPool
 
         return (newPoolCid, payoutCid)
 
+    -- | ExecuteSwapFromTransferInstruction - swap without SwapIntent.
+    -- Uses inbound TI + memo fields supplied by backend (direction/minOutput/recipient/expiry).
+    choice ExecuteSwapFromTransferInstruction : (ContractId HoldingPool, ContractId PendingPayout)
+      with
+        transferInstructionCid : TransferInstructionCid
+        outputHoldingCid : HoldingCid
+        direction : SwapDirection
+        minOutput : Decimal
+        expiresAt : Time
+        recipient : Party
+      controller operator
+      do
+        assertMsg "Pool must be Active" (status == Active)
+        now <- getTime
+        assertMsg "Swap deadline has expired" (now < expiresAt)
+        assertMsg "Minimum output must be non-negative" (minOutput >= 0.0)
+
+        -- Accept inbound TI to obtain input holding
+        let emptyExtraArgs = M.ExtraArgs with
+              context = M.emptyChoiceContext
+              meta = M.emptyMetadata
+        tiResult <- exercise transferInstructionCid TI.TransferInstruction_Accept with extraArgs = emptyExtraArgs
+        let inputHoldingCid = case tiResult.output of
+              TI.TransferInstructionResult_Completed {receiverHoldingCids} -> case receiverHoldingCids of
+                h :: _ -> h
+                _ -> error "Accept returned no receiver holding"
+              _ -> error "Accept did not complete transfer"
+
+        inputInst <- getHoldingInstrument inputHoldingCid
+        inputAmt <- getHoldingAmount inputHoldingCid
+        assertMsg "Input amount must be positive" (inputAmt > 0.0)
+
+        let expectedInput = case direction of
+              AtoB -> instrumentA
+              BtoA -> instrumentB
+        assertMsg "Input instrument does not match swap direction"
+          (instrumentIdEq inputInst expectedInput)
+
+        -- Calculate available reserves
+        let availA = reserveAmountA - lockedAmountA
+        let availB = reserveAmountB - lockedAmountB
+
+        -- Calculate swap output using constant product formula
+        let (reserveIn, reserveOut, _availIn, availOut) = case direction of
+              AtoB -> (reserveAmountA, reserveAmountB, availA, availB)
+              BtoA -> (reserveAmountB, reserveAmountA, availB, availA)
+
+        let inputAfterFee = inputAmt * (1.0 - feeRate)
+        let numerator = inputAfterFee * reserveOut
+        let denominator = reserveIn + inputAfterFee
+        assertMsg "Denominator must be positive" (denominator > 0.0)
+        let outputAmount = numerator / denominator
+
+        -- Validate output
+        assertMsg "Output amount must be positive" (outputAmount > 0.0)
+        assertMsg "Slippage: output below minimum" (outputAmount >= minOutput)
+        assertMsg "Insufficient available liquidity for output" (outputAmount <= availOut)
+
+        let expectedOutput = case direction of
+              AtoB -> instrumentB
+              BtoA -> instrumentA
+        outputInst <- getHoldingInstrument outputHoldingCid
+        outputAmt <- getHoldingAmount outputHoldingCid
+        assertMsg "Output holding has wrong instrument" (instrumentIdEq outputInst expectedOutput)
+        assertMsg "Output holding has insufficient amount" (outputAmt >= outputAmount)
+
+        -- Calculate new reserves and locked amounts
+        let (newReserveA, newReserveB, newLockedA, newLockedB) = case direction of
+              AtoB ->
+                ( reserveAmountA + inputAmt
+                , reserveAmountB
+                , lockedAmountA
+                , lockedAmountB + outputAmount
+                )
+              BtoA ->
+                ( reserveAmountA
+                , reserveAmountB + inputAmt
+                , lockedAmountA + outputAmount
+                , lockedAmountB
+                )
+
+        -- Safety checks
+        assertMsg "Locked A cannot exceed reserve A" (newLockedA <= newReserveA)
+        assertMsg "Locked B cannot exceed reserve B" (newLockedB <= newReserveB)
+
+        let outputInstrument = case direction of
+              AtoB -> instrumentB
+              BtoA -> instrumentA
+        let payoutExpiry = addRelTime now (hours 24)
+
+        payoutCid <- create PendingPayout with
+          operator
+          recipient
+          outputTiCid = transferInstructionCid  -- Placeholder until payout TI is created
+          amount = outputAmount
+          instrument = outputInstrument
+          poolKey = PoolKey with operator, instrumentA, instrumentB
+          createdAt = now
+          expiresAt = payoutExpiry
+
+        newPoolCid <- create this with
+          reserveAmountA = newReserveA
+          reserveAmountB = newReserveB
+          lockedAmountA = newLockedA
+          lockedAmountB = newLockedB
+
+        return (newPoolCid, payoutCid)
+
     -- | UnlockPayout - called when payout is claimed.
     -- Deducts from reserves and unlocks.
     choice UnlockPayout : ContractId HoldingPool

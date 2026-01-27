@@ -38,7 +38,6 @@ public class SwapTiProcessorService {
     private final TransferInstructionAcsQueryService tiQueryService;
     private final HoldingPoolService holdingPoolService;
     private final HoldingSelectorService holdingSelectorService;
-    private final SwapIntentAcsQueryService swapIntentQueryService;
     private final PayoutService payoutService;
     private final LedgerApi ledgerApi;
     private final AuthUtils authUtils;
@@ -55,7 +54,6 @@ public class SwapTiProcessorService {
             TransferInstructionAcsQueryService tiQueryService,
             HoldingPoolService holdingPoolService,
             HoldingSelectorService holdingSelectorService,
-            SwapIntentAcsQueryService swapIntentQueryService,
             PayoutService payoutService,
             LedgerApi ledgerApi,
             AuthUtils authUtils,
@@ -66,7 +64,6 @@ public class SwapTiProcessorService {
         this.tiQueryService = tiQueryService;
         this.holdingPoolService = holdingPoolService;
         this.holdingSelectorService = holdingSelectorService;
-        this.swapIntentQueryService = swapIntentQueryService;
         this.payoutService = payoutService;
         this.ledgerApi = ledgerApi;
         this.authUtils = authUtils;
@@ -114,6 +111,13 @@ public class SwapTiProcessorService {
         Result<SwapMemo, ApiError> memoValidation = validateMemo(memo, request.requestId, chosen.matchedRequestId);
         if (memoValidation.isErr()) {
             return CompletableFuture.completedFuture(Result.err(memoValidation.getErrorUnsafe()));
+        }
+
+        if (memo.receiverParty != null && ti.sender() != null && !memo.receiverParty.equals(ti.sender())) {
+            return CompletableFuture.completedFuture(Result.err(preconditionError(
+                    "memo.receiverParty does not match inbound TI sender",
+                    Map.of("memoReceiverParty", memo.receiverParty, "tiSender", ti.sender())
+            )));
         }
 
         Instant deadline;
@@ -219,42 +223,31 @@ public class SwapTiProcessorService {
                                     return completedError(choiceCtx.getErrorUnsafe());
                                 }
                                 ChoiceContextResult ctx = choiceCtx.getValueUnsafe();
-                                Optional<SwapIntentAcsQueryService.SwapIntentDto> intent =
-                                        swapIntentQueryService.findByTransferInstructionCid(operator, ti.contractId());
-                                if (intent.isEmpty()) {
-                                    return completedError(new ApiError(
-                                            ErrorCode.NOT_FOUND,
-                                            "SWAP_INTENT_NOT_FOUND",
-                                            Map.of("requestId", request.requestId, "tiCid", ti.contractId()),
-                                            false,
-                                            null,
-                                            null
-                                    ));
-                                }
-
-                                String intentCid = intent.get().contractId();
-                                LOG.info("[SwapConsume] requestId={} operator={} inboundTiCid={} swapIntentCid={} poolCid={} amountIn={} amountOut={} actAs=[{}] readAs=[{}]",
+                                LOG.info("[SwapConsume] requestId={} operator={} inboundTiCid={} poolCid={} amountIn={} amountOut={} actAs=[{}] readAs=[{}]",
                                         request.requestId,
                                         operator,
                                         ti.contractId(),
-                                        intentCid,
                                         pool.contractId,
                                         amountIn.toPlainString(),
                                         amountOut.toPlainString(),
                                         operator,
                                         "");
 
-                                return executeSwap(
+                                return executeSwapFromTransferInstruction(
                                                 pool.contractId,
-                                                intentCid,
+                                                ti.contractId(),
                                                 outputHoldingCid,
+                                                direction,
+                                                minOut,
+                                                deadline,
+                                                memo.receiverParty,
                                                 ctx.disclosedContracts(),
                                                 ctx.synchronizerId()
                                         )
                                         .thenCompose(executeResult -> {
                                             if (executeResult.isErr()) {
                                                 return completedError(annotateNoSynchronizer(executeResult.getErrorUnsafe(),
-                                                        "ExecuteSwap",
+                                                        "ExecuteSwapFromTransferInstruction",
                                                         List.of(operator),
                                                         List.of(),
                                                         ctx.synchronizerId()));
@@ -284,8 +277,8 @@ public class SwapTiProcessorService {
                                             SwapConsumeResponse response = new SwapConsumeResponse();
                                             response.requestId = request.requestId;
                                             response.inboundTiCid = ti.contractId();
-                                            response.intentCid = intentCid;
-                                            response.swapIntentCid = intentCid;
+                                            response.intentCid = null;
+                                            response.swapIntentCid = null;
                                             response.poolCid = memo.poolCid;
                                             response.direction = memo.direction;
                                             response.amountIn = amountIn.toPlainString();
@@ -458,23 +451,31 @@ public class SwapTiProcessorService {
         return available.setScale(SwapConstants.SCALE, RoundingMode.DOWN);
     }
 
-    private CompletableFuture<Result<CommandServiceOuterClass.SubmitAndWaitForTransactionResponse, ApiError>> executeSwap(
+    private CompletableFuture<Result<CommandServiceOuterClass.SubmitAndWaitForTransactionResponse, ApiError>> executeSwapFromTransferInstruction(
             String poolCid,
-            String intentCid,
+            String transferInstructionCid,
             String outputHoldingCid,
+            SwapDirection direction,
+            BigDecimal minOutput,
+            Instant expiresAt,
+            String recipient,
             List<com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> disclosedContracts,
             String synchronizerId
     ) {
         ValueOuterClass.Record choiceArgs = ValueOuterClass.Record.newBuilder()
-                .addFields(recordField("intentCid", contractIdValue(intentCid)))
+                .addFields(recordField("transferInstructionCid", contractIdValue(transferInstructionCid)))
                 .addFields(recordField("outputHoldingCid", contractIdValue(outputHoldingCid)))
+                .addFields(recordField("direction", swapDirectionValue(direction)))
+                .addFields(recordField("minOutput", numericValue(minOutput)))
+                .addFields(recordField("expiresAt", timestampValue(expiresAt)))
+                .addFields(recordField("recipient", partyValue(recipient)))
                 .build();
 
         return ledgerApi.exerciseRawWithLabel(
-                        "ExecuteSwap",
+                        "ExecuteSwapFromTransferInstruction",
                         holdingPoolTemplateId(),
                         poolCid,
-                        "ExecuteSwap",
+                        "ExecuteSwapFromTransferInstruction",
                         choiceArgs,
                         List.of(authUtils.getAppProviderPartyId()),
                         List.of(),
@@ -527,6 +528,33 @@ public class SwapTiProcessorService {
 
     private ValueOuterClass.Value contractIdValue(String cid) {
         return ValueOuterClass.Value.newBuilder().setContractId(cid).build();
+    }
+
+    private ValueOuterClass.Value partyValue(String party) {
+        return ValueOuterClass.Value.newBuilder().setParty(party).build();
+    }
+
+    private ValueOuterClass.Value numericValue(BigDecimal value) {
+        String raw = value.setScale(SwapConstants.SCALE, RoundingMode.DOWN).toPlainString();
+        return ValueOuterClass.Value.newBuilder().setNumeric(raw).build();
+    }
+
+    private ValueOuterClass.Value timestampValue(Instant instant) {
+        long micros = instant.toEpochMilli() * 1000L;
+        return ValueOuterClass.Value.newBuilder().setTimestamp(micros).build();
+    }
+
+    private ValueOuterClass.Value swapDirectionValue(SwapDirection direction) {
+        String constructor = direction.damlConstructor;
+        ValueOuterClass.Value unit = ValueOuterClass.Value.newBuilder()
+                .setRecord(ValueOuterClass.Record.newBuilder().build())
+                .build();
+        return ValueOuterClass.Value.newBuilder()
+                .setVariant(ValueOuterClass.Variant.newBuilder()
+                        .setConstructor(constructor)
+                        .setValue(unit)
+                        .build())
+                .build();
     }
 
 

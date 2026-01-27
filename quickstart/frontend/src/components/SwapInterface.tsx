@@ -315,15 +315,7 @@ const SwapInterface: React.FC = () => {
         return;
       }
 
-      const swapIntentTemplateId = resolveSwapIntentTemplateId();
-      if (!swapIntentTemplateId) {
-        const message = 'Missing or invalid REACT_APP_CLEARPORTX_AMM_PACKAGE_ID';
-        setSwapResult({ ok: false, error: { code: 'CONFIG', message } });
-        toast.error(message);
-        return;
-      }
-
-      const deadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+      const deadline = new Date(Date.now() + 10 * 60 * 1000).toISOString();
       const requestId = `swap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const memoPayload = {
         v: 1,
@@ -358,8 +350,6 @@ const SwapInterface: React.FC = () => {
       const disclosedContracts = extractPreparedDisclosedContracts(prepared);
       const packagePreference = extractPreparedPackagePreference(prepared);
       const synchronizerId = extractPreparedSynchronizerId(prepared);
-      const poolInstruments = resolvePoolInstruments(activePool);
-      const preparedTiCid = extractPreparedTransferInstructionCid(prepared);
       const exerciseContractId = extractExerciseContractId(commands);
       const debugInfo = {
         disclosedContractsCount: disclosedContracts?.length ?? 0,
@@ -377,24 +367,9 @@ const SwapInterface: React.FC = () => {
         return;
       }
 
-      const inlineIntent =
-        Boolean(preparedTiCid) && Boolean(poolInstruments);
-      const inlineIntentCommand = inlineIntent
-        ? buildSwapIntentCreateCommand({
-            templateId: swapIntentTemplateId,
-            user: partyId,
-            operator: OPERATOR_PARTY,
-            poolInstruments: poolInstruments!,
-            transferInstructionCid: preparedTiCid!,
-            amountIn: amount.toFixed(10),
-            direction,
-            minOut: minOutputStr,
-            deadline,
-          })
-        : null;
-      const combinedCommands = inlineIntentCommand ? [inlineIntentCommand, ...commands] : commands;
+      const combinedCommands = commands;
 
-      setSwapStatus(inlineIntent ? 'Submitting SwapIntent + transfer' : 'Submitting inbound transfer');
+      setSwapStatus('Submitting inbound transfer');
       const transferResult = await submitTx({
         commands: combinedCommands,
         actAs: extractPreparedActAs(prepared, partyId),
@@ -403,81 +378,17 @@ const SwapInterface: React.FC = () => {
         memo,
         mode: 'WAIT',
         disclosedContracts,
-        packageIdSelectionPreference: inlineIntent
-          ? mergePackagePreference(packagePreference, process.env.REACT_APP_HOLDINGPOOL_PACKAGE_ID)
-          : packagePreference,
+        packageIdSelectionPreference: packagePreference,
         synchronizerId,
       });
-      let intentResult: any = null;
       let consumeResult: any = null;
       if (transferResult.ok && transferResult.value.txStatus === 'SUCCEEDED') {
         const shouldConsume = devnetConsumeAvailable;
-        let canConsume = false;
-        if (inlineIntent) {
-          intentResult = {
-            ok: true,
-            value: {
-              txStatus: transferResult.value.txStatus,
-              ledgerUpdateId: transferResult.value.ledgerUpdateId,
-              inline: true,
-            },
-          };
-          canConsume = true;
-        } else {
-          setSwapStatus('Resolving inbound TI');
-          const inbound = await waitForInboundTransferInstruction(requestId);
-          if (!inbound?.ok) {
-            intentResult = inbound;
-          } else {
-          const tiCid = inbound.result?.contractId;
-          if (!tiCid || !poolInstruments) {
-            intentResult = {
-              ok: false,
-              error: {
-                code: 'INTENT',
-                message: 'Unable to resolve inbound TI or pool instruments',
-                details: { tiCid, poolInstruments },
-              },
-            };
-            } else {
-              setSwapStatus('Submitting SwapIntent');
-              const intentCommand = buildSwapIntentCreateCommand({
-                templateId: swapIntentTemplateId,
-                user: partyId,
-                operator: OPERATOR_PARTY,
-                poolInstruments,
-                transferInstructionCid: tiCid,
-                amountIn: amount.toFixed(10),
-                direction,
-                minOut: minOutputStr,
-                deadline,
-              });
-              console.log('[Swap CreateIntent]', {
-                actAs: [partyId],
-                readAs: [],
-                requestId,
-              });
-              intentResult = await submitTx({
-                commands: [intentCommand],
-                actAs: [partyId],
-                readAs: [],
-                deduplicationKey: `${requestId}-intent`,
-                packageIdSelectionPreference: mergePackagePreference(
-                  packagePreference,
-                  process.env.REACT_APP_HOLDINGPOOL_PACKAGE_ID
-                ),
-                synchronizerId,
-              });
-              if (intentResult.ok && intentResult.value.txStatus === 'SUCCEEDED') {
-                canConsume = true;
-              }
-            }
-          }
-        }
         if (shouldConsume) {
-          if (canConsume) {
-            setSwapStatus('Consuming swap (backend)');
-            consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+          setSwapStatus('Consuming swap (backend)');
+          consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+          if (consumeResult?.ok) {
+            setSwapStatus('Payout created. Accept in Loop wallet.');
           }
         } else {
           consumeResult = {
@@ -489,7 +400,6 @@ const SwapInterface: React.FC = () => {
 
       const resultWithDebug = {
         transfer: transferResult,
-        intent: intentResult,
         consume: consumeResult,
         debug: debugInfo,
       };
@@ -858,18 +768,6 @@ function resolvePoolInstruments(pool: PoolInfo | null): PoolInstruments | null {
   return { instrumentA: instA, instrumentB: instB };
 }
 
-function resolveSwapIntentTemplateId(): string | null {
-  const pkgId = (process.env.REACT_APP_CLEARPORTX_AMM_PACKAGE_ID || '').trim();
-  if (!isValidPackageIdHash(pkgId)) {
-    return null;
-  }
-  return `${pkgId}:AMM.SwapIntent:SwapIntent`;
-}
-
-function isValidPackageIdHash(value: string): boolean {
-  return /^[0-9a-f]{64}$/i.test(value);
-}
-
 function isDevnetSwapApiResponse(value: any, expectedRequestId = 'ping'): boolean {
   return Boolean(
     value &&
@@ -877,76 +775,6 @@ function isDevnetSwapApiResponse(value: any, expectedRequestId = 'ping'): boolea
     value.requestId === expectedRequestId &&
     typeof value.ok === 'boolean'
   );
-}
-
-function mergePackagePreference(base?: string[], extra?: string): string[] | undefined {
-  const merged = Array.isArray(base) ? [...base] : [];
-  if (extra && extra.trim().length > 0 && !merged.includes(extra)) {
-    merged.push(extra);
-  }
-  return merged.length > 0 ? merged : undefined;
-}
-
-function buildSwapIntentCreateCommand(params: {
-  templateId: string;
-  user: string;
-  operator: string;
-  poolInstruments: PoolInstruments;
-  transferInstructionCid: string;
-  amountIn: string;
-  direction: 'A2B' | 'B2A';
-  minOut: string;
-  deadline: string;
-}) {
-  const inputInstrument =
-    params.direction === 'A2B' ? params.poolInstruments.instrumentA : params.poolInstruments.instrumentB;
-  const direction = params.direction === 'A2B' ? 'AtoB' : 'BtoA';
-  return {
-    CreateCommand: {
-      templateId: params.templateId,
-      createArguments: {
-        user: params.user,
-        operator: params.operator,
-        poolKey: {
-          operator: params.operator,
-          instrumentA: {
-            admin: params.poolInstruments.instrumentA.instrumentAdmin,
-            id: params.poolInstruments.instrumentA.instrumentId,
-          },
-          instrumentB: {
-            admin: params.poolInstruments.instrumentB.instrumentAdmin,
-            id: params.poolInstruments.instrumentB.instrumentId,
-          },
-        },
-        transferInstructionCid: params.transferInstructionCid,
-        inputAmount: params.amountIn,
-        inputInstrument: {
-          admin: inputInstrument.instrumentAdmin,
-          id: inputInstrument.instrumentId,
-        },
-        direction,
-        minOutput: params.minOut,
-        createdAt: new Date().toISOString(),
-        expiresAt: params.deadline,
-      },
-    },
-  };
-}
-
-async function waitForInboundTransferInstruction(requestId: string) {
-  const maxAttempts = 8;
-  const delayMs = 1000;
-  let last: any = null;
-  for (let i = 0; i < maxAttempts; i++) {
-    // eslint-disable-next-line no-await-in-loop
-    last = await backendApi.getDevnetSwapTransferInstruction(requestId);
-    if (last?.ok) {
-      return last;
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-  return last;
 }
 
 function resolveSwapDirection(

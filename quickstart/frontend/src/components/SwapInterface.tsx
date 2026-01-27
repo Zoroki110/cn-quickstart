@@ -887,10 +887,6 @@ function mergePackagePreference(base?: string[], extra?: string): string[] | und
   return merged.length > 0 ? merged : undefined;
 }
 
-function isDevnetSwapApiResponse(response: any): boolean {
-  return Boolean(response && typeof response === 'object' && typeof response.requestId === 'string');
-}
-
 function buildSwapIntentCreateCommand(params: {
   templateId: string;
   user: string;

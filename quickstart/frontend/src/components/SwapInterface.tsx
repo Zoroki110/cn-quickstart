@@ -394,12 +394,8 @@ const SwapInterface: React.FC = () => {
           host === 'localhost' ||
           host.startsWith('127.') ||
           host.endsWith('.ngrok-free.dev');
-        if (!shouldConsume) {
-          intentResult = {
-            ok: false,
-            error: { code: 'DEVNET_ONLY', message: 'Swap consume is only enabled in devnet' },
-          };
-        } else if (inlineIntent) {
+        let canConsume = false;
+        if (inlineIntent) {
           intentResult = {
             ok: true,
             value: {
@@ -408,8 +404,7 @@ const SwapInterface: React.FC = () => {
               inline: true,
             },
           };
-          setSwapStatus('Consuming swap (backend)');
-          consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+          canConsume = true;
         } else {
           setSwapStatus('Resolving inbound TI');
           const inbound = await waitForInboundTransferInstruction(requestId);
@@ -455,11 +450,21 @@ const SwapInterface: React.FC = () => {
                 synchronizerId,
               });
               if (intentResult.ok && intentResult.value.txStatus === 'SUCCEEDED') {
-                setSwapStatus('Consuming swap (backend)');
-                consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+                canConsume = true;
               }
             }
           }
+        }
+        if (shouldConsume) {
+          if (canConsume) {
+            setSwapStatus('Consuming swap (backend)');
+            consumeResult = await backendApi.consumeDevnetSwap({ requestId });
+          }
+        } else {
+          consumeResult = {
+            ok: false,
+            error: { code: 'DEVNET_ONLY', message: 'Swap consume is only enabled in devnet' },
+          };
         }
       }
 

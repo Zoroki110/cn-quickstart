@@ -50,6 +50,7 @@ const SwapInterface: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [swapResult, setSwapResult] = useState<any>(null);
   const [swapStatus, setSwapStatus] = useState<string | null>(null);
+  const [devnetConsumeAvailable, setDevnetConsumeAvailable] = useState(false);
   const [pools, setPools] = useState<PoolInfo[]>([]);
   const [volume24h, setVolume24h] = useState<number>(0);
   const lastConnectedParty = useRef<string | null>(null);
@@ -191,6 +192,19 @@ const SwapInterface: React.FC = () => {
     loadTokens();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const probeDevnetSwap = async () => {
+      const res = await backendApi.inspectDevnetSwap('ping');
+      if (cancelled) return;
+      setDevnetConsumeAvailable(isDevnetSwapApiResponse(res));
+    };
+    probeDevnetSwap();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Compute 24h volume for selected pair from current pools
   useEffect(() => {
     if (!selectedTokens.from || !selectedTokens.to || pools.length === 0) {
@@ -301,6 +315,14 @@ const SwapInterface: React.FC = () => {
         return;
       }
 
+      const swapIntentTemplateId = resolveSwapIntentTemplateId();
+      if (!swapIntentTemplateId) {
+        const message = 'Missing or invalid REACT_APP_CLEARPORTX_AMM_PACKAGE_ID';
+        setSwapResult({ ok: false, error: { code: 'CONFIG', message } });
+        toast.error(message);
+        return;
+      }
+
       const deadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
       const requestId = `swap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const memoPayload = {
@@ -359,6 +381,7 @@ const SwapInterface: React.FC = () => {
         Boolean(preparedTiCid) && Boolean(poolInstruments);
       const inlineIntentCommand = inlineIntent
         ? buildSwapIntentCreateCommand({
+            templateId: swapIntentTemplateId,
             user: partyId,
             operator: OPERATOR_PARTY,
             poolInstruments: poolInstruments!,
@@ -388,12 +411,7 @@ const SwapInterface: React.FC = () => {
       let intentResult: any = null;
       let consumeResult: any = null;
       if (transferResult.ok && transferResult.value.txStatus === 'SUCCEEDED') {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        const shouldConsume =
-          process.env.REACT_APP_ENV === 'devnet' ||
-          host === 'localhost' ||
-          host.startsWith('127.') ||
-          host.endsWith('.ngrok-free.dev');
+        const shouldConsume = devnetConsumeAvailable;
         let canConsume = false;
         if (inlineIntent) {
           intentResult = {
@@ -424,6 +442,7 @@ const SwapInterface: React.FC = () => {
             } else {
               setSwapStatus('Submitting SwapIntent');
               const intentCommand = buildSwapIntentCreateCommand({
+                templateId: swapIntentTemplateId,
                 user: partyId,
                 operator: OPERATOR_PARTY,
                 poolInstruments,
@@ -839,13 +858,25 @@ function resolvePoolInstruments(pool: PoolInfo | null): PoolInstruments | null {
   return { instrumentA: instA, instrumentB: instB };
 }
 
-function resolveSwapIntentPackageId(): string {
-  const pkgId = process.env.REACT_APP_HOLDINGPOOL_PACKAGE_ID;
-  if (pkgId && pkgId.trim().length > 0) {
-    return pkgId;
+function resolveSwapIntentTemplateId(): string | null {
+  const pkgId = (process.env.REACT_APP_CLEARPORTX_AMM_PACKAGE_ID || '').trim();
+  if (!isValidPackageIdHash(pkgId)) {
+    return null;
   }
-  const pkgName = process.env.REACT_APP_SWAP_INTENT_PACKAGE_NAME || 'clearportx-amm-drain-credit';
-  return `#${pkgName}`;
+  return `${pkgId}:AMM.SwapIntent:SwapIntent`;
+}
+
+function isValidPackageIdHash(value: string): boolean {
+  return /^[0-9a-f]{64}$/i.test(value);
+}
+
+function isDevnetSwapApiResponse(value: any, expectedRequestId = 'ping'): boolean {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    value.requestId === expectedRequestId &&
+    typeof value.ok === 'boolean'
+  );
 }
 
 function mergePackagePreference(base?: string[], extra?: string): string[] | undefined {
@@ -856,7 +887,12 @@ function mergePackagePreference(base?: string[], extra?: string): string[] | und
   return merged.length > 0 ? merged : undefined;
 }
 
+function isDevnetSwapApiResponse(response: any): boolean {
+  return Boolean(response && typeof response === 'object' && typeof response.requestId === 'string');
+}
+
 function buildSwapIntentCreateCommand(params: {
+  templateId: string;
   user: string;
   operator: string;
   poolInstruments: PoolInstruments;
@@ -871,11 +907,7 @@ function buildSwapIntentCreateCommand(params: {
   const direction = params.direction === 'A2B' ? 'AtoB' : 'BtoA';
   return {
     CreateCommand: {
-      templateId: {
-        packageId: resolveSwapIntentPackageId(),
-        moduleName: 'AMM.SwapIntent',
-        entityName: 'SwapIntent',
-      },
+      templateId: params.templateId,
       createArguments: {
         user: params.user,
         operator: params.operator,

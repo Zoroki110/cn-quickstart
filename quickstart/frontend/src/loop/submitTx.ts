@@ -112,6 +112,62 @@ function applyMemoToCommands(commands: any[], memo?: string): any[] {
   });
 }
 
+function toTemplateIdString(templateId: any): any {
+  if (typeof templateId === "string") return templateId;
+  if (
+    templateId &&
+    typeof templateId === "object" &&
+    typeof templateId.packageId === "string" &&
+    typeof templateId.moduleName === "string" &&
+    typeof templateId.entityName === "string"
+  ) {
+    return `${templateId.packageId}:${templateId.moduleName}:${templateId.entityName}`;
+  }
+  return templateId;
+}
+
+function normalizeTemplateIds(commands: any[]): any[] {
+  return commands.map((cmd) => {
+    if (cmd?.CreateCommand?.templateId) {
+      const templateId = toTemplateIdString(cmd.CreateCommand.templateId);
+      if (templateId !== cmd.CreateCommand.templateId) {
+        return {
+          ...cmd,
+          CreateCommand: {
+            ...cmd.CreateCommand,
+            templateId,
+          },
+        };
+      }
+    }
+    if (cmd?.ExerciseCommand?.templateId) {
+      const templateId = toTemplateIdString(cmd.ExerciseCommand.templateId);
+      if (templateId !== cmd.ExerciseCommand.templateId) {
+        return {
+          ...cmd,
+          ExerciseCommand: {
+            ...cmd.ExerciseCommand,
+            templateId,
+          },
+        };
+      }
+    }
+    if (cmd?.ExerciseByKeyCommand?.templateId) {
+      const templateId = toTemplateIdString(cmd.ExerciseByKeyCommand.templateId);
+      if (templateId !== cmd.ExerciseByKeyCommand.templateId) {
+        return {
+          ...cmd,
+          ExerciseByKeyCommand: {
+            ...cmd.ExerciseByKeyCommand,
+            templateId,
+          },
+        };
+      }
+    }
+    return cmd;
+  });
+}
+
 function buildEnvelope(input: SubmitTxInput, commands: any[]) {
   const commandId = input.deduplicationKey || `loop-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const workflowId = input.deduplicationKey ? `wf-${input.deduplicationKey}` : `wf-${Date.now()}`;
@@ -188,10 +244,25 @@ function extractLedgerUpdateId(resp: any): string {
   return (
     resp?.ledgerUpdateId ??
     resp?.updateId ??
+    resp?.update_id ??
+    resp?.updateID ??
     resp?.transactionId ??
     resp?.transaction?.updateId ??
+    resp?.transaction?.update_id ??
     resp?.transaction?.transactionId ??
+    resp?.transaction?.transaction_id ??
+    resp?.update?.updateId ??
+    resp?.update?.update_id ??
+    resp?.updateData?.updateId ??
+    resp?.updateData?.update_id ??
+    resp?.update_data?.update_id ??
+    resp?.update_data?.updateId ??
+    resp?.result?.updateId ??
+    resp?.result?.update_id ??
+    resp?.result?.transactionId ??
+    resp?.result?.transaction_id ??
     resp?.commandId ??
+    resp?.command_id ??
     ""
   );
 }
@@ -256,7 +327,8 @@ export async function submitTx(input: SubmitTxInput): Promise<Result<SubmitTxSuc
 
   const mode = resolveMode(input.mode);
   const commandsWithMemo = applyMemoToCommands(input.commands, input.memo);
-  const envelope = buildEnvelope(input, commandsWithMemo);
+  const normalizedCommands = normalizeTemplateIds(commandsWithMemo);
+  const envelope = buildEnvelope(input, normalizedCommands);
   const opts: any = {
     timeoutMs: 120000,
   };

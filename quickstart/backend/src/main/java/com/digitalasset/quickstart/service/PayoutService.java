@@ -10,6 +10,7 @@ import com.digitalasset.quickstart.common.Result;
 import com.digitalasset.quickstart.config.LedgerConfig;
 import com.digitalasset.quickstart.config.RegistryRoutingConfig;
 import com.digitalasset.quickstart.config.TemplateSchemaDebugConfig;
+import com.digitalasset.quickstart.constants.SwapConstants;
 import com.digitalasset.quickstart.dto.ApiError;
 import com.digitalasset.quickstart.dto.ErrorCode;
 import com.digitalasset.quickstart.dto.HoldingSelectRequest;
@@ -115,6 +116,182 @@ public class PayoutService {
             return createPayout(request, InstrumentConfig.cbtc(), requestId);
         }
         return viaFactory;
+    }
+
+    @WithSpan
+    public Result<TransferFactoryPlan, ApiError> prepareTransferFactory(
+            String instrumentAdmin,
+            String instrumentId,
+            String holdingCid,
+            String receiverParty,
+            BigDecimal amount,
+            Instant executeBefore,
+            String memo,
+            String requestId
+    ) {
+        if (!schemaConfig.isEnabled()) {
+            return Result.err(new ApiError(
+                    ErrorCode.PRECONDITION_FAILED,
+                    "Template schema debug is disabled",
+                    Map.of("flag", "feature.enable-template-schema-debug"),
+                    false,
+                    null,
+                    null
+            ));
+        }
+        if (holdingCid == null || holdingCid.isBlank()) {
+            return Result.err(new ApiError(
+                    ErrorCode.VALIDATION,
+                    "holdingCid is required",
+                    Map.of("field", "holdingCid"),
+                    false,
+                    null,
+                    null
+            ));
+        }
+        if (receiverParty == null || receiverParty.isBlank()) {
+            return Result.err(new ApiError(
+                    ErrorCode.VALIDATION,
+                    "receiverParty is required",
+                    Map.of("field", "receiverParty"),
+                    false,
+                    null,
+                    null
+            ));
+        }
+        if (instrumentAdmin == null || instrumentAdmin.isBlank() || instrumentId == null || instrumentId.isBlank()) {
+            return Result.err(new ApiError(
+                    ErrorCode.VALIDATION,
+                    "instrument is required",
+                    Map.of("field", "instrumentId"),
+                    false,
+                    null,
+                    null
+            ));
+        }
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return Result.err(new ApiError(
+                    ErrorCode.VALIDATION,
+                    "amount must be positive",
+                    Map.of("field", "amount"),
+                    false,
+                    null,
+                    null
+            ));
+        }
+        if (executeBefore == null) {
+            return Result.err(new ApiError(
+                    ErrorCode.VALIDATION,
+                    "executeBefore is required",
+                    Map.of("field", "executeBefore"),
+                    false,
+                    null,
+                    null
+            ));
+        }
+
+        String operator = authUtils.getAppProviderPartyId();
+        String amountText = amount.setScale(SwapConstants.SCALE, RoundingMode.DOWN).toPlainString();
+
+        TemplateSchemaService.DataTypeAst tfAst = schemaService.getDataTypeAst(
+                TRANSFER_INSTRUCTION_PKG,
+                TRANSFER_INSTRUCTION_MODULE,
+                TRANSFER_FACTORY_ARG
+        );
+        ValueOuterClass.Record transferFactoryArg = buildRecordFromDataTypeAst(tfAst, new BuildContext(
+                operator,
+                receiverParty,
+                instrumentAdmin,
+                instrumentId,
+                amountText,
+                executeBefore,
+                memo,
+                holdingCid
+        ));
+        Map<String, Object> payloadBody = Map.of("choiceArguments", recordToJson(transferFactoryArg));
+        Result<String, ApiError> payloadJson = toJsonSafe(payloadBody);
+        if (payloadJson.isErr()) {
+            return Result.err(payloadJson.getErrorUnsafe());
+        }
+
+        String url = resolveTransferFactoryUrl(instrumentAdmin);
+        if (url == null || url.isBlank()) {
+            return Result.err(new ApiError(
+                    ErrorCode.PRECONDITION_FAILED,
+                    "Transfer factory registry URL not configured",
+                    Map.of("instrumentAdmin", instrumentAdmin, "instrumentId", instrumentId),
+                    false,
+                    null,
+                    null
+            ));
+        }
+
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(url))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payloadJson.getValueUnsafe()));
+        if (ledgerConfig.getRegistryAuthHeader() != null && !ledgerConfig.getRegistryAuthHeader().isBlank()
+                && ledgerConfig.getRegistryAuthToken() != null && !ledgerConfig.getRegistryAuthToken().isBlank()) {
+            req.header(ledgerConfig.getRegistryAuthHeader(), ledgerConfig.getRegistryAuthToken());
+        }
+
+        return await(
+                httpClient.sendAsync(req.build(), HttpResponse.BodyHandlers.ofString()),
+                ex -> internalError("Transfer factory registry call failed", ex, Map.of("url", url))
+        ).flatMap(resp -> {
+            if (resp.statusCode() / 100 != 2) {
+                return Result.err(mapRegistryHttpError(resp.statusCode(), resp.body(), url, null));
+            }
+            Result<TransferFactoryContext, ApiError> parsed = parseTransferFactoryContext(resp.body(), url, null);
+            if (parsed.isErr()) {
+                return Result.err(parsed.getErrorUnsafe());
+            }
+            TransferFactoryContext ctx = parsed.getValueUnsafe();
+            String factoryCid = ctx.factoryCid;
+            List<DisclosedContractDto> disclosedContracts = ctx.choiceContext != null ? ctx.choiceContext.disclosedContracts : null;
+            if (factoryCid == null || factoryCid.isBlank()) {
+                return Result.err(new ApiError(
+                        ErrorCode.PRECONDITION_FAILED,
+                        "Registry response did not include factoryCid",
+                        Map.of("url", url),
+                        false,
+                        null,
+                        null
+                ));
+            }
+            if (disclosedContracts == null || disclosedContracts.isEmpty()) {
+                return Result.err(new ApiError(
+                        ErrorCode.PRECONDITION_FAILED,
+                        "Registry response did not include disclosedContracts",
+                        Map.of("url", url),
+                        false,
+                        null,
+                        null
+                ));
+            }
+
+            List<CommandsOuterClass.DisclosedContract> disclosed = disclosedContracts.stream()
+                    .map(this::toDisclosedContract)
+                    .filter(dc -> dc != null)
+                    .toList();
+            if (disclosed.isEmpty()) {
+                return Result.err(new ApiError(
+                        ErrorCode.PRECONDITION_FAILED,
+                        "Registry disclosures invalid",
+                        Map.of("url", url),
+                        false,
+                        null,
+                        null
+                ));
+            }
+
+            ValueOuterClass.Record extraArgs = buildExtraArgs(ctx.choiceContext);
+            String synchronizerId = disclosedContracts.stream()
+                    .map(dc -> dc.synchronizerId)
+                    .filter(s -> s != null && !s.isBlank())
+                    .findFirst()
+                    .orElse(null);
+            return Result.ok(new TransferFactoryPlan(factoryCid, extraArgs, disclosed, synchronizerId));
+        });
     }
 
     private Result<PayoutResponse, ApiError> createAmuletViaHoldingChoice(PayoutRequest request, String requestId) {
@@ -1468,6 +1645,13 @@ public class PayoutService {
         public String createdEventBlob;
         public String synchronizerId;
     }
+
+    public record TransferFactoryPlan(
+            String factoryCid,
+            ValueOuterClass.Record extraArgs,
+            List<CommandsOuterClass.DisclosedContract> disclosedContracts,
+            String synchronizerId
+    ) { }
 
     private record TransferFactoryContext(
             String factoryCid,

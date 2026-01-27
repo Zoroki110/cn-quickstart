@@ -4,6 +4,7 @@
 module AMM.HoldingPool where
 
 import DA.Time (hours, addRelTime)
+import qualified DA.TextMap as TextMap
 import DA.Math (sqrt)
 import qualified Splice.Api.Token.MetadataV1 as M
 import qualified Splice.Api.Token.TransferInstructionV1 as TI
@@ -216,8 +217,9 @@ template HoldingPool
         return (newPoolCid, payoutCid)
 
     -- | ExecuteSwapFromTransferInstruction - swap without SwapIntent.
-    -- Uses inbound TI + memo fields supplied by backend (direction/minOutput/recipient/expiry).
-    choice ExecuteSwapFromTransferInstruction : (ContractId HoldingPool, ContractId PendingPayout)
+    -- Uses inbound TI + memo fields supplied by backend (direction/minOutput/recipient/expiry)
+    -- and creates the outbound payout TI atomically.
+    choice ExecuteSwapFromTransferInstruction : (ContractId HoldingPool, TransferInstructionCid)
       with
         transferInstructionCid : TransferInstructionCid
         outputHoldingCid : HoldingCid
@@ -225,6 +227,9 @@ template HoldingPool
         minOutput : Decimal
         expiresAt : Time
         recipient : Party
+        payoutFactoryCid : ContractId TI.TransferFactory
+        payoutExtraArgs : M.ExtraArgs
+        payoutMemo : Text
       controller operator
       do
         assertMsg "Pool must be Active" (status == Active)
@@ -281,47 +286,47 @@ template HoldingPool
         assertMsg "Output holding has wrong instrument" (instrumentIdEq outputInst expectedOutput)
         assertMsg "Output holding has insufficient amount" (outputAmt >= outputAmount)
 
-        -- Calculate new reserves and locked amounts
-        let (newReserveA, newReserveB, newLockedA, newLockedB) = case direction of
+        -- Create payout TI atomically via TransferFactory
+        let memoKey = "splice.lfdecentralizedtrust.org/reason"
+        let memoMeta = M.Metadata with values = TextMap.fromList [(memoKey, payoutMemo)]
+        let payoutTransfer = TI.Transfer with
+              sender = operator
+              receiver = recipient
+              amount = outputAmount
+              instrumentId = expectedOutput
+              requestedAt = now
+              executeBefore = expiresAt
+              inputHoldingCids = [outputHoldingCid]
+              meta = memoMeta
+        payoutResult <- exercise payoutFactoryCid TI.TransferFactory_Transfer with
+          expectedAdmin = expectedOutput.admin
+          transfer = payoutTransfer
+          extraArgs = payoutExtraArgs
+        payoutTiCid <- case payoutResult.output of
+          TI.TransferInstructionResult_Pending {transferInstructionCid} -> return transferInstructionCid
+          TI.TransferInstructionResult_Completed {} -> error "Payout transfer completed immediately (no TI)"
+          TI.TransferInstructionResult_Failed {} -> error "Payout transfer failed"
+
+        -- Calculate new reserves (no pending payout tracking)
+        let (newReserveA, newReserveB) = case direction of
               AtoB ->
                 ( reserveAmountA + inputAmt
-                , reserveAmountB
-                , lockedAmountA
-                , lockedAmountB + outputAmount
+                , reserveAmountB - outputAmount
                 )
               BtoA ->
-                ( reserveAmountA
+                ( reserveAmountA - outputAmount
                 , reserveAmountB + inputAmt
-                , lockedAmountA + outputAmount
-                , lockedAmountB
                 )
 
         -- Safety checks
-        assertMsg "Locked A cannot exceed reserve A" (newLockedA <= newReserveA)
-        assertMsg "Locked B cannot exceed reserve B" (newLockedB <= newReserveB)
-
-        let outputInstrument = case direction of
-              AtoB -> instrumentB
-              BtoA -> instrumentA
-        let payoutExpiry = addRelTime now (hours 24)
-
-        payoutCid <- create PendingPayout with
-          operator
-          recipient
-          outputTiCid = transferInstructionCid  -- Placeholder until payout TI is created
-          amount = outputAmount
-          instrument = outputInstrument
-          poolKey = PoolKey with operator, instrumentA, instrumentB
-          createdAt = now
-          expiresAt = payoutExpiry
+        assertMsg "Reserve A cannot go below locked A" (newReserveA >= lockedAmountA)
+        assertMsg "Reserve B cannot go below locked B" (newReserveB >= lockedAmountB)
 
         newPoolCid <- create this with
           reserveAmountA = newReserveA
           reserveAmountB = newReserveB
-          lockedAmountA = newLockedA
-          lockedAmountB = newLockedB
 
-        return (newPoolCid, payoutCid)
+        return (newPoolCid, payoutTiCid)
 
     -- | UnlockPayout - called when payout is claimed.
     -- Deducts from reserves and unlocks.

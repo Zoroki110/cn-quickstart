@@ -223,6 +223,29 @@ public class SwapTiProcessorService {
                                     return completedError(choiceCtx.getErrorUnsafe());
                                 }
                                 ChoiceContextResult ctx = choiceCtx.getValueUnsafe();
+                                Result<PayoutService.TransferFactoryPlan, ApiError> payoutPlanResult =
+                                        payoutService.prepareTransferFactory(
+                                                outputInstrument.admin,
+                                                outputInstrument.id,
+                                                outputHoldingCid,
+                                                memo.receiverParty,
+                                                amountOut,
+                                                deadline,
+                                                memoRaw,
+                                                "swap-payout-" + request.requestId
+                                        );
+                                if (payoutPlanResult.isErr()) {
+                                    return completedError(annotateNoSynchronizer(payoutPlanResult.getErrorUnsafe(),
+                                            "PreparePayout",
+                                            List.of(operator),
+                                            List.of(operator),
+                                            null));
+                                }
+                                PayoutService.TransferFactoryPlan payoutPlan = payoutPlanResult.getValueUnsafe();
+                                List<com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> disclosed =
+                                        mergeDisclosed(ctx.disclosedContracts(), payoutPlan.disclosedContracts());
+                                String synchronizerId = firstNonBlank(ctx.synchronizerId(), payoutPlan.synchronizerId());
+
                                 LOG.info("[SwapConsume] requestId={} operator={} inboundTiCid={} poolCid={} amountIn={} amountOut={} actAs=[{}] readAs=[{}]",
                                         request.requestId,
                                         operator,
@@ -241,8 +264,11 @@ public class SwapTiProcessorService {
                                                 minOut,
                                                 deadline,
                                                 memo.receiverParty,
-                                                ctx.disclosedContracts(),
-                                                ctx.synchronizerId()
+                                                payoutPlan.factoryCid(),
+                                                payoutPlan.extraArgs(),
+                                                memoRaw,
+                                                disclosed,
+                                                synchronizerId
                                         )
                                         .thenCompose(executeResult -> {
                                             if (executeResult.isErr()) {
@@ -250,30 +276,16 @@ public class SwapTiProcessorService {
                                                         "ExecuteSwapFromTransferInstruction",
                                                         List.of(operator),
                                                         List.of(),
-                                                        ctx.synchronizerId()));
+                                                        synchronizerId));
                                             }
                                             String updateId = extractUpdateId(executeResult.getValueUnsafe());
                                             if (updateId == null || updateId.isBlank()) {
                                                 return completedError(ApiError.of(ErrorCode.INTERNAL, "ExecuteSwap returned no updateId"));
                                             }
-
-                                            Result<PayoutResponse, ApiError> payoutResult = createPayout(
-                                                    outputInstrument,
-                                                    memo.receiverParty,
-                                                    amountOut,
-                                                    memoRaw,
-                                                    deadline,
-                                                    request.requestId
-                                            );
-                                            if (payoutResult.isErr()) {
-                                                return completedError(annotateNoSynchronizer(payoutResult.getErrorUnsafe(),
-                                                        "Payout",
-                                                        List.of(operator),
-                                                        List.of(operator),
-                                                        null));
+                                            String payoutCid = extractPayoutCid(executeResult.getValueUnsafe());
+                                            if (payoutCid == null || payoutCid.isBlank()) {
+                                                return completedError(ApiError.of(ErrorCode.INTERNAL, "ExecuteSwap returned no payoutCid"));
                                             }
-
-                                            PayoutResponse payout = payoutResult.getValueUnsafe();
                                             SwapConsumeResponse response = new SwapConsumeResponse();
                                             response.requestId = request.requestId;
                                             response.inboundTiCid = ti.contractId();
@@ -286,10 +298,10 @@ public class SwapTiProcessorService {
                                             response.minOut = minOut.toPlainString();
                                             response.executeSwapLedgerUpdateId = updateId;
                                             response.executeSwapStatus = "SUCCEEDED";
-                                            response.payoutCid = payout.cid();
-                                            response.payoutExecuteBefore = payout.executeBefore();
-                                            response.payoutFactoryId = payout.factoryId();
-                                            response.payoutDisclosedContractsCount = payout.disclosedContractsCount();
+                                            response.payoutCid = payoutCid;
+                                            response.payoutExecuteBefore = deadline.toString();
+                                            response.payoutFactoryId = payoutPlan.factoryCid();
+                                            response.payoutDisclosedContractsCount = payoutPlan.disclosedContracts().size();
                                             response.payoutStatus = "CREATED";
                                             response.nextAction = "ACCEPT_PAYOUT_IN_LOOP";
 
@@ -459,6 +471,9 @@ public class SwapTiProcessorService {
             BigDecimal minOutput,
             Instant expiresAt,
             String recipient,
+            String payoutFactoryCid,
+            ValueOuterClass.Record payoutExtraArgs,
+            String payoutMemo,
             List<com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> disclosedContracts,
             String synchronizerId
     ) {
@@ -469,6 +484,9 @@ public class SwapTiProcessorService {
                 .addFields(recordField("minOutput", numericValue(minOutput)))
                 .addFields(recordField("expiresAt", timestampValue(expiresAt)))
                 .addFields(recordField("recipient", partyValue(recipient)))
+                .addFields(recordField("payoutFactoryCid", contractIdValue(payoutFactoryCid)))
+                .addFields(recordField("payoutExtraArgs", recordValue(payoutExtraArgs)))
+                .addFields(recordField("payoutMemo", textValue(payoutMemo)))
                 .build();
 
         return ledgerApi.exerciseRawWithLabel(
@@ -534,6 +552,14 @@ public class SwapTiProcessorService {
         return ValueOuterClass.Value.newBuilder().setParty(party).build();
     }
 
+    private ValueOuterClass.Value textValue(String text) {
+        return ValueOuterClass.Value.newBuilder().setText(text).build();
+    }
+
+    private ValueOuterClass.Value recordValue(ValueOuterClass.Record record) {
+        return ValueOuterClass.Value.newBuilder().setRecord(record).build();
+    }
+
     private ValueOuterClass.Value numericValue(BigDecimal value) {
         String raw = value.setScale(SwapConstants.SCALE, RoundingMode.DOWN).toPlainString();
         return ValueOuterClass.Value.newBuilder().setNumeric(raw).build();
@@ -562,6 +588,36 @@ public class SwapTiProcessorService {
         return ValueOuterClass.RecordField.newBuilder().setLabel(label).setValue(value).build();
     }
 
+    private List<com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> mergeDisclosed(
+            List<com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> a,
+            List<com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> b
+    ) {
+        Map<String, com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> byCid = new LinkedHashMap<>();
+        if (a != null) {
+            for (var dc : a) {
+                if (dc != null && !dc.getContractId().isBlank()) {
+                    byCid.putIfAbsent(dc.getContractId(), dc);
+                }
+            }
+        }
+        if (b != null) {
+            for (var dc : b) {
+                if (dc != null && !dc.getContractId().isBlank()) {
+                    byCid.putIfAbsent(dc.getContractId(), dc);
+                }
+            }
+        }
+        return new ArrayList<>(byCid.values());
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String v : values) {
+            if (v != null && !v.isBlank()) return v;
+        }
+        return null;
+    }
+
     private BigDecimal normalizeAmount(String value) {
         if (value == null || value.isBlank()) {
             return BigDecimal.ZERO.setScale(SwapConstants.SCALE, RoundingMode.DOWN);
@@ -572,6 +628,23 @@ public class SwapTiProcessorService {
     private String extractUpdateId(CommandServiceOuterClass.SubmitAndWaitForTransactionResponse resp) {
         if (resp == null || !resp.hasTransaction()) return null;
         return resp.getTransaction().getUpdateId();
+    }
+
+    private String extractPayoutCid(CommandServiceOuterClass.SubmitAndWaitForTransactionResponse resp) {
+        if (resp == null || !resp.hasTransaction()) return null;
+        for (var ev : resp.getTransaction().getEventsList()) {
+            if (!ev.hasExercised()) continue;
+            if (!"ExecuteSwapFromTransferInstruction".equals(ev.getExercised().getChoice())) continue;
+            var result = ev.getExercised().getExerciseResult();
+            if (!result.hasRecord()) continue;
+            var rec = result.getRecord();
+            if (rec.getFieldsCount() < 2) continue;
+            var payoutVal = rec.getFields(1).getValue();
+            if (payoutVal.hasContractId()) {
+                return payoutVal.getContractId();
+            }
+        }
+        return null;
     }
 
 

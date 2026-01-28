@@ -10,11 +10,13 @@ import com.digitalasset.quickstart.common.errors.InsufficientBalanceError;
 import com.digitalasset.quickstart.common.errors.PoolEmptyError;
 import com.digitalasset.quickstart.dto.AddLiquidityResponse;
 import com.digitalasset.quickstart.ledger.LedgerApi;
+import com.digitalasset.quickstart.util.AmmMath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -29,15 +31,18 @@ public class AddLiquidityService {
     private final LedgerApi ledgerApi;
     private final LedgerAdapter ledgerAdapter;
     private final TxPacer txPacer;
+    private final TransactionHistoryService historyService;
 
     public AddLiquidityService(
             final LedgerApi ledgerApi,
             final LedgerAdapter ledgerAdapter,
-            final TxPacer txPacer
+            final TxPacer txPacer,
+            final TransactionHistoryService historyService
     ) {
         this.ledgerApi = ledgerApi;
         this.ledgerAdapter = ledgerAdapter;
         this.txPacer = txPacer;
+        this.historyService = historyService;
     }
 
     public CompletableFuture<Result<AddLiquidityResponse, DomainError>> addLiquidity(final AddLiquidityCommand command) {
@@ -76,7 +81,9 @@ public class AddLiquidityService {
                 )
                 .thenCompose(result -> {
                     if (result.isOk()) {
-                        return CompletableFuture.completedFuture(Result.ok(toResponse(pool.payload, command, result.getValueUnsafe())));
+                        AddLiquidityResponse response = toResponse(pool.payload, command, result.getValueUnsafe());
+                        recordAddLiquidity(pool, command, response);
+                        return CompletableFuture.completedFuture(Result.ok(response));
                     }
                     DomainError error = result.getErrorUnsafe();
                     if (!mintedRetry && shouldRetryWithFreshTokens(error, tokens)) {
@@ -212,12 +219,46 @@ public class AddLiquidityService {
     ) {
         String reserveA = poolPayload.getReserveA.add(command.amountA()).toPlainString();
         String reserveB = poolPayload.getReserveB.add(command.amountB()).toPlainString();
+        String lpAmount = AmmMath.estimateLpMint(
+                command.amountA(),
+                command.amountB(),
+                poolPayload.getReserveA,
+                poolPayload.getReserveB,
+                poolPayload.getTotalLPSupply
+        )
+        .max(BigDecimal.ZERO)
+        .setScale(10, RoundingMode.DOWN)
+        .toPlainString();
         return new AddLiquidityResponse(
                 result.lpTokenCid().getContractId,
                 result.newPoolCid().getContractId,
                 reserveA,
-                reserveB
+                reserveB,
+                lpAmount
         );
+    }
+
+    private void recordAddLiquidity(
+            final LedgerApi.ActiveContract<Pool> pool,
+            final AddLiquidityCommand command,
+            final AddLiquidityResponse response
+    ) {
+        try {
+            BigDecimal lpMinted = new BigDecimal(response.lpAmount());
+            historyService.recordAddLiquidity(
+                    pool.payload.getPoolId,
+                    pool.contractId.getContractId,
+                    pool.payload.getSymbolA,
+                    pool.payload.getSymbolB,
+                    command.amountA(),
+                    command.amountB(),
+                    command.minLpTokens(),
+                    lpMinted,
+                    command.providerParty()
+            );
+        } catch (Exception ex) {
+            LOG.warn("Failed to record add liquidity history: {}", ex.getMessage());
+        }
     }
 
     public record AddLiquidityCommand(

@@ -26,6 +26,10 @@ management:
     web:
       exposure:
         include: '*'
+  health:
+    redis:
+      enabled: false
+
 
 ledger:
   application-id: ${AUTH_APP_PROVIDER_BACKEND_USER_ID:AppId}
@@ -40,6 +44,8 @@ application:
       tenantId: AppProvider
       partyId: ${APP_PROVIDER_PARTY}
       internal: true
+  clearportx:
+    dexPartyId: ${CLEARPORTX_DEX_PARTY_ID:}
 
 # CORS configuration for frontend integration
 # NOTE: Spring Security CORS does NOT support wildcard subdomains (*.ngrok-free.dev)
@@ -51,3 +57,11 @@ cors:
   allowed-headers: Authorization,Content-Type,X-Idempotency-Key,X-Request-ID
   exposed-headers: Retry-After,X-Request-ID,Authorization,X-Total-Count,X-Rate-Limit-Remaining
   max-age: 3600
+
+clearportx:
+  auth:
+    jwt-secret: ${CLEARPORTX_AUTH_JWT_SECRET:devnet-secret}
+    jwt-issuer: ${CLEARPORTX_AUTH_JWT_ISSUER:clearportx-backend}
+    jwt-ttl-seconds: ${CLEARPORTX_AUTH_JWT_TTL_SECONDS:900}
+  history:
+    path: ${CLEARPORTX_HISTORY_PATH:/tmp/clearportx-history.json}

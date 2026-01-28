@@ -22,7 +22,7 @@ public class TransactionHistoryController {
 
     @GetMapping("/recent")
     public ResponseEntity<?> recentTransactions(@RequestParam(name = "limit", defaultValue = "50") int limit) {
-        int safeLimit = Math.max(1, Math.min(limit, 200));
+        int safeLimit = Math.max(1, Math.min(limit, 1000));
         return ResponseEntity.ok(transactionHistoryService.getRecent(safeLimit));
     }
 
@@ -43,6 +43,7 @@ public class TransactionHistoryController {
         BigDecimal amountB = new BigDecimal(String.valueOf(body.getOrDefault("amountB", "0")));
         BigDecimal minLp = new BigDecimal(String.valueOf(body.getOrDefault("minLpAmount", "0")));
         BigDecimal amountOut = new BigDecimal(String.valueOf(body.getOrDefault("amountOut", "0")));
+        BigDecimal mintedLp = new BigDecimal(String.valueOf(body.getOrDefault("mintedLp", "0")));
         String actor = String.valueOf(body.getOrDefault("actor", "debug"));
         String eventType = String.valueOf(body.getOrDefault("type", "ADD_LIQUIDITY")).toUpperCase();
 
@@ -68,6 +69,7 @@ public class TransactionHistoryController {
                     amountA,
                     amountB,
                     minLp,
+                    mintedLp,
                     actor
             );
         }

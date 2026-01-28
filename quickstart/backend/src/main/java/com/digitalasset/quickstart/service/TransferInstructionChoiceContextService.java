@@ -9,17 +9,25 @@ import com.digitalasset.quickstart.config.RegistryRoutingConfig.RegistryKind;
 import com.digitalasset.quickstart.common.Result;
 import com.digitalasset.quickstart.dto.ApiError;
 import com.digitalasset.quickstart.dto.ErrorCode;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
-
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Resolve TransferInstruction choice-context disclosures for devnet-only workflows.
@@ -35,6 +43,9 @@ public class TransferInstructionChoiceContextService {
     @Autowired(required = false)
     private RegistryRoutingConfig registryRouting;
 
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final ObjectMapper mapper = new ObjectMapper();
+
     public TransferInstructionChoiceContextService(final LedgerConfig ledgerConfig) {
         this.ledgerConfig = ledgerConfig;
     }
@@ -42,10 +53,15 @@ public class TransferInstructionChoiceContextService {
     public record ChoiceContextResult(
             List<CommandsOuterClass.DisclosedContract> disclosedContracts,
             String registryUsed,
-            List<String> registriesAttempted
+            List<String> registriesAttempted,
+            String synchronizerId
     ) { }
 
     public Result<ChoiceContextResult, ApiError> resolveDisclosedContracts(String contractId, String adminHint) {
+        return resolveDisclosedContracts(contractId, adminHint, null);
+    }
+
+    public Result<ChoiceContextResult, ApiError> resolveDisclosedContracts(String contractId, String adminHint, String requestId) {
         if (contractId == null || contractId.isBlank()) {
             return Result.err(ApiError.of(ErrorCode.VALIDATION, "contractId is required"));
         }
@@ -62,17 +78,27 @@ public class TransferInstructionChoiceContextService {
         List<String> attempted = new ArrayList<>();
         ChoiceContextDto ctx = null;
         String successfulBase = null;
+        String synchronizerId = null;
 
         for (RegistryEndpoint ep : registriesToTry) {
             attempted.add(ep.baseUri());
             try {
-                ctx = fetchChoiceContext(ep, contractId);
+                RegistryFetchResult fetch = fetchChoiceContext(ep, contractId, requestId);
+                if (fetch != null) {
+                    ctx = fetch.ctx;
+                    synchronizerId = fetch.synchronizerId;
+                }
                 if (ctx != null && ctx.disclosedContracts != null && !ctx.disclosedContracts.isEmpty()) {
                     successfulBase = ep.baseUri();
                     break;
                 }
             } catch (Exception e) {
-                logger.warn("Choice-context fetch failed base={} error={}", abbreviate(ep.baseUri()), e.getMessage());
+                logger.warn("[TIChoiceContext] requestId={} base={} kind={} contractId={} error={}",
+                        requestIdOrDefault(requestId),
+                        abbreviate(ep.baseUri()),
+                        ep.kind(),
+                        abbreviate(contractId),
+                        e.getMessage());
             }
         }
 
@@ -82,6 +108,14 @@ public class TransferInstructionChoiceContextService {
                     "choice-context missing disclosures",
                     java.util.Map.of("attempted", attempted)
             ));
+        }
+
+        if (synchronizerId == null) {
+            synchronizerId = ctx.disclosedContracts.stream()
+                    .map(dc -> dc.synchronizerId)
+                    .filter(s -> s != null && !s.isBlank())
+                    .findFirst()
+                    .orElse(null);
         }
 
         List<CommandsOuterClass.DisclosedContract> disclosed = ctx.disclosedContracts.stream()
@@ -97,22 +131,77 @@ public class TransferInstructionChoiceContextService {
             ));
         }
 
-        return Result.ok(new ChoiceContextResult(disclosed, successfulBase, attempted));
+        return Result.ok(new ChoiceContextResult(disclosed, successfulBase, attempted, synchronizerId));
     }
 
-    private ChoiceContextDto fetchChoiceContext(RegistryEndpoint ep, String contractId) {
-        RestTemplate rest = new RestTemplate();
+    private RegistryFetchResult fetchChoiceContext(RegistryEndpoint ep, String contractId, String requestId) {
         try {
             String url1 = buildUrl(ep, true, contractId);
-            String url2 = buildUrl(ep, false, contractId);
-            ChoiceContextDto ctx = url1 != null ? rest.postForObject(url1, java.util.Map.of(), ChoiceContextDto.class) : null;
-            if (ctx == null || ctx.disclosedContracts == null || ctx.disclosedContracts.isEmpty()) {
-                ctx = url2 != null ? rest.postForObject(url2, java.util.Map.of(), ChoiceContextDto.class) : null;
+            RegistryFetchResult first = url1 != null ? postChoiceContext(url1, ep, contractId, requestId) : null;
+            if (first != null && first.ctx != null && first.ctx.disclosedContracts != null && !first.ctx.disclosedContracts.isEmpty()) {
+                return first;
             }
-            return ctx;
+            String url2 = buildUrl(ep, false, contractId);
+            RegistryFetchResult second = url2 != null ? postChoiceContext(url2, ep, contractId, requestId) : null;
+            return second != null ? second : first;
         } catch (Exception e) {
-            logger.warn("Failed to fetch choice-context from base={} error={}", abbreviate(ep.baseUri()), e.getMessage());
+            logger.warn("[TIChoiceContext] requestId={} base={} kind={} contractId={} error={}",
+                    requestIdOrDefault(requestId),
+                    abbreviate(ep.baseUri()),
+                    ep.kind(),
+                    abbreviate(contractId),
+                    e.getMessage());
             return null;
+        }
+    }
+
+    private RegistryFetchResult postChoiceContext(String url, RegistryEndpoint ep, String contractId, String requestId) {
+        try {
+            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"meta\":{}}"));
+            if (ledgerConfig.getRegistryAuthHeader() != null && !ledgerConfig.getRegistryAuthHeader().isBlank()
+                    && ledgerConfig.getRegistryAuthToken() != null && !ledgerConfig.getRegistryAuthToken().isBlank()) {
+                b.header(ledgerConfig.getRegistryAuthHeader(), ledgerConfig.getRegistryAuthToken());
+            }
+            HttpResponse<String> resp = httpClient.send(b.build(), HttpResponse.BodyHandlers.ofString());
+            String body = resp.body() != null ? resp.body() : "";
+            ChoiceContextDto ctx = resp.statusCode() >= 200 && resp.statusCode() < 300
+                    ? parseChoiceContext(body)
+                    : null;
+            int disclosed = ctx != null && ctx.disclosedContracts != null ? ctx.disclosedContracts.size() : 0;
+            int contextKeys = ctx != null && ctx.choiceContextData != null && ctx.choiceContextData.values != null
+                    ? ctx.choiceContextData.values.size()
+                    : 0;
+            String synchronizerId = ctx != null && ctx.disclosedContracts != null
+                    ? ctx.disclosedContracts.stream()
+                        .map(dc -> dc.synchronizerId)
+                        .filter(s -> s != null && !s.isBlank())
+                        .findFirst().orElse(null)
+                    : null;
+            Set<String> keys = extractTopLevelKeys(body);
+            logger.info("[TIChoiceContext] requestId={} contractId={} adminHint={} base={} kind={} url={} status={} size={} disclosed={} contextKeys={} extraArgs={} syncId={} keys={}",
+                    requestIdOrDefault(requestId),
+                    abbreviate(contractId),
+                    abbreviate(ep.admin()),
+                    abbreviate(ep.baseUri()),
+                    ep.kind(),
+                    abbreviate(url),
+                    resp.statusCode(),
+                    body.length(),
+                    disclosed,
+                    contextKeys,
+                    contextKeys > 0,
+                    abbreviate(synchronizerId),
+                    keys);
+            return new RegistryFetchResult(ctx, url, resp.statusCode(), body.length(), disclosed, contextKeys, synchronizerId);
+        } catch (Exception e) {
+            logger.warn("[TIChoiceContext] requestId={} url={} contractId={} error={}",
+                    requestIdOrDefault(requestId),
+                    abbreviate(url),
+                    abbreviate(contractId),
+                    e.getMessage());
+            return new RegistryFetchResult(null, url, 0, 0, 0, 0, null);
         }
     }
 
@@ -131,27 +220,109 @@ public class TransferInstructionChoiceContextService {
         if (ep == null || ep.baseUri() == null || ep.baseUri().isBlank()) return null;
         String url = ep.baseUri();
         if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
+        String safeCid = encodePathSegment(contractId);
         if (ep.kind() == RegistryKind.UTILITIES_TOKEN_STANDARD) {
             if (ep.admin() == null || ep.admin().isBlank()) return null;
-            return url + "/api/token-standard/v0/registrars/" + ep.admin() + "/registry/transfer-instruction/v1/" + contractId + "/choice-contexts/accept";
+            String safeAdmin = encodePathSegment(ep.admin());
+            return url + "/api/token-standard/v0/registrars/" + safeAdmin + "/registry/transfer-instruction/v1/" + safeCid + "/choice-contexts/accept";
         } else if (ep.kind() == RegistryKind.LOOP_TOKEN_STANDARD_V1) {
-            return url + "/api/v1/token-standard/transfer-instructions/" + contractId + "/choice-contexts/accept";
+            return url + "/api/v1/token-standard/transfer-instructions/" + safeCid + "/choice-contexts/accept";
         }
         if (withRegistryPrefix) {
-            return url + "/registry/transfer-instruction/v1/" + contractId + "/choice-contexts/accept";
+            return url + "/registry/transfer-instruction/v1/" + safeCid + "/choice-contexts/accept";
         }
-        return url + "/transfer-instruction/v1/" + contractId + "/choice-contexts/accept";
+        return url + "/transfer-instruction/v1/" + safeCid + "/choice-contexts/accept";
+    }
+
+    private static String encodePathSegment(String raw) {
+        try {
+            return URLEncoder.encode(raw, StandardCharsets.UTF_8.toString());
+        } catch (Exception e) {
+            return raw;
+        }
+    }
+
+    private ChoiceContextDto parseChoiceContext(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            JsonNode root = mapper.readTree(body);
+            JsonNode top = root.has("choiceContext") ? root.get("choiceContext") : root;
+            ChoiceContextDto dto = new ChoiceContextDto();
+            JsonNode disclosed = root.has("disclosedContracts") ? root.get("disclosedContracts") : top.get("disclosedContracts");
+            if (disclosed != null && disclosed.isArray()) {
+                dto.disclosedContracts = new ArrayList<>();
+                for (JsonNode n : disclosed) {
+                    DisclosedContractDto dc = new DisclosedContractDto();
+                    dc.templateId = n.path("templateId").asText(null);
+                    dc.contractId = n.path("contractId").asText(null);
+                    dc.createdEventBlob = n.path("createdEventBlob").asText(null);
+                    dc.synchronizerId = n.path("synchronizerId").asText(null);
+                    if (dc.templateId != null && dc.contractId != null && dc.createdEventBlob != null) {
+                        dto.disclosedContracts.add(dc);
+                    }
+                }
+            }
+
+            JsonNode ctxValues = top.path("choiceContextData").path("values");
+            if (!ctxValues.isObject()) {
+                ctxValues = root.path("choiceContextData").path("values");
+            }
+            if (ctxValues.isObject()) {
+                dto.choiceContextData = new ChoiceContextDataDto();
+                dto.choiceContextData.values = new java.util.LinkedHashMap<>();
+                ctxValues.fields().forEachRemaining(entry -> {
+                    String key = entry.getKey();
+                    JsonNode v = entry.getValue();
+                    ContextValueDto cv = new ContextValueDto();
+                    cv.tag = v.path("tag").asText(null);
+                    JsonNode rawVal = v.get("value");
+                    if (rawVal != null && !rawVal.isMissingNode() && !rawVal.isNull()) {
+                        if (rawVal.isBoolean()) {
+                            cv.value = rawVal.booleanValue();
+                        } else if (rawVal.isTextual()) {
+                            cv.value = rawVal.textValue();
+                        } else if (rawVal.isArray()) {
+                            List<String> vals = new ArrayList<>();
+                            rawVal.forEach(node -> vals.add(node.asText()));
+                            cv.value = vals;
+                        } else {
+                            cv.value = rawVal.toString();
+                        }
+                    }
+                    dto.choiceContextData.values.put(key, cv);
+                });
+            }
+            return dto;
+        } catch (Exception e) {
+            logger.warn("[TIChoiceContext] parse failed error={}", e.getMessage());
+            return null;
+        }
+    }
+
+    private Set<String> extractTopLevelKeys(String body) {
+        if (body == null || body.isBlank()) return Set.of();
+        try {
+            JsonNode root = mapper.readTree(body);
+            Set<String> keys = new LinkedHashSet<>();
+            root.fieldNames().forEachRemaining(keys::add);
+            return keys;
+        } catch (Exception e) {
+            return Set.of();
+        }
     }
 
     private static CommandsOuterClass.DisclosedContract toDisclosedContract(DisclosedContractDto dc) {
         try {
             ValueOuterClass.Identifier tid = parseTemplateIdentifier(dc.templateId);
             byte[] blob = Base64.getDecoder().decode(dc.createdEventBlob);
-            return CommandsOuterClass.DisclosedContract.newBuilder()
+            CommandsOuterClass.DisclosedContract.Builder builder = CommandsOuterClass.DisclosedContract.newBuilder()
                     .setTemplateId(tid)
                     .setContractId(dc.contractId)
-                    .setCreatedEventBlob(com.google.protobuf.ByteString.copyFrom(blob))
-                    .build();
+                    .setCreatedEventBlob(com.google.protobuf.ByteString.copyFrom(blob));
+            if (dc.synchronizerId != null && !dc.synchronizerId.isBlank()) {
+                builder.setSynchronizerId(dc.synchronizerId);
+            }
+            return builder.build();
         } catch (Exception e) {
             return null;
         }
@@ -175,6 +346,20 @@ public class TransferInstructionChoiceContextService {
         return s.substring(0, 15) + "..." + s.substring(s.length() - 10);
     }
 
+    private String requestIdOrDefault(String requestId) {
+        return requestId == null || requestId.isBlank() ? "n/a" : requestId;
+    }
+
+    private record RegistryFetchResult(
+            ChoiceContextDto ctx,
+            String url,
+            int status,
+            int bodySize,
+            int disclosedCount,
+            int contextKeys,
+            String synchronizerId
+    ) { }
+
     private static final class ChoiceContextDto {
         public ChoiceContextDataDto choiceContextData;
         public List<DisclosedContractDto> disclosedContracts;
@@ -190,6 +375,7 @@ public class TransferInstructionChoiceContextService {
         public String templateId;
         public String contractId;
         public String createdEventBlob;
+        public String synchronizerId;
     }
 }
 

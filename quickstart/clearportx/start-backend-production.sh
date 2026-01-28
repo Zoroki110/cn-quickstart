@@ -89,8 +89,9 @@ fi
 export LEDGER_GRPC_AUTHORITY="${LEDGER_GRPC_AUTHORITY}"
 export LEDGER_HOST="$LEDGER_HOST"
 export LEDGER_PORT="$LEDGER_PORT"
-# Registry routing defaults for DevNet CBTC
-export LEDGER_REGISTRY_BASE_URI="${LEDGER_REGISTRY_BASE_URI:-https://api.utilities.digitalasset-dev.com}"
+# Registry routing defaults for DevNet (Amulet via Scan, CBTC via Utilities)
+export LEDGER_REGISTRY_DEFAULT_BASE_URI="${LEDGER_REGISTRY_DEFAULT_BASE_URI:-https://scan.sv-1.dev.global.canton.network.sync.global}"
+export LEDGER_REGISTRY_BASE_URI="${LEDGER_REGISTRY_BASE_URI:-$LEDGER_REGISTRY_DEFAULT_BASE_URI}"
 export LEDGER_REGISTRY_BY_ADMIN="${LEDGER_REGISTRY_BY_ADMIN:-{\"cbtc-network::12202a83c6f4082217c175e29bc53da5f2703ba2675778ab99217a5a881a949203ff\":{\"baseUri\":\"https://api.utilities.digitalasset-dev.com\",\"kind\":\"UTILITIES_TOKEN_STANDARD\"}}}"
 export REGISTRY_BASE_URI="$LEDGER_REGISTRY_BASE_URI"
 # OAuth2 variables only if oauth2 profile is present

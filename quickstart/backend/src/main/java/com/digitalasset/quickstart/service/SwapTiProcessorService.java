@@ -218,7 +218,7 @@ public class SwapTiProcessorService {
 
                                 String outputHoldingCid = holdingSelection.holdingCid();
                                 Result<ChoiceContextResult, ApiError> choiceCtx =
-                                        choiceContextService.resolveDisclosedContracts(ti.contractId(), inputInstrument.admin);
+                                        choiceContextService.resolveDisclosedContracts(ti.contractId(), inputInstrument.admin, request.requestId);
                                 if (choiceCtx.isErr()) {
                                     return completedError(choiceCtx.getErrorUnsafe());
                                 }

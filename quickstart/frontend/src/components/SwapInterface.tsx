@@ -7,10 +7,11 @@ import TokenSelector from './TokenSelector';
 import SlippageSettings from './SlippageSettings';
 import toast from 'react-hot-toast';
 import { useWalletAuth, walletManager } from '../wallet';
-import { useLoopBalances, useUtxoBalances } from '../hooks';
+import { useLoopBalances, usePrices, useUtxoBalances } from '../hooks';
 import { submitTx } from '../loop/submitTx';
 import { getLoopProvider } from '../loop/loopProvider';
 import { calculateSwapQuoteFromPool } from '../utils/poolMath';
+import { buildPriceTooltip, formatUsdFull, parseUsdNumber } from '../utils/formatUsd';
 
 const AMULET_ADMIN = 'DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a';
 const AMULET_ID = 'Amulet';
@@ -32,6 +33,7 @@ const SwapInterface: React.FC = () => {
     ownerOnly: true,
     refreshIntervalMs: 15000,
   });
+  const { quotes: priceQuotes } = usePrices(['CC', 'CBTC']);
   const reloadBalances = useCallback(async () => {
     if (walletType === 'loop') {
       await reloadLoopBalances();
@@ -134,6 +136,8 @@ const SwapInterface: React.FC = () => {
 
   const parsedInputAmount = parseFloat(inputAmount || '0');
   const normalizedInputAmount = Number.isFinite(parsedInputAmount) ? parsedInputAmount : 0;
+  const parsedOutputAmount = parseFloat(outputAmount || '0');
+  const normalizedOutputAmount = Number.isFinite(parsedOutputAmount) ? parsedOutputAmount : 0;
   const insufficientBalance = Boolean(
     partyId && selectedTokens.from && normalizedInputAmount > getNumericBalance(selectedTokens.from.symbol)
   );
@@ -159,6 +163,24 @@ const SwapInterface: React.FC = () => {
     }
     lastConnectedParty.current = partyId;
   }, [partyId, reloadBalances]);
+
+  const resolveUsdEstimate = useCallback((symbol?: string, amount?: number) => {
+    if (!symbol || amount == null || !Number.isFinite(amount)) {
+      return { value: null, tooltip: undefined };
+    }
+    const quote = priceQuotes[symbol.toUpperCase()];
+    const price = parseUsdNumber(quote?.priceUsd ?? null);
+    if (price == null || quote?.status === 'UNAVAILABLE') {
+      return { value: null, tooltip: buildPriceTooltip(quote?.reason, quote?.source) };
+    }
+    return {
+      value: amount * price,
+      tooltip: buildPriceTooltip(quote?.reason, quote?.source),
+    };
+  }, [priceQuotes]);
+
+  const inputUsd = resolveUsdEstimate(selectedTokens.from?.symbol, normalizedInputAmount);
+  const outputUsd = resolveUsdEstimate(selectedTokens.to?.symbol, normalizedOutputAmount);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -565,6 +587,14 @@ const SwapInterface: React.FC = () => {
                 className="flex-1 max-w-[220px] text-right text-2xl font-semibold bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400"
               />
             </div>
+            {selectedTokens.from && (
+              <div
+                className="mt-2 text-xs text-right text-gray-500 dark:text-gray-400"
+                title={inputUsd.tooltip}
+              >
+                {inputUsd.value != null ? `≈ ${formatUsdFull(inputUsd.value)}` : '—'}
+              </div>
+            )}
           </div>
         </div>
 
@@ -621,6 +651,14 @@ const SwapInterface: React.FC = () => {
                 {calculating ? '...' : outputAmount || '0.0'}
               </div>
             </div>
+            {selectedTokens.to && (
+              <div
+                className="mt-2 text-xs text-right text-gray-500 dark:text-gray-400"
+                title={outputUsd.tooltip}
+              >
+                {outputUsd.value != null ? `≈ ${formatUsdFull(outputUsd.value)}` : '—'}
+              </div>
+            )}
           </div>
         </div>
 

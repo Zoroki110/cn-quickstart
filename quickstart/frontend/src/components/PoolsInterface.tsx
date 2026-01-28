@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import { useAppStore } from '../stores';
 import { backendApi } from '../services/backendApi';
 import { useNavigate } from 'react-router-dom';
 import { TokenInfo, TransactionHistoryEntry } from '../types/canton';
+import { usePrices } from '../hooks';
+import { buildPriceTooltip, formatUsd, parseUsdNumber } from '../utils/formatUsd';
 
 const PoolsInterface: React.FC = () => {
   const { pools, setPools } = useAppStore();
@@ -11,6 +13,7 @@ const PoolsInterface: React.FC = () => {
   const [volumeByPool, setVolumeByPool] = React.useState<Record<string, number>>({});
   const [totalVolume24h, setTotalVolume24h] = React.useState(0);
   const [volumeDay, setVolumeDay] = React.useState<string>(() => new Date().toISOString().slice(0, 10));
+  const { quotes: priceQuotes } = usePrices(['CC', 'CBTC']);
 
   useEffect(() => {
     const loadPools = async () => {
@@ -28,11 +31,58 @@ const PoolsInterface: React.FC = () => {
     loadPools();
   }, [setPools]);
 
-  // Calculer les statistiques globales
-  const totalTVL = pools.reduce((sum, pool) => {
-    // Approximation: TVL = reserveA + reserveB (en assumant que les tokens ont des valeurs similaires)
-    return sum + pool.reserveA + pool.reserveB;
-  }, 0);
+  const priceForSymbol = useCallback((symbol?: string) => {
+    if (!symbol) return null;
+    const quote = priceQuotes[symbol.toUpperCase()];
+    const price = parseUsdNumber(quote?.priceUsd ?? null);
+    if (price == null || quote?.status === 'UNAVAILABLE') {
+      return { price: null, quote };
+    }
+    return { price, quote };
+  }, [priceQuotes]);
+
+  const poolUsdValues = useMemo(() => {
+    const values = new Map<string, { value: number | null; partial: boolean; tooltip?: string }>();
+    pools.forEach((pool) => {
+      const tokenA = pool.tokenA.symbol.toUpperCase();
+      const tokenB = pool.tokenB.symbol.toUpperCase();
+      const priceA = priceForSymbol(tokenA);
+      const priceB = priceForSymbol(tokenB);
+      const hasA = priceA?.price != null;
+      const hasB = priceB?.price != null;
+      if (!hasA && !hasB) {
+        values.set(pool.contractId, { value: null, partial: false });
+        return;
+      }
+      const value =
+        (hasA ? pool.reserveA * (priceA?.price ?? 0) : 0) +
+        (hasB ? pool.reserveB * (priceB?.price ?? 0) : 0);
+      const partial = !(hasA && hasB);
+      const tooltip = buildPriceTooltip(
+        !hasA ? priceA?.quote?.reason : priceB?.quote?.reason,
+        !hasA ? priceA?.quote?.source : priceB?.quote?.source
+      );
+      values.set(pool.contractId, { value, partial, tooltip });
+    });
+    return values;
+  }, [pools, priceForSymbol]);
+
+  const totalTvl = useMemo(() => {
+    let total = 0;
+    let hasAny = false;
+    let partial = false;
+    poolUsdValues.forEach((entry) => {
+      if (entry.value == null) {
+        return;
+      }
+      hasAny = true;
+      total += entry.value;
+      if (entry.partial) {
+        partial = true;
+      }
+    });
+    return { value: hasAny ? total : null, partial };
+  }, [poolUsdValues]);
 
   const effectiveTotalVolume24h = totalVolume24h;
   const averageAPR = pools.length > 0
@@ -59,15 +109,6 @@ const PoolsInterface: React.FC = () => {
       )}
     </div>
   );
-
-  const formatNumber = (num: number) => {
-    if (num >= 1_000_000) {
-      return `$${(num / 1_000_000).toFixed(2)}M`;
-    } else if (num >= 1_000) {
-      return `$${(num / 1_000).toFixed(2)}K`;
-    }
-    return `$${num.toFixed(2)}`;
-  };
 
   const formatTokenCompact = (amount: number) => {
     if (!Number.isFinite(amount)) {
@@ -173,7 +214,12 @@ const PoolsInterface: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="body-small mb-1">Total Value Locked</p>
-                <p className="text-2xl font-bold text-gradient">{formatNumber(totalTVL)}</p>
+                <p className="text-2xl font-bold text-gradient">
+                  {totalTvl.value != null ? formatUsd(totalTvl.value) : '—'}
+                </p>
+                {totalTvl.partial && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">partial</p>
+                )}
               </div>
               <div className="w-12 h-12 rounded-xl bg-primary-100 dark:bg-primary-900/20 flex items-center justify-center">
                 <svg className="w-6 h-6 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -263,6 +309,17 @@ const PoolsInterface: React.FC = () => {
                         <p className="body-small text-gray-500">
                           {formatTokenCompact(pool.reserveB)} {pool.tokenB.symbol}
                         </p>
+                        <p
+                          className="body-small text-gray-500"
+                          title={poolUsdValues.get(pool.contractId)?.tooltip}
+                        >
+                          {poolUsdValues.get(pool.contractId)?.value != null
+                            ? formatUsd(poolUsdValues.get(pool.contractId)?.value ?? 0)
+                            : '—'}
+                          {poolUsdValues.get(pool.contractId)?.partial && (
+                            <span className="ml-1 text-[10px] uppercase">partial</span>
+                          )}
+                        </p>
                       </div>
 
                       {/* APR */}
@@ -310,6 +367,14 @@ const PoolsInterface: React.FC = () => {
                       </p>
                       <p className="body-small text-gray-500">
                         {formatTokenCompact(pool.reserveB)} {pool.tokenB.symbol}
+                      </p>
+                      <p className="body-small text-gray-500">
+                        {poolUsdValues.get(pool.contractId)?.value != null
+                          ? formatUsd(poolUsdValues.get(pool.contractId)?.value ?? 0)
+                          : '—'}
+                        {poolUsdValues.get(pool.contractId)?.partial && (
+                          <span className="ml-1 text-[10px] uppercase">partial</span>
+                        )}
                       </p>
                     </div>
                     <div>

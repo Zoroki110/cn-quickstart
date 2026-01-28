@@ -113,6 +113,7 @@ export class BackendApiService {
         '/api/pools',
         '/api/health',
         '/api/health/ledger',
+        '/api/prices',
         '/actuator/health',
         '/api/debug/',
         '/api/clearportx/debug/',

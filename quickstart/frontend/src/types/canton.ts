@@ -181,6 +181,21 @@ export interface TransactionHistoryEntry {
   eventTimeline: TransactionTimelineItem[];
 }
 
+export type PriceStatus = 'OK' | 'UNAVAILABLE' | 'STALE';
+
+export interface PriceQuote {
+  symbol: string;
+  priceUsd: number | string | null;
+  source?: string | null;
+  status: PriceStatus;
+  reason?: string | null;
+}
+
+export interface PriceResponse {
+  quotes: Record<string, PriceQuote>;
+  asOf: string;
+}
+
 // Pool Interface Types
 export interface PoolInfo {
   contractId: string;

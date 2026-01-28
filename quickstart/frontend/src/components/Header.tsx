@@ -3,8 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAppStore } from '../stores';
 import { useWalletAuth } from '../wallet';
 import { ENABLE_MANUAL_WALLET } from '../wallet/walletConfig';
-import { useLoopBalances, useUtxoBalances, usePrices } from '../hooks';
-import { buildPriceTooltip, formatUsdFull, parseUsdNumber } from '../utils/formatUsd';
+import { useLoopBalances, useUtxoBalances } from '../hooks';
 import toast from 'react-hot-toast';
 
 const Header: React.FC = () => {
@@ -28,7 +27,6 @@ const Header: React.FC = () => {
     ownerOnly: true,
     refreshIntervalMs: 15000,
   });
-  const { quotes: priceQuotes } = usePrices(['CC', 'CBTC']);
   const balancesLoading = walletType === 'loop' ? loopLoading : utxoLoading;
   const balanceEntries = useMemo(() => {
     if (walletType === 'loop') {
@@ -142,24 +140,6 @@ const Header: React.FC = () => {
   };
 
   const connected = Boolean(partyId);
-  const priceQuoteFor = (symbol?: string) => {
-    if (!symbol) return undefined;
-    return priceQuotes[symbol.toUpperCase()];
-  };
-
-  const formatUsdEstimate = (symbol: string, amount: string) => {
-    const quote = priceQuoteFor(symbol);
-    const price = parseUsdNumber(quote?.priceUsd ?? null);
-    const qty = Number(amount);
-    if (!Number.isFinite(qty) || price == null || quote?.status === 'UNAVAILABLE') {
-      return { value: '—', tooltip: buildPriceTooltip(quote?.reason, quote?.source), available: false };
-    }
-    return {
-      value: `≈ ${formatUsdFull(qty * price)}`,
-      tooltip: buildPriceTooltip(quote?.reason, quote?.source),
-      available: true,
-    };
-  };
 
   return (
     <header className="sticky top-0 z-50 glass-strong border-b border-gray-200/20 dark:border-gray-700/20">
@@ -251,27 +231,12 @@ const Header: React.FC = () => {
                           <div className="text-xs opacity-70">No holdings visible</div>
                         )}
                         {!balancesLoading && balanceEntries.length > 0 &&
-                          balanceEntries.slice(0, 5).map((h) => {
-                            const showUsd = h.symbol === 'CC' || h.symbol === 'CBTC';
-                            const usd = showUsd ? formatUsdEstimate(h.symbol, h.amount) : null;
-                            return (
-                              <div key={h.symbol} className="flex justify-between">
-                                <span>{h.symbol}</span>
-                                <span className="text-right">
-                                  {formatHoldingAmount(h.symbol, h.amount, h.decimals)}
-                                  {showUsd && (
-                                    <span
-                                      className="ml-2 text-[11px] text-gray-500 dark:text-gray-400"
-                                      title={usd?.tooltip}
-                                    >
-                                      {usd?.value}
-                                      {!usd?.available && <span className="ml-1 text-[10px] uppercase">N/A</span>}
-                                    </span>
-                                  )}
-                                </span>
-                              </div>
-                            );
-                          })}
+                          balanceEntries.slice(0, 5).map((h) => (
+                            <div key={h.symbol} className="flex justify-between">
+                              <span>{h.symbol}</span>
+                              <span>{formatHoldingAmount(h.symbol, h.amount, h.decimals)}</span>
+                            </div>
+                          ))}
                         {!balancesLoading && balanceEntries.length > 5 && (
                           <div className="text-xs opacity-70 mt-1">+ {balanceEntries.length - 5} more</div>
                         )}

@@ -65,10 +65,3 @@ clearportx:
     jwt-ttl-seconds: ${CLEARPORTX_AUTH_JWT_TTL_SECONDS:900}
   history:
     path: ${CLEARPORTX_HISTORY_PATH:/tmp/clearportx-history.json}
-  prices:
-    cache-ttl-seconds: ${PRICE_CACHE_TTL_SECONDS:60}
-    btc-source: ${PRICE_BTC_SOURCE:COINGECKO}
-    cc-mode: ${PRICE_CC_MODE:NONE}
-    cc-coingecko-id: ${PRICE_CC_COINGECKO_ID:}
-    cc-pool-cid: ${PRICE_CC_POOL_CID:}
-    http-timeout-ms: ${PRICE_HTTP_TIMEOUT_MS:2000}

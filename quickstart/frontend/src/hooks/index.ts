@@ -4,4 +4,3 @@ export * from './useHoldings';
 export * from './useHoldingUtxos';
 export * from './useUtxoBalances';
 export * from './useLoopBalances';
-export * from './usePrices';

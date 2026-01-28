@@ -5,13 +5,22 @@ import { backendApi } from '../services/backendApi';
 import { TokenInfo, PoolInfo, LpTokenInfo } from '../types/canton';
 import toast from 'react-hot-toast';
 import { useWalletAuth } from '../wallet';
+import { useLoopBalances, useUtxoBalances } from '../hooks';
 import TokenSelector from './TokenSelector';
 
 const LiquidityInterface: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { pools, setPools } = useAppStore();
-  const { partyId } = useWalletAuth();
+  const { partyId, walletType } = useWalletAuth();
+  const partyForBackend = walletType === 'loop' ? null : partyId || null;
+  const { balances: loopBalances, reload: reloadLoopBalances } = useLoopBalances(partyId || null, walletType, {
+    refreshIntervalMs: 15000,
+  });
+  const { balances: utxoBalances, reload: reloadUtxoBalances } = useUtxoBalances(partyForBackend, {
+    ownerOnly: true,
+    refreshIntervalMs: 15000,
+  });
 
   const [mode, setMode] = useState<'add' | 'remove'>('add');
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
@@ -158,26 +167,90 @@ const LiquidityInterface: React.FC = () => {
     </div>
   );
 
+  const instrumentIdToSymbol = (instrumentId?: string) => {
+    const raw = instrumentId || '';
+    const upper = raw.toUpperCase();
+    if (upper === 'AMULET') return 'CC';
+    return upper;
+  };
+
+  const decimalAddStrings = (a: string, b: string): string => {
+    const sa = a ?? '0';
+    const sb = b ?? '0';
+    const [ia, fa = ''] = sa.split('.');
+    const [ib, fb = ''] = sb.split('.');
+    const fracLen = Math.max(fa.length, fb.length);
+    const normFa = (fa + '0'.repeat(fracLen)).slice(0, fracLen);
+    const normFb = (fb + '0'.repeat(fracLen)).slice(0, fracLen);
+    const intA = BigInt(ia || '0');
+    const intB = BigInt(ib || '0');
+    const fracA = BigInt(normFa || '0');
+    const fracB = BigInt(normFb || '0');
+    const fracSum = fracA + fracB;
+    const baseStr = '1' + '0'.repeat(fracLen || 0);
+    const base = BigInt(baseStr);
+    const carry = fracSum / base;
+    const fracRes = fracSum % base;
+    const intRes = intA + intB + carry;
+    const fracStr = fracLen > 0 ? fracRes.toString().padStart(fracLen, '0').replace(/0+$/, '') : '';
+    return fracStr.length > 0 ? `${intRes.toString()}.${fracStr}` : intRes.toString();
+  };
+
   const tokenBOptions = useMemo(
     () => tokens.filter(token => token.symbol !== selectedTokenA?.symbol),
     [tokens, selectedTokenA]
   );
 
   const balancesBySymbol = useMemo(() => {
+    if (walletType === 'loop') {
+      const map: Record<string, { amount: string; decimals: number }> = {};
+      Object.entries(loopBalances).forEach(([symbol, entry]) => {
+        map[symbol.toUpperCase()] = { amount: entry.amount, decimals: entry.decimals };
+      });
+      return map;
+    }
     const map: Record<string, { amount: string; decimals: number }> = {};
-    tokens.forEach((token) => {
-      if (!token.symbol) {
-        return;
-      }
-      const key = token.symbol.toUpperCase();
-      const amount = Number.isFinite(token.balance ?? NaN) ? (token.balance ?? 0) : 0;
-      map[key] = {
-        amount: amount.toString(),
-        decimals: token.decimals ?? 10,
+    Object.values(utxoBalances).forEach((entry) => {
+      const symbol = instrumentIdToSymbol(entry.instrumentId);
+      const existing = map[symbol];
+      map[symbol] = {
+        amount: existing ? decimalAddStrings(existing.amount, entry.amount) : entry.amount,
+        decimals: existing?.decimals ?? entry.decimals,
       };
     });
     return map;
-  }, [tokens]);
+  }, [walletType, loopBalances, utxoBalances]);
+
+  const getBalanceEntry = useCallback((symbol?: string) => {
+    if (!symbol) {
+      return undefined;
+    }
+    return balancesBySymbol[symbol.toUpperCase()];
+  }, [balancesBySymbol]);
+
+  const formatBalanceDisplay = useCallback((symbol?: string) => {
+    const entry = getBalanceEntry(symbol);
+    if (!entry) {
+      return '0.0000';
+    }
+    const numeric = Number(entry.amount);
+    if (!Number.isFinite(numeric)) {
+      return entry.amount;
+    }
+    return numeric.toLocaleString('en-US', { maximumFractionDigits: 4 });
+  }, [getBalanceEntry]);
+
+  const reloadBalances = useCallback(async () => {
+    if (walletType === 'loop') {
+      await reloadLoopBalances();
+      return;
+    }
+    await reloadUtxoBalances();
+  }, [walletType, reloadLoopBalances, reloadUtxoBalances]);
+
+  useEffect(() => {
+    reloadBalances();
+  }, [reloadBalances, partyId, walletType]);
 
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
@@ -510,7 +583,7 @@ const LiquidityInterface: React.FC = () => {
               <div className="flex items-center justify-between mb-3">
                 <span className="body-small">Token A</span>
                 <span className="body-small">
-                  Balance: {selectedTokenA?.balance?.toFixed(4) || '0.00'}
+                  Balance: {formatBalanceDisplay(selectedTokenA?.symbol)}
                 </span>
               </div>
 
@@ -553,7 +626,7 @@ const LiquidityInterface: React.FC = () => {
               <div className="flex items-center justify-between mb-3">
                 <span className="body-small">Token B</span>
                 <span className="body-small">
-                  Balance: {selectedTokenB?.balance?.toFixed(4) || '0.00'}
+                  Balance: {formatBalanceDisplay(selectedTokenB?.symbol)}
                 </span>
               </div>
 

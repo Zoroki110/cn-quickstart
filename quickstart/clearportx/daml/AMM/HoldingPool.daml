@@ -16,6 +16,10 @@ import AMM.PendingPayout
 data PoolStatus = Uninitialized | Active | Paused
   deriving (Eq, Show)
 
+-- | Outcome of payout transfer.
+data PayoutOutcome = PayoutPending TransferInstructionCid | PayoutCompleted
+  deriving (Eq, Show)
+
 -- | HoldingPool is the core AMM pool template.
 -- Key: (operator, instrumentA, instrumentB) - must be in canonical order.
 -- Stores reserve amounts and locked amounts (for pending payouts).
@@ -230,6 +234,7 @@ template HoldingPool
         payoutFactoryCid : ContractId TI.TransferFactory
         payoutExtraArgs : M.ExtraArgs
         payoutMemo : Text
+        acceptExtraArgs : Optional M.ExtraArgs
       controller operator
       do
         assertMsg "Pool must be Active" (status == Active)
@@ -238,10 +243,12 @@ template HoldingPool
         assertMsg "Minimum output must be non-negative" (minOutput >= 0.0)
 
         -- Accept inbound TI to obtain input holding
-        let emptyExtraArgs = M.ExtraArgs with
-              context = M.emptyChoiceContext
-              meta = M.emptyMetadata
-        tiResult <- exercise transferInstructionCid TI.TransferInstruction_Accept with extraArgs = emptyExtraArgs
+        let acceptArgs = case acceptExtraArgs of
+              Some args -> args
+              None -> M.ExtraArgs with
+                context = M.emptyChoiceContext
+                meta = M.emptyMetadata
+        tiResult <- exercise transferInstructionCid TI.TransferInstruction_Accept with extraArgs = acceptArgs
         let inputHoldingCid = case tiResult.output of
               TI.TransferInstructionResult_Completed {receiverHoldingCids} -> case receiverHoldingCids of
                 h :: _ -> h
@@ -327,6 +334,120 @@ template HoldingPool
           reserveAmountB = newReserveB
 
         return (newPoolCid, payoutTiCid)
+
+    -- | ExecuteSwapFromTransferInstructionV2 - swap without SwapIntent.
+    -- Like ExecuteSwapFromTransferInstruction, but returns payout outcome (pending vs completed).
+    choice ExecuteSwapFromTransferInstructionV2 : (ContractId HoldingPool, PayoutOutcome)
+      with
+        transferInstructionCid : TransferInstructionCid
+        outputHoldingCid : HoldingCid
+        direction : SwapDirection
+        minOutput : Decimal
+        expiresAt : Time
+        recipient : Party
+        payoutFactoryCid : ContractId TI.TransferFactory
+        payoutExtraArgs : M.ExtraArgs
+        payoutMemo : Text
+        acceptExtraArgs : Optional M.ExtraArgs
+      controller operator
+      do
+        assertMsg "Pool must be Active" (status == Active)
+        now <- getTime
+        assertMsg "Swap deadline has expired" (now < expiresAt)
+        assertMsg "Minimum output must be non-negative" (minOutput >= 0.0)
+
+        -- Accept inbound TI to obtain input holding
+        let acceptArgs = case acceptExtraArgs of
+              Some args -> args
+              None -> M.ExtraArgs with
+                context = M.emptyChoiceContext
+                meta = M.emptyMetadata
+        tiResult <- exercise transferInstructionCid TI.TransferInstruction_Accept with extraArgs = acceptArgs
+        let inputHoldingCid = case tiResult.output of
+              TI.TransferInstructionResult_Completed {receiverHoldingCids} -> case receiverHoldingCids of
+                h :: _ -> h
+                _ -> error "Accept returned no receiver holding"
+              _ -> error "Accept did not complete transfer"
+
+        inputInst <- getHoldingInstrument inputHoldingCid
+        inputAmt <- getHoldingAmount inputHoldingCid
+        assertMsg "Input amount must be positive" (inputAmt > 0.0)
+
+        let expectedInput = case direction of
+              AtoB -> instrumentA
+              BtoA -> instrumentB
+        assertMsg "Input instrument does not match swap direction"
+          (instrumentIdEq inputInst expectedInput)
+
+        -- Calculate available reserves
+        let availA = reserveAmountA - lockedAmountA
+        let availB = reserveAmountB - lockedAmountB
+
+        -- Calculate swap output using constant product formula
+        let (reserveIn, reserveOut, _availIn, availOut) = case direction of
+              AtoB -> (reserveAmountA, reserveAmountB, availA, availB)
+              BtoA -> (reserveAmountB, reserveAmountA, availB, availA)
+
+        let inputAfterFee = inputAmt * (1.0 - feeRate)
+        let numerator = inputAfterFee * reserveOut
+        let denominator = reserveIn + inputAfterFee
+        assertMsg "Denominator must be positive" (denominator > 0.0)
+        let outputAmount = numerator / denominator
+
+        -- Validate output
+        assertMsg "Output amount must be positive" (outputAmount > 0.0)
+        assertMsg "Slippage: output below minimum" (outputAmount >= minOutput)
+        assertMsg "Insufficient available liquidity for output" (outputAmount <= availOut)
+
+        let expectedOutput = case direction of
+              AtoB -> instrumentB
+              BtoA -> instrumentA
+        outputInst <- getHoldingInstrument outputHoldingCid
+        outputAmt <- getHoldingAmount outputHoldingCid
+        assertMsg "Output holding has wrong instrument" (instrumentIdEq outputInst expectedOutput)
+        assertMsg "Output holding has insufficient amount" (outputAmt >= outputAmount)
+
+        -- Create payout TI atomically via TransferFactory
+        let memoKey = "splice.lfdecentralizedtrust.org/reason"
+        let memoMeta = M.Metadata with values = TextMap.fromList [(memoKey, payoutMemo)]
+        let payoutTransfer = TI.Transfer with
+              sender = operator
+              receiver = recipient
+              amount = outputAmount
+              instrumentId = expectedOutput
+              requestedAt = now
+              executeBefore = expiresAt
+              inputHoldingCids = [outputHoldingCid]
+              meta = memoMeta
+        payoutResult <- exercise payoutFactoryCid TI.TransferFactory_Transfer with
+          expectedAdmin = expectedOutput.admin
+          transfer = payoutTransfer
+          extraArgs = payoutExtraArgs
+        payoutOutcome <- case payoutResult.output of
+          TI.TransferInstructionResult_Pending {transferInstructionCid} -> return (PayoutPending transferInstructionCid)
+          TI.TransferInstructionResult_Completed {} -> return PayoutCompleted
+          TI.TransferInstructionResult_Failed {} -> error "Payout transfer failed"
+
+        -- Calculate new reserves (no pending payout tracking)
+        let (newReserveA, newReserveB) = case direction of
+              AtoB ->
+                ( reserveAmountA + inputAmt
+                , reserveAmountB - outputAmount
+                )
+              BtoA ->
+                ( reserveAmountA - outputAmount
+                , reserveAmountB + inputAmt
+                )
+
+        -- Safety checks
+        assertMsg "Reserve A cannot go below locked A" (newReserveA >= lockedAmountA)
+        assertMsg "Reserve B cannot go below locked B" (newReserveB >= lockedAmountB)
+
+        newPoolCid <- create this with
+          reserveAmountA = newReserveA
+          reserveAmountB = newReserveB
+
+        return (newPoolCid, payoutOutcome)
 
     -- | UnlockPayout - called when payout is claimed.
     -- Deducts from reserves and unlocks.

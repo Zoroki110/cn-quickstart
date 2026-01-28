@@ -52,6 +52,8 @@ public class TransferInstructionChoiceContextService {
 
     public record ChoiceContextResult(
             List<CommandsOuterClass.DisclosedContract> disclosedContracts,
+            ValueOuterClass.Record extraArgs,
+            int contextKeyCount,
             String registryUsed,
             List<String> registriesAttempted,
             String synchronizerId
@@ -131,7 +133,11 @@ public class TransferInstructionChoiceContextService {
             ));
         }
 
-        return Result.ok(new ChoiceContextResult(disclosed, successfulBase, attempted, synchronizerId));
+        ValueOuterClass.Record extraArgs = buildExtraArgs(ctx);
+        int contextKeys = ctx != null && ctx.choiceContextData != null && ctx.choiceContextData.values != null
+                ? ctx.choiceContextData.values.size()
+                : 0;
+        return Result.ok(new ChoiceContextResult(disclosed, extraArgs, contextKeys, successfulBase, attempted, synchronizerId));
     }
 
     private RegistryFetchResult fetchChoiceContext(RegistryEndpoint ep, String contractId, String requestId) {
@@ -344,6 +350,99 @@ public class TransferInstructionChoiceContextService {
         if (s == null) return "null";
         if (s.length() <= 30) return s;
         return s.substring(0, 15) + "..." + s.substring(s.length() - 10);
+    }
+
+    private ValueOuterClass.Record buildExtraArgs(ChoiceContextDto ctx) {
+        ValueOuterClass.TextMap.Builder valuesMapBuilder = ValueOuterClass.TextMap.newBuilder();
+        if (ctx != null && ctx.choiceContextData != null && ctx.choiceContextData.values != null) {
+            for (var entry : ctx.choiceContextData.values.entrySet()) {
+                String key = entry.getKey();
+                ContextValueDto cv = entry.getValue();
+                ValueOuterClass.Value anyValue = toApplicationValue(cv);
+                if (anyValue != null) {
+                    valuesMapBuilder.addEntries(ValueOuterClass.TextMap.Entry.newBuilder()
+                            .setKey(key)
+                            .setValue(anyValue)
+                            .build());
+                }
+            }
+        }
+
+        ValueOuterClass.Record choiceContext = ValueOuterClass.Record.newBuilder()
+                .addFields(ValueOuterClass.RecordField.newBuilder()
+                        .setLabel("values")
+                        .setValue(ValueOuterClass.Value.newBuilder()
+                                .setTextMap(valuesMapBuilder.build())
+                                .build())
+                        .build())
+                .build();
+
+        ValueOuterClass.Record emptyMeta = ValueOuterClass.Record.newBuilder()
+                .addFields(ValueOuterClass.RecordField.newBuilder()
+                        .setLabel("values")
+                        .setValue(ValueOuterClass.Value.newBuilder()
+                                .setTextMap(ValueOuterClass.TextMap.newBuilder().build())
+                                .build())
+                        .build())
+                .build();
+
+        return ValueOuterClass.Record.newBuilder()
+                .addFields(ValueOuterClass.RecordField.newBuilder()
+                        .setLabel("context")
+                        .setValue(ValueOuterClass.Value.newBuilder()
+                                .setRecord(choiceContext)
+                                .build())
+                        .build())
+                .addFields(ValueOuterClass.RecordField.newBuilder()
+                        .setLabel("meta")
+                        .setValue(ValueOuterClass.Value.newBuilder()
+                                .setRecord(emptyMeta)
+                                .build())
+                        .build())
+                .build();
+    }
+
+    private ValueOuterClass.Value toApplicationValue(ContextValueDto cv) {
+        if (cv == null || cv.tag == null) return null;
+        ValueOuterClass.Value innerVal;
+        switch (cv.tag) {
+            case "AV_Bool" -> {
+                boolean b = false;
+                if (cv.value instanceof Boolean boolVal) {
+                    b = boolVal;
+                } else if (cv.value instanceof String s) {
+                    b = Boolean.parseBoolean(s);
+                }
+                innerVal = ValueOuterClass.Value.newBuilder().setBool(b).build();
+            }
+            case "AV_ContractId" -> innerVal = ValueOuterClass.Value.newBuilder()
+                    .setContractId(cv.value != null ? cv.value.toString() : "")
+                    .build();
+            case "AV_List" -> {
+                ValueOuterClass.List.Builder lb = ValueOuterClass.List.newBuilder();
+                if (cv.value instanceof List<?> listVal) {
+                    for (Object o : listVal) {
+                        lb.addElements(ValueOuterClass.Value.newBuilder()
+                                .setText(o != null ? o.toString() : "")
+                                .build());
+                    }
+                }
+                innerVal = ValueOuterClass.Value.newBuilder().setList(lb.build()).build();
+            }
+            case "AV_Text" -> innerVal = ValueOuterClass.Value.newBuilder()
+                    .setText(cv.value != null ? cv.value.toString() : "")
+                    .build();
+            default -> {
+                return null;
+            }
+        }
+
+        return ValueOuterClass.Value.newBuilder()
+                .setVariant(ValueOuterClass.Variant.newBuilder()
+                        .setConstructor(cv.tag)
+                        .setValue(innerVal != null ? innerVal : ValueOuterClass.Value.getDefaultInstance())
+                        .build())
+                .build();
     }
 
     private String requestIdOrDefault(String requestId) {

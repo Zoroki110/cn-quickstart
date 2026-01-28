@@ -138,6 +138,15 @@ const SwapInterface: React.FC = () => {
     partyId && selectedTokens.from && normalizedInputAmount > getNumericBalance(selectedTokens.from.symbol)
   );
   const disableSwap = loading || !partyId || !selectedTokens.from || !selectedTokens.to || !inputAmount || !quote || insufficientBalance;
+  const consumePayload = swapResult?.consume?.result;
+  const payoutStatus = consumePayload?.payoutStatus;
+  const payoutCid = consumePayload?.payoutCid;
+  const payoutMessage =
+    payoutStatus === 'COMPLETED'
+      ? 'Payout completed on ledger (no Loop accept required).'
+      : payoutStatus === 'CREATED'
+      ? 'Payout TransferInstruction created. Accept in Loop wallet.'
+      : null;
 
   useEffect(() => {
     const previous = lastConnectedParty.current;
@@ -388,7 +397,13 @@ const SwapInterface: React.FC = () => {
           setSwapStatus('Consuming swap (backend)');
           consumeResult = await backendApi.consumeDevnetSwap({ requestId });
           if (consumeResult?.ok) {
-            setSwapStatus('Payout created. Accept in Loop wallet.');
+            const payoutStatus = consumeResult?.result?.payoutStatus;
+            const payoutCid = consumeResult?.result?.payoutCid;
+            if (payoutStatus === 'COMPLETED' || !payoutCid) {
+              setSwapStatus('Payout completed automatically. No Loop accept required.');
+            } else {
+              setSwapStatus('Payout created. Accept in Loop wallet.');
+            }
           }
         } else {
           consumeResult = {
@@ -662,6 +677,18 @@ const SwapInterface: React.FC = () => {
           <div className="mt-4 glass-subtle rounded-xl p-4 text-sm">
             {swapStatus && (
               <div className="font-semibold text-gray-900 dark:text-gray-100">{swapStatus}</div>
+            )}
+            {consumePayload && (
+              <div className="mt-2 rounded-lg border border-gray-200 dark:border-dark-700 bg-white/70 dark:bg-dark-900/40 p-3">
+                <div className="text-xs font-semibold text-gray-800 dark:text-gray-200">Payout</div>
+                <div className="mt-1 text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                  <div>Status: {payoutStatus || 'UNKNOWN'}</div>
+                  {payoutMessage && <div>{payoutMessage}</div>}
+                  <div>Amount out: {consumePayload?.amountOut ?? '-'}</div>
+                  <div>Execute before: {consumePayload?.payoutExecuteBefore ?? '-'}</div>
+                  <div>Payout CID: {payoutCid || 'none (completed)'}</div>
+                </div>
+              </div>
             )}
             {swapResult && (
               <pre className="mt-2 text-xs bg-gray-900 text-emerald-200 rounded-lg p-3 overflow-auto">

@@ -4,6 +4,13 @@ spring:
   application:
     name: clearportx-backend
 
+  # Disable DataSource autoconfiguration when PQS is not enabled
+  # This allows Ledger API-only mode for Canton 3.4.7
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+
   # Redis Configuration (Distributed Rate Limiter)
   redis:
     host: ${REDIS_HOST:redis-cluster}
@@ -68,6 +75,19 @@ ledger:
   port: ${LEDGER_API_PORT:5001}
   tls: false  # Local participant doesn't use TLS
   max-inbound-message-size: 10000000  # 10 MB
+  # Multi-asset registry routing for TransferInstruction acceptance
+  registry:
+    # Default registry (Amulet/CC via DevNet Scan)
+    default-base-uri: ${LEDGER_REGISTRY_DEFAULT_BASE_URI:https://scan.sv-1.dev.global.canton.network.digitalasset.com}
+    # Fallback registries to try if default returns 404/empty (comma-separated)
+    fallback-base-uris: ${LEDGER_REGISTRY_FALLBACK_BASE_URIS:}
+    # Admin-to-registry mapping (JSON format: {"adminParty": "baseUri", ...})
+    # Known admins:
+    #   Amulet: DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a
+    #   CBTC: <placeholder - obtain from CBTC team>
+    by-admin: ${LEDGER_REGISTRY_BY_ADMIN:{}}
+  # Base URL for TransferFactory registry (used with /registry/transfer-instruction/v1/transfer-factory)
+  registry-transfer-factory-url: ${LEDGER_REGISTRY_TRANSFER_FACTORY_URL:https://scan.sv-1.dev.global.canton.network.sync.global}
 
 # PQS Configuration
 pqs:
@@ -99,6 +119,15 @@ management:
       env: devnet
       version: ${APP_VERSION:1.0.1}
       packageId: ${DAR_PACKAGE_ID:unknown}
+
+holdingpool:
+  package-id: fdbf30e7424ca45677d8f23414e33564b28c6068a22af9a3015f66fe3b1b8273
+
+# AppProvider party binding (DevNet)
+application:
+  tenants:
+    AppProvider:
+      partyId: ${APP_PROVIDER_PARTY:ClearportX-DEX-1::122081f2b8e29cbe57d1037a18e6f70e57530773b3a4d1bea6bab981b7a76e943b37}
 
 # Logging Configuration
 logging:
@@ -142,3 +171,6 @@ clearportx:
       alice: "Alice-9cefe94d::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"
       bob: "Bob-9b3970be::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"
       app-provider: "app-provider-4f1df03a::1220414f85e74ed69ca162b9874f3cf9dfa94fb4968823bd8ac9755544fcb5d72388"
+    jwt-secret: ${CLEARPORTX_AUTH_JWT_SECRET:devnet-secret}
+    jwt-issuer: ${CLEARPORTX_AUTH_JWT_ISSUER:clearportx-backend}
+    jwt-ttl-seconds: ${CLEARPORTX_AUTH_JWT_TTL_SECONDS:900}

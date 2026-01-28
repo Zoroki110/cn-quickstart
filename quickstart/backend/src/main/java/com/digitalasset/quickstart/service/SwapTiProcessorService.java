@@ -145,7 +145,8 @@ public class SwapTiProcessorService {
                         return completedError(preconditionError("Pool is not active", Map.of("status", pool.status)));
                     }
 
-                    SwapDirection direction = SwapDirection.fromMemo(memo.direction);
+                    String normalizedDirection = SwapDirection.normalizeMemo(memo.direction);
+                    SwapDirection direction = SwapDirection.fromNormalized(normalizedDirection);
                     if (direction == null) {
                         return completedError(validationError("memo.direction is invalid", "direction"));
                     }
@@ -246,13 +247,17 @@ public class SwapTiProcessorService {
                                         mergeDisclosed(ctx.disclosedContracts(), payoutPlan.disclosedContracts());
                                 String synchronizerId = firstNonBlank(ctx.synchronizerId(), payoutPlan.synchronizerId());
 
-                                LOG.info("[SwapConsume] requestId={} operator={} inboundTiCid={} poolCid={} amountIn={} amountOut={} actAs=[{}] readAs=[{}]",
+                                LOG.info("[SwapConsume] requestId={} operator={} inboundTiCid={} poolCid={} amountIn={} amountOut={} directionRaw={} directionNormalized={} damlDirection={} acceptContextKeys={} actAs=[{}] readAs=[{}]",
                                         request.requestId,
                                         operator,
                                         ti.contractId(),
                                         pool.contractId,
                                         amountIn.toPlainString(),
                                         amountOut.toPlainString(),
+                                        memo.direction,
+                                        normalizedDirection,
+                                        direction.damlConstructor,
+                                        ctx.contextKeyCount(),
                                         operator,
                                         "");
 
@@ -267,6 +272,7 @@ public class SwapTiProcessorService {
                                                 payoutPlan.factoryCid(),
                                                 payoutPlan.extraArgs(),
                                                 memoRaw,
+                                                ctx.extraArgs(),
                                                 disclosed,
                                                 synchronizerId
                                         )
@@ -282,8 +288,11 @@ public class SwapTiProcessorService {
                                             if (updateId == null || updateId.isBlank()) {
                                                 return completedError(ApiError.of(ErrorCode.INTERNAL, "ExecuteSwap returned no updateId"));
                                             }
-                                            String payoutCid = extractPayoutCid(executeResult.getValueUnsafe());
-                                            if (payoutCid == null || payoutCid.isBlank()) {
+                                            PayoutOutcomeInfo payoutOutcome = extractPayoutOutcome(executeResult.getValueUnsafe());
+                                            if (payoutOutcome == null) {
+                                                return completedError(ApiError.of(ErrorCode.INTERNAL, "ExecuteSwap returned no payout outcome"));
+                                            }
+                                            if (!payoutOutcome.completed && (payoutOutcome.payoutCid == null || payoutOutcome.payoutCid.isBlank())) {
                                                 return completedError(ApiError.of(ErrorCode.INTERNAL, "ExecuteSwap returned no payoutCid"));
                                             }
                                             SwapConsumeResponse response = new SwapConsumeResponse();
@@ -298,12 +307,12 @@ public class SwapTiProcessorService {
                                             response.minOut = minOut.toPlainString();
                                             response.executeSwapLedgerUpdateId = updateId;
                                             response.executeSwapStatus = "SUCCEEDED";
-                                            response.payoutCid = payoutCid;
+                                            response.payoutCid = payoutOutcome.payoutCid;
                                             response.payoutExecuteBefore = deadline.toString();
                                             response.payoutFactoryId = payoutPlan.factoryCid();
                                             response.payoutDisclosedContractsCount = payoutPlan.disclosedContracts().size();
-                                            response.payoutStatus = "CREATED";
-                                            response.nextAction = "ACCEPT_PAYOUT_IN_LOOP";
+                                            response.payoutStatus = payoutOutcome.completed ? "COMPLETED" : "CREATED";
+                                            response.nextAction = payoutOutcome.completed ? "NONE" : "ACCEPT_PAYOUT_IN_LOOP";
 
                                             idempotencyService.registerSuccess(request.requestId, request.requestId, updateId, response);
                                             return CompletableFuture.completedFuture(Result.ok(response));
@@ -474,6 +483,7 @@ public class SwapTiProcessorService {
             String payoutFactoryCid,
             ValueOuterClass.Record payoutExtraArgs,
             String payoutMemo,
+            ValueOuterClass.Record acceptExtraArgs,
             List<com.daml.ledger.api.v2.CommandsOuterClass.DisclosedContract> disclosedContracts,
             String synchronizerId
     ) {
@@ -487,13 +497,14 @@ public class SwapTiProcessorService {
                 .addFields(recordField("payoutFactoryCid", contractIdValue(payoutFactoryCid)))
                 .addFields(recordField("payoutExtraArgs", recordValue(payoutExtraArgs)))
                 .addFields(recordField("payoutMemo", textValue(payoutMemo)))
+                .addFields(recordField("acceptExtraArgs", optionalValue(recordValue(acceptExtraArgs))))
                 .build();
 
         return ledgerApi.exerciseRawWithLabel(
-                        "ExecuteSwapFromTransferInstruction",
+                        "ExecuteSwapFromTransferInstructionV2",
                         holdingPoolTemplateId(),
                         poolCid,
-                        "ExecuteSwapFromTransferInstruction",
+                        "ExecuteSwapFromTransferInstructionV2",
                         choiceArgs,
                         List.of(authUtils.getAppProviderPartyId()),
                         List.of(),
@@ -560,6 +571,14 @@ public class SwapTiProcessorService {
         return ValueOuterClass.Value.newBuilder().setRecord(record).build();
     }
 
+    private ValueOuterClass.Value optionalValue(ValueOuterClass.Value value) {
+        ValueOuterClass.Optional.Builder ob = ValueOuterClass.Optional.newBuilder();
+        if (value != null) {
+            ob.setValue(value);
+        }
+        return ValueOuterClass.Value.newBuilder().setOptional(ob.build()).build();
+    }
+
     private ValueOuterClass.Value numericValue(BigDecimal value) {
         String raw = value.setScale(SwapConstants.SCALE, RoundingMode.DOWN).toPlainString();
         return ValueOuterClass.Value.newBuilder().setNumeric(raw).build();
@@ -572,13 +591,9 @@ public class SwapTiProcessorService {
 
     private ValueOuterClass.Value swapDirectionValue(SwapDirection direction) {
         String constructor = direction.damlConstructor;
-        ValueOuterClass.Value unit = ValueOuterClass.Value.newBuilder()
-                .setRecord(ValueOuterClass.Record.newBuilder().build())
-                .build();
         return ValueOuterClass.Value.newBuilder()
-                .setVariant(ValueOuterClass.Variant.newBuilder()
+                .setEnum(ValueOuterClass.Enum.newBuilder()
                         .setConstructor(constructor)
-                        .setValue(unit)
                         .build())
                 .build();
     }
@@ -630,18 +645,41 @@ public class SwapTiProcessorService {
         return resp.getTransaction().getUpdateId();
     }
 
-    private String extractPayoutCid(CommandServiceOuterClass.SubmitAndWaitForTransactionResponse resp) {
+    private PayoutOutcomeInfo extractPayoutOutcome(CommandServiceOuterClass.SubmitAndWaitForTransactionResponse resp) {
         if (resp == null || !resp.hasTransaction()) return null;
         for (var ev : resp.getTransaction().getEventsList()) {
             if (!ev.hasExercised()) continue;
-            if (!"ExecuteSwapFromTransferInstruction".equals(ev.getExercised().getChoice())) continue;
+            String choice = ev.getExercised().getChoice();
+            if (!"ExecuteSwapFromTransferInstruction".equals(choice)
+                    && !"ExecuteSwapFromTransferInstructionV2".equals(choice)) {
+                continue;
+            }
             var result = ev.getExercised().getExerciseResult();
             if (!result.hasRecord()) continue;
             var rec = result.getRecord();
             if (rec.getFieldsCount() < 2) continue;
             var payoutVal = rec.getFields(1).getValue();
             if (payoutVal.hasContractId()) {
-                return payoutVal.getContractId();
+                return new PayoutOutcomeInfo(payoutVal.getContractId(), false);
+            }
+            if (payoutVal.hasVariant()) {
+                var variant = payoutVal.getVariant();
+                String ctor = variant.getConstructor();
+                if ("PayoutCompleted".equals(ctor)) {
+                    return new PayoutOutcomeInfo(null, true);
+                }
+                if ("PayoutPending".equals(ctor)) {
+                    ValueOuterClass.Value inner = variant.getValue();
+                    if (inner.hasContractId()) {
+                        return new PayoutOutcomeInfo(inner.getContractId(), false);
+                    }
+                }
+            }
+            if (payoutVal.hasOptional()) {
+                var opt = payoutVal.getOptional();
+                if (opt.hasValue() && opt.getValue().hasContractId()) {
+                    return new PayoutOutcomeInfo(opt.getValue().getContractId(), false);
+                }
             }
         }
         return null;
@@ -716,6 +754,7 @@ public class SwapTiProcessorService {
 
     private record Candidate(TransferInstructionDto transfer, SwapMemo memo, String memoRaw) { }
     private record Selection(Candidate candidate, boolean matchedRequestId) { }
+    private record PayoutOutcomeInfo(String payoutCid, boolean completed) { }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static final class SwapMemo {
@@ -738,10 +777,21 @@ public class SwapTiProcessorService {
             this.damlConstructor = damlConstructor;
         }
 
-        static SwapDirection fromMemo(String memoDirection) {
+        static String normalizeMemo(String memoDirection) {
             if (memoDirection == null) return null;
             String norm = memoDirection.trim().toUpperCase();
-            return switch (norm) {
+            if (norm.isBlank()) return null;
+            String cleaned = norm.replaceAll("[^A-Z0-9]", "");
+            return switch (cleaned) {
+                case "A2B", "ATOB" -> "A2B";
+                case "B2A", "BTOA" -> "B2A";
+                default -> cleaned;
+            };
+        }
+
+        static SwapDirection fromNormalized(String normalizedDirection) {
+            if (normalizedDirection == null) return null;
+            return switch (normalizedDirection) {
                 case "A2B" -> A2B;
                 case "B2A" -> B2A;
                 default -> null;

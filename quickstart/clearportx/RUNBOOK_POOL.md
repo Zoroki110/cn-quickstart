@@ -6,8 +6,8 @@ print(urllib.parse.quote("ClearportX-DEX-1::122081f2b8e29cbe57d1037a18e6f70e5753
 PY
 )
 
-# 0) Vérifier les TIs encore présentes (si besoin)
-curl -s "$BASE/api/devnet/bootstrap-tis?receiverParty=${OP_ENC}&amuletAmount=85000&cbtcAmount=0.1&maxAgeSeconds=7200" | jq
+# 0) Vérifier les TIs entrantes (Loop -> OPERATOR)
+curl -s "$BASE/api/devnet/bootstrap-tis?receiverParty=${OP_ENC}&amuletAmount=115000&cbtcAmount=0.2&maxAgeSeconds=7200" | jq
 curl -s "$BASE/api/devnet/transfer-instructions/debug?receiverParty=${OP_ENC}" | jq
 
 # 1) Archiver l’ancienne pool Active
@@ -25,18 +25,20 @@ curl -s -X POST "$BASE/api/holding-pools" -H "Content-Type: application/json" -d
 }' | jq
 # -> récupérer NEW_POOL_CID
 
-# 3) Bootstrap auto-consommateur
+# 3) Bootstrap auto-consommateur (token-standard, sans bypass)
 NEW_POOL_CID="<PASTE_NEW_CID>"
+TI_A=$(curl -s "$BASE/api/devnet/bootstrap-tis?receiverParty=${OP_ENC}&amuletAmount=115000&cbtcAmount=0.2&maxAgeSeconds=7200" | jq -r '.amulet.cid')
+TI_B=$(curl -s "$BASE/api/devnet/bootstrap-tis?receiverParty=${OP_ENC}&amuletAmount=115000&cbtcAmount=0.2&maxAgeSeconds=7200" | jq -r '.cbtc.cid')
 curl -s -X POST "$BASE/api/holding-pools/${NEW_POOL_CID}/bootstrap" -H "Content-Type: application/json" -d '{
-  "tiCidA": "0025b856c3bd6e3844f0e6d429ce9d96a4ff633860d6736ec3d7ac5eed1cd7c0f3ca1212202fac45a695b5981610b1413c52866d32896234fb8a01cbb41e67f48ada07a473",
-  "tiCidB": "000c74331138c10e08f3fc78c55f3acfff24fb4fb617755438b84fd84d786fdf72ca1212202f4a3b1b2cb24894aede9c6d6ea7f62c7a601ad4e24cbcc17b744950b2acca46",
-  "amountA": "85000.0",
-  "amountB": "0.10",
+  "tiCidA": "'"$TI_A"'",
+  "tiCidB": "'"$TI_B"'",
+  "amountA": "115000.0",
+  "amountB": "0.20",
   "lpProvider": "'"$OP"'"
 }' | jq
 
 # 4) Post-check TIs absentes
-curl -s "$BASE/api/devnet/bootstrap-tis?receiverParty=${OP_ENC}&amuletAmount=85000&cbtcAmount=0.1&maxAgeSeconds=7200" | jq
+curl -s "$BASE/api/devnet/bootstrap-tis?receiverParty=${OP_ENC}&amuletAmount=115000&cbtcAmount=0.2&maxAgeSeconds=7200" | jq
 curl -s "$BASE/api/devnet/transfer-instructions/debug?receiverParty=${OP_ENC}" | jq
 
 # 5) Vérifier pool Active + réserves

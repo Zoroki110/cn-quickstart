@@ -1,13 +1,16 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { useAppStore } from '../stores';
 import { backendApi } from '../services/backendApi';
 import { useNavigate } from 'react-router-dom';
-import { TokenInfo } from '../types/canton';
+import { TokenInfo, TransactionHistoryEntry } from '../types/canton';
 
 const PoolsInterface: React.FC = () => {
   const { pools, setPools } = useAppStore();
   const navigate = useNavigate();
   const [loading, setLoading] = React.useState(true);
+  const [volumeByPool, setVolumeByPool] = React.useState<Record<string, number>>({});
+  const [totalVolume24h, setTotalVolume24h] = React.useState(0);
+  const [volumeDay, setVolumeDay] = React.useState<string>(() => new Date().toISOString().slice(0, 10));
 
   useEffect(() => {
     const loadPools = async () => {
@@ -31,7 +34,7 @@ const PoolsInterface: React.FC = () => {
     return sum + pool.reserveA + pool.reserveB;
   }, 0);
 
-  const totalVolume24h = pools.reduce((sum, pool) => sum + pool.volume24h, 0);
+  const effectiveTotalVolume24h = totalVolume24h;
   const averageAPR = pools.length > 0
     ? pools.reduce((sum, pool) => sum + pool.apr, 0) / pools.length
     : 0;
@@ -66,14 +69,61 @@ const PoolsInterface: React.FC = () => {
     return `$${num.toFixed(2)}`;
   };
 
-  const formatToken = (amount: number, decimals: number = 2) => {
-    if (amount >= 1_000_000) {
-      return `${(amount / 1_000_000).toFixed(decimals)}M`;
-    } else if (amount >= 1_000) {
-      return `${(amount / 1_000).toFixed(decimals)}K`;
+  const formatPlainNumber = (raw: number, maxDecimals = 10) => {
+    if (!Number.isFinite(raw)) {
+      return '0';
     }
-    return amount.toFixed(decimals);
+    const fixed = raw.toFixed(maxDecimals);
+    const trimmed = fixed.replace(/0+$/, '').replace(/\.$/, '');
+    const [intPart = '0', fracPart] = trimmed.split('.');
+    const spaced = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return fracPart ? `${spaced}.${fracPart}` : spaced;
   };
+
+  const computeVolumeSnapshot = useCallback((entries: TransactionHistoryEntry[]) => {
+    const dayKey = new Date().toISOString().slice(0, 10);
+    const byPool: Record<string, number> = {};
+    let total = 0;
+    entries.forEach((entry) => {
+      if (entry.type !== 'SWAP') return;
+      if (!entry.createdAt) return;
+      const entryDay = new Date(entry.createdAt).toISOString().slice(0, 10);
+      if (entryDay !== dayKey) return;
+      const amountIn = Number(entry.amountADesired);
+      if (!Number.isFinite(amountIn)) return;
+      total += amountIn;
+      const poolKey = entry.poolId || entry.contractId;
+      if (poolKey) {
+        byPool[poolKey] = (byPool[poolKey] ?? 0) + amountIn;
+      }
+    });
+    setVolumeByPool(byPool);
+    setTotalVolume24h(total);
+    setVolumeDay(dayKey);
+  }, []);
+
+  const refreshVolumes = useCallback(async () => {
+    try {
+      const entries = await backendApi.getTransactionHistory();
+      computeVolumeSnapshot(entries);
+    } catch (error) {
+      console.warn('Failed to load transaction history for volume:', error);
+    }
+  }, [computeVolumeSnapshot]);
+
+  useEffect(() => {
+    refreshVolumes();
+  }, [refreshVolumes]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const dayKey = new Date().toISOString().slice(0, 10);
+      if (dayKey !== volumeDay) {
+        refreshVolumes();
+      }
+    }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [refreshVolumes, volumeDay]);
 
   if (loading) {
     return (
@@ -132,7 +182,7 @@ const PoolsInterface: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="body-small mb-1">24h Volume</p>
-                <p className="text-2xl font-bold text-gradient-cleaportx">{formatNumber(totalVolume24h)}</p>
+                <p className="text-2xl font-bold text-gradient-cleaportx">{formatPlainNumber(effectiveTotalVolume24h)}</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-success-100 dark:bg-success-900/20 flex items-center justify-center">
                 <svg className="w-6 h-6 text-success-600 dark:text-success-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -203,10 +253,10 @@ const PoolsInterface: React.FC = () => {
                       <div>
                         <p className="body-small mb-1">Liquidity</p>
                         <p className="font-semibold text-gray-900 dark:text-gray-100">
-                          {formatToken(pool.reserveA)} {pool.tokenA.symbol}
+                          {formatPlainNumber(pool.reserveA)} {pool.tokenA.symbol}
                         </p>
                         <p className="body-small text-gray-500">
-                          {formatToken(pool.reserveB)} {pool.tokenB.symbol}
+                          {formatPlainNumber(pool.reserveB)} {pool.tokenB.symbol}
                         </p>
                       </div>
 
@@ -222,7 +272,7 @@ const PoolsInterface: React.FC = () => {
                       <div>
                         <p className="body-small mb-1">24h Volume</p>
                         <p className="font-semibold text-gray-900 dark:text-gray-100">
-                          {formatNumber(pool.volume24h)}
+                          {formatPlainNumber(volumeByPool[pool.contractId] ?? pool.volume24h)}
                         </p>
                       </div>
 

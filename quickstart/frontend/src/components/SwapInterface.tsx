@@ -404,6 +404,11 @@ const SwapInterface: React.FC = () => {
             } else {
               setSwapStatus('Payout created. Accept in Loop wallet.');
             }
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('clearportx:transactions:refresh', {
+                detail: { source: 'swap', requestId },
+              }));
+            }
           }
         } else {
           consumeResult = {

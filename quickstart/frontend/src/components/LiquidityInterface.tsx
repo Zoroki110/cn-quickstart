@@ -5,6 +5,7 @@ import { backendApi } from '../services/backendApi';
 import { TokenInfo, PoolInfo, LpTokenInfo } from '../types/canton';
 import toast from 'react-hot-toast';
 import { useWalletAuth } from '../wallet';
+import TokenSelector from './TokenSelector';
 
 const LiquidityInterface: React.FC = () => {
   const location = useLocation();
@@ -17,6 +18,8 @@ const LiquidityInterface: React.FC = () => {
   const [lpTokens, setLpTokens] = useState<LpTokenInfo[]>([]);
   const [selectedTokenA, setSelectedTokenA] = useState<TokenInfo | null>(null);
   const [selectedTokenB, setSelectedTokenB] = useState<TokenInfo | null>(null);
+  const [showTokenASelector, setShowTokenASelector] = useState(false);
+  const [showTokenBSelector, setShowTokenBSelector] = useState(false);
   const [amountA, setAmountA] = useState('');
   const [amountB, setAmountB] = useState('');
   const [loading, setLoading] = useState(false);
@@ -129,6 +132,36 @@ const LiquidityInterface: React.FC = () => {
       toast.success('Liquidity view already matches ledger balances');
     }
   }, [partyId, computePoolTotals, lpTokens, persistLpBaselines]);
+
+  const renderTokenBadge = (
+    token: TokenInfo | null,
+    fallbackColor: string,
+    fallbackTextColor: string = 'text-gray-900 dark:text-gray-100'
+  ) => (
+    <div
+      className={`w-8 h-8 rounded-full overflow-hidden border border-white/40 shadow-inner flex items-center justify-center ${
+        token?.logoUrl ? 'bg-white dark:bg-dark-700' : fallbackColor
+      }`}
+    >
+      {token?.logoUrl ? (
+        <img
+          src={token.logoUrl}
+          alt={`${token.symbol} logo`}
+          className="w-full h-full object-cover"
+          loading="lazy"
+        />
+      ) : (
+        <span className={`text-xs font-bold uppercase ${fallbackTextColor}`}>
+          {token?.symbol?.charAt(0) ?? '?'}
+        </span>
+      )}
+    </div>
+  );
+
+  const tokenBOptions = useMemo(
+    () => tokens.filter(token => token.symbol !== selectedTokenA?.symbol),
+    [tokens, selectedTokenA]
+  );
 
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
@@ -466,21 +499,21 @@ const LiquidityInterface: React.FC = () => {
               </div>
 
               <div className="flex items-center space-x-3">
-                <select
-                  value={selectedTokenA?.symbol || ''}
-                  onChange={(e) => {
-                    const token = tokens.find(t => t.symbol === e.target.value);
-                    setSelectedTokenA(token || null);
-                  }}
-                  className="flex-1 bg-gray-100 dark:bg-dark-800 rounded-xl px-4 py-3 text-gray-900 dark:text-gray-100 font-semibold border-none outline-none"
+                <button
+                  onClick={() => setShowTokenASelector(true)}
+                  className="flex items-center space-x-2 px-3 py-2 rounded-xl bg-gray-100 dark:bg-dark-800 hover:bg-gray-200 dark:hover:bg-dark-700 transition-colors duration-200 min-w-fit whitespace-nowrap"
                 >
-                  <option value="">Select Token</option>
-                  {tokens.map(token => (
-                    <option key={token.symbol} value={token.symbol}>
-                      {token.symbol} - {token.name}
-                    </option>
-                  ))}
-                </select>
+                  {selectedTokenA ? (
+                    <>
+                      {renderTokenBadge(selectedTokenA, 'bg-primary-100 dark:bg-primary-900/20', 'text-primary-600 dark:text-primary-400')}
+                      <span className="font-semibold text-gray-900 dark:text-gray-100">
+                        {selectedTokenA.symbol}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-gray-500">Select token</span>
+                  )}
+                </button>
 
                 <input
                   type="text"
@@ -509,23 +542,21 @@ const LiquidityInterface: React.FC = () => {
               </div>
 
               <div className="flex items-center space-x-3">
-                <select
-                  value={selectedTokenB?.symbol || ''}
-                  onChange={(e) => {
-                    const token = tokens.find(t => t.symbol === e.target.value);
-                    setSelectedTokenB(token || null);
-                  }}
-                  className="flex-1 bg-gray-100 dark:bg-dark-800 rounded-xl px-4 py-3 text-gray-900 dark:text-gray-100 font-semibold border-none outline-none"
+                <button
+                  onClick={() => setShowTokenBSelector(true)}
+                  className="flex items-center space-x-2 px-3 py-2 rounded-xl bg-gray-100 dark:bg-dark-800 hover:bg-gray-200 dark:hover:bg-dark-700 transition-colors duration-200 min-w-fit whitespace-nowrap"
                 >
-                  <option value="">Select Token</option>
-                  {tokens
-                    .filter(t => t.symbol !== selectedTokenA?.symbol)
-                    .map(token => (
-                      <option key={token.symbol} value={token.symbol}>
-                        {token.symbol} - {token.name}
-                      </option>
-                    ))}
-                </select>
+                  {selectedTokenB ? (
+                    <>
+                      {renderTokenBadge(selectedTokenB, 'bg-success-100 dark:bg-success-900/20', 'text-success-600 dark:text-success-400')}
+                      <span className="font-semibold text-gray-900 dark:text-gray-100">
+                        {selectedTokenB.symbol}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-gray-500">Select token</span>
+                  )}
+                </button>
 
                 <input
                   type="text"
@@ -681,6 +712,33 @@ const LiquidityInterface: React.FC = () => {
           </div>
         )}
       </div>
+
+      <TokenSelector
+        isOpen={showTokenASelector}
+        onClose={() => setShowTokenASelector(false)}
+        tokens={tokens}
+        selectedToken={selectedTokenA}
+        type="from"
+        onSelect={(token) => {
+          setSelectedTokenA(token);
+          if (token.symbol === selectedTokenB?.symbol) {
+            setSelectedTokenB(null);
+          }
+          setShowTokenASelector(false);
+        }}
+      />
+
+      <TokenSelector
+        isOpen={showTokenBSelector}
+        onClose={() => setShowTokenBSelector(false)}
+        tokens={tokenBOptions}
+        selectedToken={selectedTokenB}
+        type="to"
+        onSelect={(token) => {
+          setSelectedTokenB(token);
+          setShowTokenBSelector(false);
+        }}
+      />
     </div>
   );
 };

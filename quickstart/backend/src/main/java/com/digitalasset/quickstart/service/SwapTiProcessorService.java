@@ -44,6 +44,7 @@ public class SwapTiProcessorService {
     private final IdempotencyService idempotencyService;
     private final TransferInstructionChoiceContextService choiceContextService;
     private final SwapValidator swapValidator;
+    private final TransactionHistoryService transactionHistoryService;
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -59,7 +60,8 @@ public class SwapTiProcessorService {
             AuthUtils authUtils,
             IdempotencyService idempotencyService,
             TransferInstructionChoiceContextService choiceContextService,
-            SwapValidator swapValidator
+            SwapValidator swapValidator,
+            TransactionHistoryService transactionHistoryService
     ) {
         this.tiQueryService = tiQueryService;
         this.holdingPoolService = holdingPoolService;
@@ -70,6 +72,7 @@ public class SwapTiProcessorService {
         this.idempotencyService = idempotencyService;
         this.choiceContextService = choiceContextService;
         this.swapValidator = swapValidator;
+        this.transactionHistoryService = transactionHistoryService;
     }
 
     @WithSpan
@@ -313,6 +316,26 @@ public class SwapTiProcessorService {
                                             response.payoutDisclosedContractsCount = payoutPlan.disclosedContracts().size();
                                             response.payoutStatus = payoutOutcome.completed ? "COMPLETED" : "CREATED";
                                             response.nextAction = payoutOutcome.completed ? "NONE" : "ACCEPT_PAYOUT_IN_LOOP";
+
+                                            try {
+                                                String inputSymbol = direction == SwapDirection.A2B
+                                                        ? displaySymbol(pool.instrumentA.id)
+                                                        : displaySymbol(pool.instrumentB.id);
+                                                String outputSymbol = direction == SwapDirection.A2B
+                                                        ? displaySymbol(pool.instrumentB.id)
+                                                        : displaySymbol(pool.instrumentA.id);
+                                                transactionHistoryService.recordSwap(
+                                                        pool.contractId,
+                                                        pool.contractId,
+                                                        inputSymbol,
+                                                        outputSymbol,
+                                                        amountIn,
+                                                        amountOut,
+                                                        memo.receiverParty
+                                                );
+                                            } catch (Exception e) {
+                                                LOG.warn("[SwapConsume] Failed to record transaction history: {}", e.getMessage());
+                                            }
 
                                             idempotencyService.registerSuccess(request.requestId, request.requestId, updateId, response);
                                             return CompletableFuture.completedFuture(Result.ok(response));
@@ -638,6 +661,16 @@ public class SwapTiProcessorService {
             return BigDecimal.ZERO.setScale(SwapConstants.SCALE, RoundingMode.DOWN);
         }
         return new BigDecimal(value).setScale(SwapConstants.SCALE, RoundingMode.DOWN);
+    }
+
+    private String displaySymbol(String instrumentId) {
+        if (instrumentId == null) {
+            return "";
+        }
+        if ("Amulet".equalsIgnoreCase(instrumentId.trim())) {
+            return "CC";
+        }
+        return instrumentId.trim();
     }
 
     private String extractUpdateId(CommandServiceOuterClass.SubmitAndWaitForTransactionResponse resp) {

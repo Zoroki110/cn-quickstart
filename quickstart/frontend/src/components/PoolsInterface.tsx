@@ -301,10 +301,10 @@ const PoolsInterface: React.FC = () => {
                     <div>
                       <p className="body-small mb-1">Liquidity</p>
                       <p className="font-semibold text-sm text-gray-900 dark:text-gray-100">
-                        {formatToken(pool.reserveA)} {pool.tokenA.symbol}
+                        {formatPlainNumber(pool.reserveA)} {pool.tokenA.symbol}
                       </p>
                       <p className="body-small text-gray-500">
-                        {formatToken(pool.reserveB)} {pool.tokenB.symbol}
+                        {formatPlainNumber(pool.reserveB)} {pool.tokenB.symbol}
                       </p>
                     </div>
                     <div>
@@ -316,7 +316,7 @@ const PoolsInterface: React.FC = () => {
                     <div>
                       <p className="body-small mb-1">24h Volume</p>
                       <p className="font-semibold text-sm text-gray-900 dark:text-gray-100">
-                        {formatNumber(pool.volume24h)}
+                        {formatPlainNumber(volumeByPool[pool.contractId] ?? pool.volume24h)}
                       </p>
                     </div>
                     <div>

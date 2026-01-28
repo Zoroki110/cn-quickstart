@@ -46,7 +46,7 @@ public class TransactionHistoryService {
                                                                    BigDecimal bootstrapB,
                                                                    String operator,
                                                                    String poolParty) {
-        TransactionHistoryEntry entry = baseEntry("Pool Creation Transaction", "POOL_CREATION", poolId, poolCid);
+        TransactionHistoryEntry entry = baseEntry("Pool Creation Transaction", "POOL_CREATION", poolId, poolCid, null);
         entry.tokenA = tokenA;
         entry.tokenB = tokenB;
         entry.amountADesired = formatAmount(bootstrapA);
@@ -70,7 +70,7 @@ public class TransactionHistoryService {
                                                                    BigDecimal minLp,
                                                                    BigDecimal lpMinted,
                                                                    String actorParty) {
-        TransactionHistoryEntry entry = baseEntry("AddLiquidity Transaction", "ADD_LIQUIDITY", poolId, poolCid);
+        TransactionHistoryEntry entry = baseEntry("AddLiquidity Transaction", "ADD_LIQUIDITY", poolId, poolCid, null);
         entry.tokenA = tokenA;
         entry.tokenB = tokenB;
         entry.amountADesired = formatAmount(amountA);
@@ -95,7 +95,24 @@ public class TransactionHistoryService {
                                                            BigDecimal amountIn,
                                                            BigDecimal amountOut,
                                                            String actorParty) {
-        TransactionHistoryEntry entry = baseEntry("Swap Transaction", "SWAP", poolId, poolCid);
+        return recordSwap(null, poolId, poolCid, inputSymbol, outputSymbol, amountIn, amountOut, actorParty);
+    }
+
+    public synchronized TransactionHistoryEntry recordSwap(String eventId,
+                                                           String poolId,
+                                                           String poolCid,
+                                                           String inputSymbol,
+                                                           String outputSymbol,
+                                                           BigDecimal amountIn,
+                                                           BigDecimal amountOut,
+                                                           String actorParty) {
+        if (eventId != null && !eventId.isBlank()) {
+            TransactionHistoryEntry existing = findById(eventId);
+            if (existing != null) {
+                return existing;
+            }
+        }
+        TransactionHistoryEntry entry = baseEntry("Swap Transaction", "SWAP", poolId, poolCid, eventId);
         entry.tokenA = inputSymbol;
         entry.tokenB = outputSymbol;
         entry.amountADesired = formatAmount(amountIn);
@@ -130,9 +147,9 @@ public class TransactionHistoryService {
         persistHistory();
     }
 
-    private static TransactionHistoryEntry baseEntry(String title, String type, String poolId, String poolCid) {
+    private static TransactionHistoryEntry baseEntry(String title, String type, String poolId, String poolCid, String entryId) {
         TransactionHistoryEntry entry = new TransactionHistoryEntry();
-        entry.id = UUID.randomUUID().toString();
+        entry.id = (entryId != null && !entryId.isBlank()) ? entryId : UUID.randomUUID().toString();
         entry.title = title;
         entry.type = type;
         entry.createdAt = DateTimeFormatter.ISO_INSTANT.format(Instant.now());
@@ -148,6 +165,18 @@ public class TransactionHistoryService {
             return "0";
         }
         return value.stripTrailingZeros().toPlainString();
+    }
+
+    private TransactionHistoryEntry findById(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        for (TransactionHistoryEntry entry : history) {
+            if (id.equals(entry.id)) {
+                return entry;
+            }
+        }
+        return null;
     }
 
     private synchronized void loadHistory() {

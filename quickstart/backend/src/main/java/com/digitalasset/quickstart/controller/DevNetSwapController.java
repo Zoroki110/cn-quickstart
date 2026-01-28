@@ -5,6 +5,7 @@ import com.digitalasset.quickstart.dto.ApiError;
 import com.digitalasset.quickstart.dto.ApiResponse;
 import com.digitalasset.quickstart.dto.ErrorCode;
 import com.digitalasset.quickstart.dto.ErrorMapper;
+import com.digitalasset.quickstart.dto.HoldingPoolResponse;
 import com.digitalasset.quickstart.dto.SwapConsumeRequest;
 import com.digitalasset.quickstart.dto.SwapConsumeResponse;
 import com.digitalasset.quickstart.dto.SwapIntentLookupResponse;
@@ -13,6 +14,7 @@ import com.digitalasset.quickstart.security.AuthUtils;
 import com.digitalasset.quickstart.service.HoldingPoolService;
 import com.digitalasset.quickstart.service.SwapIntentAcsQueryService;
 import com.digitalasset.quickstart.service.SwapTiProcessorService;
+import com.digitalasset.quickstart.service.TransactionHistoryService;
 import com.digitalasset.quickstart.service.TransferInstructionAcsQueryService;
 import com.digitalasset.quickstart.service.TransferInstructionAcsQueryService.TransferInstructionDto;
 import com.digitalasset.quickstart.service.TransferInstructionAcsQueryService.TransferInstructionWithMemo;
@@ -24,6 +26,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletRequest;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +40,7 @@ public class DevNetSwapController {
     private final TransferInstructionAcsQueryService tiQueryService;
     private final SwapIntentAcsQueryService swapIntentQueryService;
     private final HoldingPoolService holdingPoolService;
+    private final TransactionHistoryService transactionHistoryService;
     private final AuthUtils authUtils;
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -44,11 +48,13 @@ public class DevNetSwapController {
                                 final TransferInstructionAcsQueryService tiQueryService,
                                 final SwapIntentAcsQueryService swapIntentQueryService,
                                 final HoldingPoolService holdingPoolService,
+                                final TransactionHistoryService transactionHistoryService,
                                 final AuthUtils authUtils) {
         this.swapService = swapService;
         this.tiQueryService = tiQueryService;
         this.swapIntentQueryService = swapIntentQueryService;
         this.holdingPoolService = holdingPoolService;
+        this.transactionHistoryService = transactionHistoryService;
         this.authUtils = authUtils;
     }
 
@@ -71,7 +77,12 @@ public class DevNetSwapController {
         }
         logger.info("[DevNetSwap] POST /swap/consume requestId={}", requestId);
         return swapService.consume(request)
-                .thenApply(result -> respond(requestId, result));
+                .thenApply(result -> {
+                    if (result.isOk()) {
+                        recordHistoryFromConsume(result.getValueUnsafe());
+                    }
+                    return respond(requestId, result);
+                });
     }
 
     /**
@@ -319,6 +330,69 @@ public class DevNetSwapController {
             return rid != null ? rid.asText() : null;
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    private void recordHistoryFromConsume(SwapConsumeResponse response) {
+        if (response == null || response.requestId == null || response.requestId.isBlank()) {
+            return;
+        }
+        if (response.poolCid == null || response.poolCid.isBlank()) {
+            return;
+        }
+        holdingPoolService.getByContractId(response.poolCid)
+                .thenAccept(poolResult -> {
+                    if (poolResult.isErr()) {
+                        return;
+                    }
+                    HoldingPoolResponse pool = poolResult.getValueUnsafe();
+                    boolean aToB = isAtoB(response.direction);
+                    String inputSymbol = displaySymbol(aToB ? pool.instrumentA.id : pool.instrumentB.id);
+                    String outputSymbol = displaySymbol(aToB ? pool.instrumentB.id : pool.instrumentA.id);
+                    BigDecimal amountIn = parseDecimal(response.amountIn);
+                    BigDecimal amountOut = parseDecimal(response.amountOut);
+                    String actor = response.receiverParty != null && !response.receiverParty.isBlank()
+                            ? response.receiverParty
+                            : authUtils.getAppProviderPartyId();
+                    transactionHistoryService.recordSwap(
+                            response.requestId,
+                            pool.contractId,
+                            pool.contractId,
+                            inputSymbol,
+                            outputSymbol,
+                            amountIn,
+                            amountOut,
+                            actor
+                    );
+                });
+    }
+
+    private boolean isAtoB(String direction) {
+        if (direction == null) {
+            return true;
+        }
+        String normalized = direction.trim().toUpperCase().replaceAll("[^A-Z0-9]", "");
+        return "A2B".equals(normalized) || "ATOB".equals(normalized);
+    }
+
+    private String displaySymbol(String instrumentId) {
+        if (instrumentId == null) {
+            return "";
+        }
+        if ("AMULET".equalsIgnoreCase(instrumentId.trim())) {
+            return "CC";
+        }
+        return instrumentId.trim();
+    }
+
+    private BigDecimal parseDecimal(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+        try {
+            return new BigDecimal(raw);
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
         }
     }
 }

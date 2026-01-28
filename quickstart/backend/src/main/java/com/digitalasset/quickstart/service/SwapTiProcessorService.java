@@ -316,6 +316,7 @@ public class SwapTiProcessorService {
                                             response.payoutDisclosedContractsCount = payoutPlan.disclosedContracts().size();
                                             response.payoutStatus = payoutOutcome.completed ? "COMPLETED" : "CREATED";
                                             response.nextAction = payoutOutcome.completed ? "NONE" : "ACCEPT_PAYOUT_IN_LOOP";
+                                            response.receiverParty = memo.receiverParty;
 
                                             try {
                                                 String inputSymbol = direction == SwapDirection.A2B
@@ -325,6 +326,7 @@ public class SwapTiProcessorService {
                                                         ? displaySymbol(pool.instrumentB.id)
                                                         : displaySymbol(pool.instrumentA.id);
                                                 transactionHistoryService.recordSwap(
+                                                        request.requestId,
                                                         pool.contractId,
                                                         pool.contractId,
                                                         inputSymbol,

@@ -21,6 +21,7 @@ public class SwapConsumeResponse {
     public Integer payoutDisclosedContractsCount;
     public String payoutStatus;
     public String nextAction;
+    public String receiverParty;
 
     public SwapConsumeResponse() {}
 }

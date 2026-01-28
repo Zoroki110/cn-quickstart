@@ -170,7 +170,7 @@ const LiquidityInterface: React.FC = () => {
         return;
       }
       const key = token.symbol.toUpperCase();
-      const amount = Number.isFinite(token.balance) ? token.balance : 0;
+      const amount = Number.isFinite(token.balance ?? NaN) ? (token.balance ?? 0) : 0;
       map[key] = {
         amount: amount.toString(),
         decimals: token.decimals ?? 10,

@@ -1028,7 +1028,7 @@ export class BackendApiService {
 
   async getTransactionHistory(): Promise<TransactionHistoryEntry[]> {
     try {
-      const res = await this.client.get('/api/transactions/recent');
+      const res = await this.client.get('/api/transactions/recent', { params: { limit: 1000 } });
       const rows = Array.isArray(res.data) ? res.data : [];
       if (!rows.length) {
         return FALLBACK_TRANSACTIONS;

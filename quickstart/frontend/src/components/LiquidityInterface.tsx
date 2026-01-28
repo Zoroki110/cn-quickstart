@@ -163,6 +163,22 @@ const LiquidityInterface: React.FC = () => {
     [tokens, selectedTokenA]
   );
 
+  const balancesBySymbol = useMemo(() => {
+    const map: Record<string, { amount: string; decimals: number }> = {};
+    tokens.forEach((token) => {
+      if (!token.symbol) {
+        return;
+      }
+      const key = token.symbol.toUpperCase();
+      const amount = Number.isFinite(token.balance) ? token.balance : 0;
+      map[key] = {
+        amount: amount.toString(),
+        decimals: token.decimals ?? 10,
+      };
+    });
+    return map;
+  }, [tokens]);
+
   // Charger les tokens depuis les pools actifs + balances utilisateur
   useEffect(() => {
     const loadTokens = async () => {
@@ -719,6 +735,7 @@ const LiquidityInterface: React.FC = () => {
         tokens={tokens}
         selectedToken={selectedTokenA}
         type="from"
+        balances={balancesBySymbol}
         onSelect={(token) => {
           setSelectedTokenA(token);
           if (token.symbol === selectedTokenB?.symbol) {
@@ -734,6 +751,7 @@ const LiquidityInterface: React.FC = () => {
         tokens={tokenBOptions}
         selectedToken={selectedTokenB}
         type="to"
+        balances={balancesBySymbol}
         onSelect={(token) => {
           setSelectedTokenB(token);
           setShowTokenBSelector(false);

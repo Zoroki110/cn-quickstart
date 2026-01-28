@@ -69,15 +69,20 @@ const PoolsInterface: React.FC = () => {
     return `$${num.toFixed(2)}`;
   };
 
-  const formatPlainNumber = (raw: number, maxDecimals = 10) => {
-    if (!Number.isFinite(raw)) {
+  const formatTokenCompact = (amount: number) => {
+    if (!Number.isFinite(amount)) {
       return '0';
     }
-    const fixed = raw.toFixed(maxDecimals);
-    const trimmed = fixed.replace(/0+$/, '').replace(/\.$/, '');
-    const [intPart = '0', fracPart] = trimmed.split('.');
-    const spaced = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-    return fracPart ? `${spaced}.${fracPart}` : spaced;
+    if (amount >= 1_000_000) {
+      return `${(amount / 1_000_000).toFixed(2)}M`;
+    }
+    if (amount >= 1_000) {
+      return `${(amount / 1_000).toFixed(2)}K`;
+    }
+    if (amount >= 1) {
+      return amount.toFixed(2);
+    }
+    return amount.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
   };
 
   const computeVolumeSnapshot = useCallback((entries: TransactionHistoryEntry[]) => {
@@ -182,7 +187,7 @@ const PoolsInterface: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="body-small mb-1">24h Volume</p>
-                <p className="text-2xl font-bold text-gradient-cleaportx">{formatPlainNumber(effectiveTotalVolume24h)}</p>
+                <p className="text-2xl font-bold text-gradient-cleaportx">{formatTokenCompact(effectiveTotalVolume24h)}</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-success-100 dark:bg-success-900/20 flex items-center justify-center">
                 <svg className="w-6 h-6 text-success-600 dark:text-success-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -253,10 +258,10 @@ const PoolsInterface: React.FC = () => {
                       <div>
                         <p className="body-small mb-1">Liquidity</p>
                         <p className="font-semibold text-gray-900 dark:text-gray-100">
-                          {formatPlainNumber(pool.reserveA)} {pool.tokenA.symbol}
+                          {formatTokenCompact(pool.reserveA)} {pool.tokenA.symbol}
                         </p>
                         <p className="body-small text-gray-500">
-                          {formatPlainNumber(pool.reserveB)} {pool.tokenB.symbol}
+                          {formatTokenCompact(pool.reserveB)} {pool.tokenB.symbol}
                         </p>
                       </div>
 
@@ -272,7 +277,7 @@ const PoolsInterface: React.FC = () => {
                       <div>
                         <p className="body-small mb-1">24h Volume</p>
                         <p className="font-semibold text-gray-900 dark:text-gray-100">
-                          {formatPlainNumber(volumeByPool[pool.contractId] ?? pool.volume24h)}
+                          {formatTokenCompact(volumeByPool[pool.contractId] ?? pool.volume24h)}
                         </p>
                       </div>
 
@@ -301,10 +306,10 @@ const PoolsInterface: React.FC = () => {
                     <div>
                       <p className="body-small mb-1">Liquidity</p>
                       <p className="font-semibold text-sm text-gray-900 dark:text-gray-100">
-                        {formatPlainNumber(pool.reserveA)} {pool.tokenA.symbol}
+                        {formatTokenCompact(pool.reserveA)} {pool.tokenA.symbol}
                       </p>
                       <p className="body-small text-gray-500">
-                        {formatPlainNumber(pool.reserveB)} {pool.tokenB.symbol}
+                        {formatTokenCompact(pool.reserveB)} {pool.tokenB.symbol}
                       </p>
                     </div>
                     <div>
@@ -316,7 +321,7 @@ const PoolsInterface: React.FC = () => {
                     <div>
                       <p className="body-small mb-1">24h Volume</p>
                       <p className="font-semibold text-sm text-gray-900 dark:text-gray-100">
-                        {formatPlainNumber(volumeByPool[pool.contractId] ?? pool.volume24h)}
+                        {formatTokenCompact(volumeByPool[pool.contractId] ?? pool.volume24h)}
                       </p>
                     </div>
                     <div>

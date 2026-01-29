@@ -534,7 +534,7 @@ const LiquidityInterface: React.FC = () => {
           readAs: extractPreparedReadAs(preparedA, partyId),
           deduplicationKey: `${requestId}-a`,
           memo,
-          mode: 'WAIT',
+          mode: 'LEGACY',
           disclosedContracts: extractPreparedDisclosedContracts(preparedA),
           packageIdSelectionPreference: extractPreparedPackagePreference(preparedA),
           synchronizerId: extractPreparedSynchronizerId(preparedA),
@@ -546,6 +546,8 @@ const LiquidityInterface: React.FC = () => {
           return;
         }
 
+        setLiquidityStatus('Inbound transfer A submitted. Opening transfer B');
+        await new Promise((resolve) => setTimeout(resolve, 400));
         setLiquidityStatus('Submitting inbound transfer B');
         const preparedB = await prepareLoopTransfer(getLoopProvider(), {
           recipient: OPERATOR_PARTY,
@@ -567,7 +569,7 @@ const LiquidityInterface: React.FC = () => {
           readAs: extractPreparedReadAs(preparedB, partyId),
           deduplicationKey: `${requestId}-b`,
           memo,
-          mode: 'WAIT',
+          mode: 'LEGACY',
           disclosedContracts: extractPreparedDisclosedContracts(preparedB),
           packageIdSelectionPreference: extractPreparedPackagePreference(preparedB),
           synchronizerId: extractPreparedSynchronizerId(preparedB),

@@ -8,6 +8,7 @@ import qualified DA.TextMap as TextMap
 import DA.Math (sqrt)
 import qualified Splice.Api.Token.MetadataV1 as M
 import qualified Splice.Api.Token.TransferInstructionV1 as TI
+import qualified LPToken.LPToken as LP
 import AMM.HoldingAdapter
 import AMM.SwapIntent
 import AMM.PendingPayout
@@ -448,6 +449,104 @@ template HoldingPool
           reserveAmountB = newReserveB
 
         return (newPoolCid, payoutOutcome)
+
+    -- | Add liquidity from two inbound TransferInstructions (V1).
+    -- Accepts both TIs atomically, updates reserves, mints LP tokens for provider.
+    choice AddLiquidityFromTransferInstructionsV1 : (ContractId HoldingPool, Decimal, Decimal, Decimal)
+      with
+        provider : Party
+        tiCidA : TransferInstructionCid
+        tiCidB : TransferInstructionCid
+        amountA : Decimal
+        amountB : Decimal
+        deadline : Time
+        poolIdText : Text
+        acceptExtraArgsA : Optional M.ExtraArgs
+        acceptExtraArgsB : Optional M.ExtraArgs
+      controller operator
+      do
+        assertMsg "Pool must be Active" (status == Active)
+        now <- getTime
+        assertMsg "Liquidity deadline has expired" (now < deadline)
+        assertMsg "Amount A must be positive" (amountA > 0.0)
+        assertMsg "Amount B must be positive" (amountB > 0.0)
+        assertMsg "Pool reserves must be positive when LP supply > 0"
+          (lpSupply == 0.0 || (reserveAmountA > 0.0 && reserveAmountB > 0.0))
+
+        -- Validate TI senders/receivers/instruments/amounts before accepting
+        tiInfoAOpt <- fetchTransferInstructionInfoOpt tiCidA
+        tiInfoBOpt <- fetchTransferInstructionInfoOpt tiCidB
+        case (tiInfoAOpt, tiInfoBOpt) of
+          (Some tiA, Some tiB) -> do
+            assertMsg "TI A sender mismatch" (tiA.sender == provider)
+            assertMsg "TI B sender mismatch" (tiB.sender == provider)
+            assertMsg "TI A receiver mismatch" (tiA.receiver == operator)
+            assertMsg "TI B receiver mismatch" (tiB.receiver == operator)
+            assertMsg "TI A instrument mismatch" (instrumentIdEq tiA.instrumentId instrumentA)
+            assertMsg "TI B instrument mismatch" (instrumentIdEq tiB.instrumentId instrumentB)
+            assertMsg "TI A amount mismatch" (tiA.amount == amountA)
+            assertMsg "TI B amount mismatch" (tiB.amount == amountB)
+          _ -> error "Unable to fetch transfer instruction info"
+
+        let acceptArgsA = case acceptExtraArgsA of
+              Some args -> args
+              None -> M.ExtraArgs with
+                context = M.emptyChoiceContext
+                meta = M.emptyMetadata
+        let acceptArgsB = case acceptExtraArgsB of
+              Some args -> args
+              None -> M.ExtraArgs with
+                context = M.emptyChoiceContext
+                meta = M.emptyMetadata
+
+        tiResultA <- exercise tiCidA TI.TransferInstruction_Accept with extraArgs = acceptArgsA
+        tiResultB <- exercise tiCidB TI.TransferInstruction_Accept with extraArgs = acceptArgsB
+
+        let holdingCidA = case tiResultA.output of
+              TI.TransferInstructionResult_Completed {receiverHoldingCids} -> case receiverHoldingCids of
+                h :: _ -> h
+                _ -> error "Accept returned no receiver holding (A)"
+              _ -> error "Accept did not complete transfer (A)"
+        let holdingCidB = case tiResultB.output of
+              TI.TransferInstructionResult_Completed {receiverHoldingCids} -> case receiverHoldingCids of
+                h :: _ -> h
+                _ -> error "Accept returned no receiver holding (B)"
+              _ -> error "Accept did not complete transfer (B)"
+
+        holdingInstA <- getHoldingInstrument holdingCidA
+        holdingAmtA <- getHoldingAmount holdingCidA
+        assertMsg "Holding A instrument mismatch" (instrumentIdEq holdingInstA instrumentA)
+        assertMsg "Holding A amount mismatch" (holdingAmtA == amountA)
+
+        holdingInstB <- getHoldingInstrument holdingCidB
+        holdingAmtB <- getHoldingAmount holdingCidB
+        assertMsg "Holding B instrument mismatch" (instrumentIdEq holdingInstB instrumentB)
+        assertMsg "Holding B amount mismatch" (holdingAmtB == amountB)
+
+        let lpMinted = if lpSupply == 0.0
+              then sqrt (amountA * amountB)
+              else
+                let shareA = amountA * lpSupply / reserveAmountA
+                    shareB = amountB * lpSupply / reserveAmountB
+                in min shareA shareB
+        assertMsg "LP minted must be positive" (lpMinted > 0.0)
+
+        let newReserveA = reserveAmountA + amountA
+        let newReserveB = reserveAmountB + amountB
+        let newLpSupply = lpSupply + lpMinted
+
+        _ <- create LP.LPToken with
+          issuer = operator
+          owner = provider
+          poolId = poolIdText
+          amount = lpMinted
+
+        newPoolCid <- create this with
+          reserveAmountA = newReserveA
+          reserveAmountB = newReserveB
+          lpSupply = newLpSupply
+
+        return (newPoolCid, lpMinted, newReserveA, newReserveB)
 
     -- | UnlockPayout - called when payout is claimed.
     -- Deducts from reserves and unlocks.

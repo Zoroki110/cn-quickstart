@@ -4,9 +4,20 @@ import { useAppStore } from '../stores';
 import { backendApi } from '../services/backendApi';
 import { TokenInfo, PoolInfo, LpTokenInfo } from '../types/canton';
 import toast from 'react-hot-toast';
-import { useWalletAuth } from '../wallet';
+import { useWalletAuth, walletManager } from '../wallet';
 import { useLoopBalances, useUtxoBalances } from '../hooks';
 import TokenSelector from './TokenSelector';
+import { submitTx } from '../loop/submitTx';
+import { getLoopProvider } from '../loop/loopProvider';
+
+const AMULET_ADMIN = 'DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a';
+const AMULET_ID = 'Amulet';
+const CBTC_ADMIN = 'cbtc-network::12202a83c6f4082217c175e29bc53da5f2703ba2675778ab99217a5a881a949203ff';
+const CBTC_ID = 'CBTC';
+const OPERATOR_PARTY =
+  process.env.REACT_APP_OPERATOR_PARTY ||
+  process.env.REACT_APP_OPERATOR_PARTY_ID ||
+  'ClearportX-DEX-1::122081f2b8e29cbe57d1037a18e6f70e57530773b3a4d1bea6bab981b7a76e943b37';
 
 const LiquidityInterface: React.FC = () => {
   const location = useLocation();
@@ -33,6 +44,8 @@ const LiquidityInterface: React.FC = () => {
   const [amountB, setAmountB] = useState('');
   const [loading, setLoading] = useState(false);
   const [calculating, setCalculating] = useState(false);
+  const [liquidityResult, setLiquidityResult] = useState<any>(null);
+  const [liquidityStatus, setLiquidityStatus] = useState<string | null>(null);
   const [rawPools, setRawPools] = useState<PoolInfo[]>([]);
   const LP_BASELINES_STORAGE_KEY = 'clearportx:lp-baselines:v1';
   const [lpBaselines, setLpBaselines] = useState<Record<string, number>>(() => {
@@ -415,6 +428,8 @@ const LiquidityInterface: React.FC = () => {
 
     try {
       setLoading(true);
+      setLiquidityResult(null);
+      setLiquidityStatus(null);
 
       const pool = pools.find(p =>
         (p.tokenA.symbol === selectedTokenA.symbol && p.tokenB.symbol === selectedTokenB.symbol) ||
@@ -438,39 +453,152 @@ const LiquidityInterface: React.FC = () => {
         return;
       }
 
-      const response = await backendApi.addLiquidityByCid({
-        poolCid,
-        poolId: targetPoolId,
-        amountA: amountANum.toFixed(10),
-        amountB: amountBNum.toFixed(10),
-        minLPTokens: '0.0000000001',
-      });
+      if (walletType !== 'loop') {
+        const response = await backendApi.addLiquidityByCid({
+          poolCid,
+          poolId: targetPoolId,
+          amountA: amountANum.toFixed(10),
+          amountB: amountBNum.toFixed(10),
+          minLPTokens: '0.0000000001',
+        });
 
-      const toastAmount = (() => {
-        const raw = typeof response?.lpAmount === 'string' ? response.lpAmount.trim() : '';
-        if (raw) {
-          const numeric = Number(raw);
-          if (Number.isFinite(numeric) && numeric > 0) {
-            if (numeric >= 1) {
-              return numeric.toLocaleString('en-US', { maximumFractionDigits: 4 });
+        const toastAmount = (() => {
+          const raw = typeof response?.lpAmount === 'string' ? response.lpAmount.trim() : '';
+          if (raw) {
+            const numeric = Number(raw);
+            if (Number.isFinite(numeric) && numeric > 0) {
+              if (numeric >= 1) {
+                return numeric.toLocaleString('en-US', { maximumFractionDigits: 4 });
+              }
+              return numeric.toPrecision(4);
             }
-            return numeric.toPrecision(4);
+            return raw;
           }
-          return raw;
+          return estimatedLPTokens.toFixed(4);
+        })();
+        toast.success(`Liquidity added! LP tokens: ${toastAmount}`);
+      } else {
+        const connector = walletManager.getOrCreateLoopConnector();
+        const status = await connector.ensureConnected(`liquidity-${Date.now()}`);
+        if (!status.connected || !getLoopProvider()) {
+          const message = status.error || 'Loop not connected';
+          setLiquidityResult({ ok: false, error: { code: 'CONNECT', message } });
+          toast.error(message);
+          return;
         }
-        return estimatedLPTokens.toFixed(4);
-      })();
-      toast.success(`Liquidity added! LP tokens: ${toastAmount}`);
+
+        const instrumentA = resolveInstrumentForSymbol(pool.tokenA.symbol);
+        const instrumentB = resolveInstrumentForSymbol(pool.tokenB.symbol);
+        if (!instrumentA || !instrumentB) {
+          toast.error('Unsupported token pair for liquidity');
+          return;
+        }
+
+        const poolSymbolA = pool.tokenA.symbol;
+        const isSelectedAForPoolA = selectedTokenA.symbol === poolSymbolA;
+        const amountForA = isSelectedAForPoolA ? amountANum : amountBNum;
+        const amountForB = isSelectedAForPoolA ? amountBNum : amountANum;
+
+        const requestId = `liq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const deadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+        const memoPayload = {
+          v: 1,
+          requestId,
+          poolCid,
+          receiverParty: partyId,
+          deadline,
+        };
+        const memo = JSON.stringify(memoPayload);
+
+        setLiquidityStatus('Submitting inbound transfer A');
+        const preparedA = await prepareLoopTransfer(getLoopProvider(), {
+          recipient: OPERATOR_PARTY,
+          amount: amountForA.toFixed(10),
+          instrument: instrumentA,
+          memo,
+          requestedAt: new Date().toISOString(),
+          executeBefore: deadline,
+        });
+        const commandsA = extractPreparedCommands(preparedA);
+        if (commandsA.length === 0) {
+          setLiquidityResult({ ok: false, error: { code: 'PREPARE_A', message: 'Transfer preparation returned no commands', details: preparedA } });
+          toast.error('Transfer A preparation failed');
+          return;
+        }
+        const transferA = await submitTx({
+          commands: commandsA,
+          actAs: extractPreparedActAs(preparedA, partyId),
+          readAs: extractPreparedReadAs(preparedA, partyId),
+          deduplicationKey: `${requestId}-a`,
+          memo,
+          mode: 'WAIT',
+          disclosedContracts: extractPreparedDisclosedContracts(preparedA),
+          packageIdSelectionPreference: extractPreparedPackagePreference(preparedA),
+          synchronizerId: extractPreparedSynchronizerId(preparedA),
+        });
+
+        if (!transferA.ok || transferA.value?.txStatus !== 'SUCCEEDED') {
+          setLiquidityResult({ transferA, transferB: null, consume: null });
+          toast.error('Inbound transfer A failed');
+          return;
+        }
+
+        setLiquidityStatus('Submitting inbound transfer B');
+        const preparedB = await prepareLoopTransfer(getLoopProvider(), {
+          recipient: OPERATOR_PARTY,
+          amount: amountForB.toFixed(10),
+          instrument: instrumentB,
+          memo,
+          requestedAt: new Date().toISOString(),
+          executeBefore: deadline,
+        });
+        const commandsB = extractPreparedCommands(preparedB);
+        if (commandsB.length === 0) {
+          setLiquidityResult({ ok: false, error: { code: 'PREPARE_B', message: 'Transfer preparation returned no commands', details: preparedB } });
+          toast.error('Transfer B preparation failed');
+          return;
+        }
+        const transferB = await submitTx({
+          commands: commandsB,
+          actAs: extractPreparedActAs(preparedB, partyId),
+          readAs: extractPreparedReadAs(preparedB, partyId),
+          deduplicationKey: `${requestId}-b`,
+          memo,
+          mode: 'WAIT',
+          disclosedContracts: extractPreparedDisclosedContracts(preparedB),
+          packageIdSelectionPreference: extractPreparedPackagePreference(preparedB),
+          synchronizerId: extractPreparedSynchronizerId(preparedB),
+        });
+
+        let consumeResult: any = null;
+        if (transferB.ok && transferB.value?.txStatus === 'SUCCEEDED') {
+          setLiquidityStatus('Consuming liquidity (backend)');
+          consumeResult = await backendApi.consumeDevnetLiquidity({ requestId, poolCid });
+          if (consumeResult?.ok) {
+            setLiquidityStatus('Liquidity added. LP minted.');
+            toast.success('Liquidity added successfully');
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('clearportx:transactions:refresh', {
+                detail: { source: 'liquidity:add', requestId },
+              }));
+            }
+          } else {
+            toast.error(consumeResult?.error?.message || 'Liquidity consume failed');
+          }
+        } else {
+          toast.error('Inbound transfer B failed');
+        }
+
+        setLiquidityResult({
+          transferA,
+          transferB,
+          consume: consumeResult,
+        });
+      }
 
       const updatedPools = await backendApi.getPools();
       setRawPools(updatedPools);
       await refreshWalletState();
-
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('clearportx:transactions:refresh', {
-          detail: { source: 'liquidity:add', historyEntryId: response?.historyEntryId }
-        }));
-      }
 
       setAmountA('');
       setAmountB('');
@@ -741,6 +869,46 @@ const LiquidityInterface: React.FC = () => {
                 'Add Liquidity'
               )}
             </button>
+
+            {liquidityStatus && (
+              <div className="mt-4 text-sm text-gray-600 dark:text-gray-300">
+                {liquidityStatus}
+              </div>
+            )}
+
+            {liquidityResult?.consume?.ok && (
+              <div className="mt-4 glass-subtle rounded-xl p-4 text-sm">
+                <div className="font-semibold text-gray-900 dark:text-gray-100">
+                  Liquidity added successfully.
+                </div>
+                <div className="mt-2 space-y-1">
+                  <div className="flex justify-between body-small">
+                    <span className="text-gray-600 dark:text-gray-400">LP Minted:</span>
+                    <span className="font-semibold text-gray-900 dark:text-gray-100">
+                      {liquidityResult.consume.result?.lpMinted}
+                    </span>
+                  </div>
+                  <div className="flex justify-between body-small">
+                    <span className="text-gray-600 dark:text-gray-400">New Reserve A:</span>
+                    <span className="font-semibold text-gray-900 dark:text-gray-100">
+                      {liquidityResult.consume.result?.newReserveA}
+                    </span>
+                  </div>
+                  <div className="flex justify-between body-small">
+                    <span className="text-gray-600 dark:text-gray-400">New Reserve B:</span>
+                    <span className="font-semibold text-gray-900 dark:text-gray-100">
+                      {liquidityResult.consume.result?.newReserveB}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {liquidityResult?.consume && !liquidityResult.consume.ok && (
+              <div className="mt-4 text-sm text-error-600 dark:text-error-400">
+                {liquidityResult.consume.error?.message || 'Liquidity consume failed.'}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -833,5 +1001,116 @@ const LiquidityInterface: React.FC = () => {
     </div>
   );
 };
+
+type PreparedTransfer = Record<string, any>;
+
+type InstrumentRef = {
+  instrumentAdmin: string;
+  instrumentId: string;
+};
+
+function resolveInstrumentForSymbol(symbol?: string): InstrumentRef | null {
+  if (!symbol) return null;
+  const upper = symbol.toUpperCase();
+  if (upper === 'CC' || upper === 'AMULET') {
+    return { instrumentAdmin: AMULET_ADMIN, instrumentId: AMULET_ID };
+  }
+  if (upper === 'CBTC') {
+    return { instrumentAdmin: CBTC_ADMIN, instrumentId: CBTC_ID };
+  }
+  return null;
+}
+
+async function prepareLoopTransfer(
+  provider: any,
+  params: {
+    recipient: string;
+    amount: string;
+    instrument: InstrumentRef;
+    memo?: string;
+    requestedAt?: string;
+    executeBefore?: string;
+  }
+): Promise<PreparedTransfer> {
+  if (!provider) {
+    throw new Error('Loop provider is not connected');
+  }
+  const authToken = provider.auth_token ?? provider.authToken;
+  const connection = provider.connection ?? provider?.sdk?.connection;
+  const prepareTransfer = connection?.prepareTransfer;
+  if (!authToken || typeof prepareTransfer !== 'function') {
+    throw new Error('Loop provider does not expose transfer preparation');
+  }
+  const payload = {
+    recipient: params.recipient,
+    amount: params.amount,
+    instrument: {
+      instrument_admin: params.instrument.instrumentAdmin,
+      instrument_id: params.instrument.instrumentId,
+    },
+    requested_at: params.requestedAt ?? new Date().toISOString(),
+    execute_before: params.executeBefore,
+    memo: params.memo,
+  };
+  return prepareTransfer.call(connection, authToken, payload);
+}
+
+function extractPreparedCommands(prepared: PreparedTransfer): any[] {
+  const commands =
+    prepared?.commands ??
+    prepared?.payload?.commands ??
+    prepared?.commandPayload?.commands ??
+    prepared?.command_payload?.commands ??
+    [];
+  return Array.isArray(commands) ? commands : [];
+}
+
+function extractPreparedDisclosedContracts(prepared: PreparedTransfer): any[] | undefined {
+  const disclosed =
+    prepared?.disclosedContracts ??
+    prepared?.disclosed_contracts ??
+    prepared?.extraArgs?.disclosedContracts ??
+    prepared?.extra_args?.disclosed_contracts ??
+    prepared?.payload?.disclosedContracts ??
+    prepared?.payload?.disclosed_contracts;
+  return Array.isArray(disclosed) ? disclosed : undefined;
+}
+
+function extractPreparedPackagePreference(prepared: PreparedTransfer): string[] | undefined {
+  const pref =
+    prepared?.packageIdSelectionPreference ??
+    prepared?.package_id_selection_preference ??
+    prepared?.packageIdSelection ??
+    prepared?.package_id_selection ??
+    prepared?.payload?.packageIdSelectionPreference ??
+    prepared?.payload?.package_id_selection_preference;
+  return Array.isArray(pref) ? pref : undefined;
+}
+
+function extractPreparedSynchronizerId(prepared: PreparedTransfer): string | undefined {
+  return prepared?.synchronizerId ?? prepared?.synchronizer_id ?? undefined;
+}
+
+function extractPreparedActAs(prepared: PreparedTransfer, fallback: string): string | string[] {
+  const actAs = prepared?.actAs ?? prepared?.act_as ?? prepared?.actAsParties ?? prepared?.act_as_parties;
+  if (Array.isArray(actAs) && actAs.length > 0) {
+    return actAs;
+  }
+  if (typeof actAs === 'string' && actAs.length > 0) {
+    return actAs;
+  }
+  return fallback;
+}
+
+function extractPreparedReadAs(prepared: PreparedTransfer, fallback: string): string | string[] | undefined {
+  const readAs = prepared?.readAs ?? prepared?.read_as ?? prepared?.readAsParties ?? prepared?.read_as_parties;
+  if (Array.isArray(readAs) && readAs.length > 0) {
+    return readAs;
+  }
+  if (typeof readAs === 'string' && readAs.length > 0) {
+    return readAs;
+  }
+  return fallback ? [fallback] : undefined;
+}
 
 export default LiquidityInterface;

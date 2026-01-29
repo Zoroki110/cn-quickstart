@@ -1337,6 +1337,34 @@ export class BackendApiService {
     }
   }
 
+  async consumeDevnetLiquidity(payload: {
+    requestId: string;
+    poolCid: string;
+    maxAgeSeconds?: number;
+  }): Promise<any> {
+    try {
+      const res = await this.client.post('/api/devnet/liquidity/consume', payload);
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
+
+  async inspectDevnetLiquidity(requestId: string): Promise<any> {
+    try {
+      const res = await this.client.get('/api/devnet/liquidity/inspect', {
+        params: { requestId },
+      });
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
+
   async getDevnetSwapTransferInstruction(requestId: string): Promise<any> {
     try {
       const res = await this.client.get('/api/devnet/swap/transfer-instruction', {

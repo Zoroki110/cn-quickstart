@@ -121,7 +121,7 @@ management:
       packageId: ${DAR_PACKAGE_ID:unknown}
 
 holdingpool:
-  package-id: f736b1557c03c6e8c9f622dfd14d487e9f66f9395740f854c7ca406edd2d534a
+  package-id: 361c4a78340036cfdba4ec8ddd6dac7f9683247443a58c797ce8ef72a4e2114d
 
 # AppProvider party binding (DevNet)
 application:

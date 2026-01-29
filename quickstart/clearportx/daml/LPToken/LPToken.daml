@@ -36,7 +36,7 @@ template LPToken
     amount : Numeric 10 -- Number of LP tokens
   where
     signatory issuer  -- ONLY issuer is signatory
-    observer owner     -- owner can see their LP tokens
+    -- NOTE: owner is not an observer to avoid requiring package vetting on user participants.
 
     -- NO KEY: DAML 3.x does not support contract keys
     -- LPTokens are tracked by ContractId directly

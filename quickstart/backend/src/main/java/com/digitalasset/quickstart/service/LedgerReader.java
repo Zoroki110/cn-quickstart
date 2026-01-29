@@ -10,18 +10,23 @@ import com.digitalasset.quickstart.dto.LpTokenDTO;
 import com.digitalasset.quickstart.dto.PoolDTO;
 import com.digitalasset.quickstart.dto.TokenDTO;
 import com.digitalasset.quickstart.ledger.LedgerApi;
+import com.digitalasset.quickstart.pqs.Contract;
 import com.digitalasset.quickstart.pqs.Pqs;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
  * LedgerReader - Authoritative contract reads via Ledger API
@@ -41,12 +46,25 @@ public class LedgerReader {
     private final VolumeMetricsService volumeMetricsService;
     @Nullable
     private final Pqs pqs;
+    private final PoolDirectoryService poolDirectoryService;
+    private final String appProviderPartyId;
+    private final String dexPartyId;
 
     @Autowired
-    public LedgerReader(LedgerApi ledger, VolumeMetricsService volumeMetricsService, @Autowired(required = false) @Nullable Pqs pqs) {
+    public LedgerReader(
+            LedgerApi ledger,
+            VolumeMetricsService volumeMetricsService,
+            @Autowired(required = false) @Nullable Pqs pqs,
+            PoolDirectoryService poolDirectoryService,
+            @Value("${application.tenants.AppProvider.partyId:}") String appProviderPartyId,
+            @Value("${application.clearportx.dexPartyId:}") String dexPartyId
+    ) {
         this.ledger = ledger;
         this.volumeMetricsService = volumeMetricsService;
         this.pqs = pqs;
+        this.poolDirectoryService = poolDirectoryService;
+        this.appProviderPartyId = appProviderPartyId;
+        this.dexPartyId = dexPartyId;
         if (pqs == null) {
             logger.info("PQS not available - using Ledger API only");
         }
@@ -126,8 +144,11 @@ public class LedgerReader {
      */
     @WithSpan
     public CompletableFuture<java.util.List<LpTokenDTO>> lpTokensForParty(String party) {
-        logger.info("Fetching LP tokens for party: {}", party);
-        return ledger.getActiveContractsForParty(LPToken.class, party)
+        String viewerParty = (appProviderPartyId != null && !appProviderPartyId.isBlank())
+                ? appProviderPartyId
+                : party;
+        logger.info("Fetching LP tokens for party: {} (viewer={})", party, viewerParty);
+        return ledger.getActiveContractsForParty(LPToken.class, viewerParty)
                 .thenApply(contracts -> contracts.stream()
                         .filter(c -> c.payload.getOwner.getParty.equals(party))
                         .map(c -> new LpTokenDTO(
@@ -154,93 +175,128 @@ public class LedgerReader {
      */
     @WithSpan
     public CompletableFuture<List<PoolDTO>> pools() {
-        logger.info("Fetching all active pools (Ledger API primary)");
+        logger.info("Fetching all active pools (party-aware Ledger API)");
         final java.util.Set<String> showcasePoolIds = java.util.Set.of("cc-cbtc-showcase");
-        return ledger.getActiveContracts(Pool.class)
-            .thenApply(contracts -> {
-                LinkedHashMap<String, PoolDTO> bestPools = new LinkedHashMap<>();
-                for (var c : contracts) {
-                    if (!showcasePoolIds.contains(c.payload.getPoolId)) {
-                        continue;
-                    }
-                    double volume24h = volumeMetricsService.getVolume24h(
-                        c.payload.getSymbolA,
-                        c.payload.getSymbolB
-                    );
-                    PoolDTO dto = new PoolDTO(
-                        c.payload.getPoolId,
-                        new PoolDTO.TokenInfoDTO(c.payload.getSymbolA, c.payload.getSymbolA, 10),
-                        new PoolDTO.TokenInfoDTO(c.payload.getSymbolB, c.payload.getSymbolB, 10),
-                        c.payload.getReserveA.toPlainString(),
-                        c.payload.getReserveB.toPlainString(),
-                        c.payload.getTotalLPSupply.toPlainString(),
-                        convertFeeBpsToRate(c.payload.getFeeBps),
-                        String.format("%.2f", volume24h)
-                    );
-                    bestPools.merge(
-                        dto.poolId,
-                        dto,
-                        (existing, incoming) -> {
-                            BigDecimal existingTvl = new BigDecimal(existing.reserveA)
-                                .multiply(new BigDecimal(existing.reserveB));
-                            BigDecimal incomingTvl = new BigDecimal(incoming.reserveA)
-                                .multiply(new BigDecimal(incoming.reserveB));
-                            return incomingTvl.compareTo(existingTvl) > 0 ? incoming : existing;
+
+        LinkedHashSet<String> partyCandidates = new LinkedHashSet<>();
+        if (appProviderPartyId != null && !appProviderPartyId.isBlank()) {
+            partyCandidates.add(appProviderPartyId);
+        }
+        if (dexPartyId != null && !dexPartyId.isBlank()) {
+            partyCandidates.add(dexPartyId);
+        }
+        Map<String, Map<String, String>> directorySnapshot = poolDirectoryService.snapshot();
+        directorySnapshot.values().stream()
+                .map(entry -> entry.get("party"))
+                .filter(party -> party != null && !party.isBlank())
+                .forEach(partyCandidates::add);
+
+        if (partyCandidates.isEmpty()) {
+            logger.warn("No parties available for pool lookup; falling back to default app provider scope.");
+            partyCandidates.add(appProviderPartyId);
+        }
+        logger.info("Pool lookup partyCandidates: {}", partyCandidates);
+
+        Map<String, CompletableFuture<List<LedgerApi.ActiveContract<Pool>>>> partyFetches = partyCandidates.stream()
+                .filter(party -> party != null && !party.isBlank())
+                .collect(Collectors.toMap(
+                        party -> party,
+                        party -> ledger.getActiveContractsForParty(Pool.class, party)
+                                .exceptionally(ex -> {
+                                    logger.warn("Failed to fetch pools for party {}: {}", party, ex.getMessage());
+                                    return List.of();
+                                }),
+                        (a, b) -> a,
+                        LinkedHashMap::new
+                ));
+
+        if (partyFetches.isEmpty()) {
+            partyFetches.put("fallback-any-party", ledger.getActiveContracts(Pool.class)
+                    .exceptionally(ex -> {
+                        logger.warn("Fallback pool fetch failed: {}", ex.getMessage());
+                        return List.of();
+                    }));
+        }
+
+        CompletableFuture<Void> allFetches = CompletableFuture.allOf(
+                partyFetches.values().toArray(new CompletableFuture[0])
+        );
+
+        return allFetches
+                .thenApply(ignored -> {
+                    partyFetches.forEach((party, fut) -> {
+                        try {
+                            var list = fut.join();
+                            logger.info("Pools found for party {}: {}", party, list.size());
+                        } catch (Exception ex) {
+                            logger.warn("Pools fetch failed for party {}: {}", party, ex.getMessage());
                         }
-                    );
-                }
-                return List.copyOf(bestPools.values());
-            })
-            .exceptionallyCompose(ex -> {
-                // Fallback to PQS if Ledger API fails and PQS is available
-                if (pqs != null) {
-                    logger.warn("Ledger API failed, falling back to PQS: {}", ex.getMessage());
-                    return pqs.active(Pool.class)
-                        .thenApply(contracts -> {
-                            LinkedHashMap<String, PoolDTO> bestPools = new LinkedHashMap<>();
-                            for (var c : contracts) {
-                                if (!showcasePoolIds.contains(c.payload.getPoolId)) {
-                                    continue;
-                                }
-                                double volume24h = volumeMetricsService.getVolume24h(
-                                    c.payload.getSymbolA,
-                                    c.payload.getSymbolB
-                                );
-                                PoolDTO dto = new PoolDTO(
-                                    c.payload.getPoolId,
-                                    new PoolDTO.TokenInfoDTO(c.payload.getSymbolA, c.payload.getSymbolA, 10),
-                                    new PoolDTO.TokenInfoDTO(c.payload.getSymbolB, c.payload.getSymbolB, 10),
-                                    c.payload.getReserveA.toPlainString(),
-                                    c.payload.getReserveB.toPlainString(),
-                                    c.payload.getTotalLPSupply.toPlainString(),
-                                    convertFeeBpsToRate(c.payload.getFeeBps),
-                                    String.format("%.2f", volume24h)
-                                );
-                                bestPools.merge(
-                                    dto.poolId,
-                                    dto,
-                                    (existing, incoming) -> {
-                                        BigDecimal existingTvl = new BigDecimal(existing.reserveA)
-                                            .multiply(new BigDecimal(existing.reserveB));
-                                        BigDecimal incomingTvl = new BigDecimal(incoming.reserveA)
-                                            .multiply(new BigDecimal(incoming.reserveB));
-                                        return incomingTvl.compareTo(existingTvl) > 0 ? incoming : existing;
-                                    }
-                                );
-                            }
-                            return List.copyOf(bestPools.values());
-                        });
-                } else {
-                    return CompletableFuture.failedFuture(ex);
-                }
-            })
-            .whenComplete((result, ex) -> {
-                if (ex != null) {
-                    logger.error("Failed to fetch pools: {}", ex.getMessage());
-                } else {
-                    logger.info("Fetched {} active pools", result.size());
-                }
-            });
+                    });
+                    return partyFetches.values().stream()
+                            .flatMap(future -> future.join().stream())
+                            .collect(Collectors.toList());
+                })
+                .thenApply(contracts -> {
+                    List<PoolDTO> dto = mapPoolsToDto(contracts, showcasePoolIds);
+                    logger.info("Merged pool count: {}", dto.size());
+                    return dto;
+                })
+                .exceptionallyCompose(ex -> {
+                    if (pqs != null) {
+                        logger.warn("Ledger API failed, falling back to PQS: {}", ex.getMessage());
+                        return pqs.active(Pool.class)
+                                .thenApply(contracts -> mapPoolsToDto(
+                                        contracts.stream()
+                                                .map(c -> new LedgerApi.ActiveContract<>(c.contractId, c.payload))
+                                                .collect(Collectors.toList()),
+                                        showcasePoolIds));
+                    } else {
+                        return CompletableFuture.failedFuture(ex);
+                    }
+                })
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        logger.error("Failed to fetch pools: {}", ex.getMessage());
+                    } else {
+                        logger.info("Fetched {} active pools", result.size());
+                    }
+                });
+    }
+
+    private List<PoolDTO> mapPoolsToDto(List<LedgerApi.ActiveContract<Pool>> contracts,
+                                        java.util.Set<String> showcasePoolIds) {
+        LinkedHashMap<String, PoolDTO> bestPools = new LinkedHashMap<>();
+        for (var c : contracts) {
+            if (c == null || c.payload == null || !showcasePoolIds.contains(c.payload.getPoolId)) {
+                continue;
+            }
+            double volume24h = volumeMetricsService.getVolume24h(
+                    c.payload.getSymbolA,
+                    c.payload.getSymbolB
+            );
+            PoolDTO dto = new PoolDTO(
+                    c.payload.getPoolId,
+                    new PoolDTO.TokenInfoDTO(c.payload.getSymbolA, c.payload.getSymbolA, 10),
+                    new PoolDTO.TokenInfoDTO(c.payload.getSymbolB, c.payload.getSymbolB, 10),
+                    c.payload.getReserveA.toPlainString(),
+                    c.payload.getReserveB.toPlainString(),
+                    c.payload.getTotalLPSupply.toPlainString(),
+                    convertFeeBpsToRate(c.payload.getFeeBps),
+                    String.format("%.2f", volume24h)
+            );
+            bestPools.merge(
+                    dto.poolId,
+                    dto,
+                    (existing, incoming) -> {
+                        BigDecimal existingTvl = new BigDecimal(existing.reserveA)
+                                .multiply(new BigDecimal(existing.reserveB));
+                        BigDecimal incomingTvl = new BigDecimal(incoming.reserveA)
+                                .multiply(new BigDecimal(incoming.reserveB));
+                        return incomingTvl.compareTo(existingTvl) > 0 ? incoming : existing;
+                    }
+            );
+        }
+        return List.copyOf(bestPools.values());
     }
 
     /**

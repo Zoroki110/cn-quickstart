@@ -193,9 +193,9 @@ public class LiquidityTiProcessorService {
                                                     List.of(),
                                                     synchronizerId));
                                 }
-                                return Result.ok(resp);
+                                return Result.<CommandServiceOuterClass.SubmitAndWaitForTransactionResponse, ApiError>ok(resp);
                             })
-                            .thenCompose(result -> {
+                            .thenCompose((Result<CommandServiceOuterClass.SubmitAndWaitForTransactionResponse, ApiError> result) -> {
                                 if (result.isErr()) {
                                     return completedError(result.getErrorUnsafe());
                                 }

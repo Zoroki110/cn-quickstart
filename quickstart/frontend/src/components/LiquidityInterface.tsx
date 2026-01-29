@@ -447,7 +447,10 @@ const LiquidityInterface: React.FC = () => {
         return;
       }
 
-      const poolCid = await backendApi.resolvePoolCid(targetPoolId);
+      const poolCid =
+        pool.contractId && (pool.poolId === pool.contractId || pool.contractId.startsWith('00'))
+          ? pool.contractId
+          : await backendApi.resolvePoolCid(targetPoolId);
       if (!poolCid) {
         toast.error('Unable to resolve pool CID. Refresh pools and try again.');
         return;

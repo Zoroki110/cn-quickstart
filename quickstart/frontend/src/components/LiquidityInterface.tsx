@@ -37,6 +37,13 @@ const LiquidityInterface: React.FC = () => {
   const [calculating, setCalculating] = useState(false);
   const [liquidityResult, setLiquidityResult] = useState<any>(null);
   const [liquidityStatus, setLiquidityStatus] = useState<string | null>(null);
+  const [removeSelectionCid, setRemoveSelectionCid] = useState('');
+  const [removeAmount, setRemoveAmount] = useState('');
+  const [removePreview, setRemovePreview] = useState<any>(null);
+  const [removePreviewError, setRemovePreviewError] = useState<string | null>(null);
+  const [removeStatus, setRemoveStatus] = useState<string | null>(null);
+  const [removeResult, setRemoveResult] = useState<any>(null);
+  const [removeLoading, setRemoveLoading] = useState(false);
   const [rawPools, setRawPools] = useState<PoolInfo[]>([]);
   const loopRequestStateRef = useRef({ lastCallAt: 0 });
   const { balances: loopBalances, reload: reloadLoopBalances } = useLoopBalances(partyId || null, walletType, {
@@ -800,6 +807,62 @@ const LiquidityInterface: React.FC = () => {
     }
   };
 
+  const handleRemoveLiquidity = async () => {
+    if (!partyId) {
+      toast.error('Connect a wallet to remove liquidity');
+      return;
+    }
+    if (!selectedLpToken) {
+      toast.error('Select an LP position first');
+      return;
+    }
+    const burnAmountNum = parseFloat(removeAmount);
+    if (!Number.isFinite(burnAmountNum) || burnAmountNum <= 0) {
+      toast.error('Enter a valid LP amount to burn');
+      return;
+    }
+    if (burnAmountNum > selectedLpToken.amount) {
+      toast.error('LP burn amount exceeds your balance');
+      return;
+    }
+
+    const requestId = `remove-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const deadlineIso = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+
+    try {
+      setRemoveLoading(true);
+      setRemoveResult(null);
+      setRemoveStatus(null);
+
+      const consumeResult = await backendApi.consumeDevnetLiquidityRemove({
+        requestId,
+        poolCid: selectedLpToken.poolId,
+        lpCid: selectedLpToken.contractId,
+        receiverParty: partyId,
+        lpBurnAmount: burnAmountNum.toFixed(10),
+        minOutA: '0',
+        minOutB: '0',
+        deadlineIso,
+      });
+
+      setRemoveResult(consumeResult);
+      if (consumeResult?.ok) {
+        setRemoveStatus('Remove liquidity submitted.');
+        await refreshWalletState();
+        const updatedPools = await backendApi.getPools();
+        setRawPools(updatedPools);
+      } else {
+        setRemoveStatus(consumeResult?.error?.message || 'Remove liquidity failed.');
+      }
+    } catch (error: any) {
+      console.error('Error removing liquidity:', error);
+      toast.error('An error occurred while removing liquidity');
+      setRemoveStatus('Remove liquidity failed.');
+    } finally {
+      setRemoveLoading(false);
+    }
+  };
+
   const existingPool = useMemo(() => (
     pools.find(p =>
       (p.tokenA.symbol === selectedTokenA?.symbol && p.tokenB.symbol === selectedTokenB?.symbol) ||
@@ -824,6 +887,89 @@ const LiquidityInterface: React.FC = () => {
   const poolShare = existingPool && estimatedLPTokens
     ? (estimatedLPTokens / (existingPool.totalLiquidity + estimatedLPTokens)) * 100
     : 100;
+
+  const removePositions = useMemo(
+    () => lpTokens.filter(position => position.amount && position.amount > 0),
+    [lpTokens]
+  );
+  const selectedLpToken = useMemo(
+    () => removePositions.find(position => position.contractId === removeSelectionCid) || null,
+    [removePositions, removeSelectionCid]
+  );
+  const removePool = useMemo(() => {
+    if (!selectedLpToken) {
+      return null;
+    }
+    return rawPools.find(pool =>
+      pool.contractId === selectedLpToken.poolId || pool.poolId === selectedLpToken.poolId
+    ) || null;
+  }, [rawPools, selectedLpToken]);
+
+  useEffect(() => {
+    if (mode !== 'remove') {
+      return;
+    }
+    if (!removePositions.length) {
+      setRemoveSelectionCid('');
+      return;
+    }
+    if (!selectedLpToken) {
+      setRemoveSelectionCid(removePositions[0].contractId);
+    }
+  }, [mode, removePositions, selectedLpToken]);
+
+  useEffect(() => {
+    if (mode !== 'remove') {
+      return;
+    }
+    setRemoveResult(null);
+    setRemoveStatus(null);
+  }, [mode, removeSelectionCid, removeAmount]);
+
+  useEffect(() => {
+    if (mode !== 'remove') {
+      return;
+    }
+    if (!partyId || !selectedLpToken) {
+      setRemovePreview(null);
+      setRemovePreviewError(null);
+      return;
+    }
+    const amountNum = parseFloat(removeAmount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      setRemovePreview(null);
+      setRemovePreviewError(null);
+      return;
+    }
+    if (amountNum > selectedLpToken.amount) {
+      setRemovePreview(null);
+      setRemovePreviewError('LP burn amount exceeds balance.');
+      return;
+    }
+    const requestId = `preview-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const timeout = setTimeout(() => {
+      backendApi.inspectDevnetLiquidityRemove({
+        requestId,
+        poolCid: selectedLpToken.poolId,
+        lpCid: selectedLpToken.contractId,
+        receiverParty: partyId,
+        lpBurnAmount: amountNum.toFixed(10),
+      }).then((res) => {
+        if (res?.ok) {
+          setRemovePreview(res.result ?? res);
+          setRemovePreviewError(null);
+        } else {
+          setRemovePreview(null);
+          setRemovePreviewError(res?.error?.message || 'Unable to preview removal.');
+        }
+      }).catch((err) => {
+        console.warn('Remove liquidity preview failed', err);
+        setRemovePreview(null);
+        setRemovePreviewError('Unable to preview removal.');
+      });
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [mode, partyId, selectedLpToken, removeAmount]);
 
   const poolPositions = useMemo(
     () => pools.filter(p => p.userLiquidity && p.userLiquidity > 0),
@@ -1088,13 +1234,153 @@ const LiquidityInterface: React.FC = () => {
 
       {/* Remove Liquidity Form */}
       {mode === 'remove' && (
-        <div className="card text-center py-12">
-          <p className="text-gray-500 dark:text-gray-400 mb-2">
-            Remove liquidity feature coming soon...
-          </p>
-          <p className="body-small text-gray-400">
-            You'll be able to remove liquidity and claim your tokens + earned fees
-          </p>
+        <div className="card-glow bg-white dark:bg-dark-900 relative overflow-hidden">
+          <div className="absolute inset-0 bg-mesh opacity-30"></div>
+          <div className="relative space-y-4">
+            <h2 className="heading-3 mb-4">Remove Liquidity</h2>
+
+            {!partyId ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500 dark:text-gray-400">
+                  Connect your wallet to remove liquidity.
+                </p>
+              </div>
+            ) : removePositions.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500 dark:text-gray-400">
+                  No LP positions available to remove.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="glass-subtle rounded-2xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="body-small">LP Position</span>
+                    {selectedLpToken && (
+                      <span className="body-small">
+                        Balance: {formatLpBalance(String(selectedLpToken.amount))}
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value={removeSelectionCid}
+                    onChange={(e) => setRemoveSelectionCid(e.target.value)}
+                    className="w-full rounded-xl bg-white dark:bg-dark-800 border border-gray-200 dark:border-dark-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100"
+                  >
+                    {removePositions.map((position) => (
+                      <option key={position.contractId} value={position.contractId}>
+                        {resolvePoolLabel(position.poolId)} • {formatLpBalance(String(position.amount))} LP
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="glass-subtle rounded-2xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="body-small">LP to Burn</span>
+                    {selectedLpToken && (
+                      <button
+                        type="button"
+                        onClick={() => setRemoveAmount(String(selectedLpToken.amount))}
+                        className="text-xs font-semibold text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                      >
+                        Max
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={removeAmount}
+                    onChange={(e) => setRemoveAmount(e.target.value)}
+                    placeholder="0.0"
+                    className="w-full text-right text-xl font-semibold bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400"
+                  />
+                </div>
+
+                {removePreviewError && (
+                  <div className="text-xs text-error-600 dark:text-error-400">
+                    {removePreviewError}
+                  </div>
+                )}
+
+                {removePreview && (
+                  <div className="glass-subtle rounded-2xl p-4">
+                    <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">
+                      Estimated Payout
+                    </div>
+                    <div className="space-y-1 text-sm text-gray-700 dark:text-gray-200">
+                      <div className="flex items-center justify-between">
+                        <span>{removePool?.tokenA?.symbol || 'Token A'}:</span>
+                        <span className="font-semibold">
+                          {formatLpBalance(removePreview.outAmountA)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span>{removePool?.tokenB?.symbol || 'Token B'}:</span>
+                        <span className="font-semibold">
+                          {formatLpBalance(removePreview.outAmountB)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-xs text-warning-600 dark:text-warning-400">
+                  Do not reject payouts in Loop during V1.
+                </div>
+
+                <button
+                  onClick={handleRemoveLiquidity}
+                  disabled={removeLoading || !removeSelectionCid || !removeAmount}
+                  className={`w-full btn-primary py-3 text-lg font-semibold ${
+                    removeLoading || !removeSelectionCid || !removeAmount
+                      ? 'opacity-60 cursor-not-allowed'
+                      : 'hover:shadow-xl'
+                  }`}
+                >
+                  {removeLoading ? 'Submitting...' : 'Remove Liquidity'}
+                </button>
+
+                {removeStatus && (
+                  <div className="mt-4 text-sm text-gray-600 dark:text-gray-300">
+                    {removeStatus}
+                  </div>
+                )}
+
+                {removeResult?.ok && removeResult?.result && (
+                  <div className="mt-4 glass-subtle rounded-xl p-4 text-sm">
+                    <div className="font-semibold text-gray-900 dark:text-gray-100">
+                      Removal submitted.
+                    </div>
+                    <div className="mt-2 space-y-2 text-gray-700 dark:text-gray-200">
+                      <div className="flex items-start justify-between gap-3">
+                        <span>Payout A:</span>
+                        <span className="text-right">
+                          {removeResult.result.payoutStatusA === 'COMPLETED'
+                            ? 'Completed automatically'
+                            : `Created (${removeResult.result.payoutCidA || 'pending'})`}
+                        </span>
+                      </div>
+                      <div className="flex items-start justify-between gap-3">
+                        <span>Payout B:</span>
+                        <span className="text-right">
+                          {removeResult.result.payoutStatusB === 'COMPLETED'
+                            ? 'Completed automatically'
+                            : `Created (${removeResult.result.payoutCidB || 'pending'})`}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {removeResult?.ok === false && (
+                  <div className="mt-4 text-sm text-error-600 dark:text-error-400">
+                    {removeResult?.error?.message || 'Remove liquidity failed.'}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 

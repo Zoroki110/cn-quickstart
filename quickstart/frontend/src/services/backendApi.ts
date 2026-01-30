@@ -1386,6 +1386,43 @@ export class BackendApiService {
     }
   }
 
+  async consumeDevnetLiquidityRemove(payload: {
+    requestId: string;
+    poolCid: string;
+    lpCid: string;
+    receiverParty: string;
+    lpBurnAmount: string;
+    minOutA?: string;
+    minOutB?: string;
+    deadlineIso?: string;
+  }): Promise<any> {
+    try {
+      const res = await this.client.post('/api/devnet/liquidity/remove/consume', payload);
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
+
+  async inspectDevnetLiquidityRemove(params: {
+    requestId: string;
+    poolCid: string;
+    lpCid: string;
+    receiverParty: string;
+    lpBurnAmount?: string;
+  }): Promise<any> {
+    try {
+      const res = await this.client.get('/api/devnet/liquidity/remove/inspect', { params });
+      return res.data;
+    } catch (error: any) {
+      const data = error?.response?.data;
+      const message = data?.error?.message || error?.message || String(error);
+      return data || { ok: false, error: { message } };
+    }
+  }
+
   async inspectDevnetLiquidity(requestId: string, poolCid?: string): Promise<any> {
     try {
       const res = await this.client.get('/api/devnet/liquidity/inspect', {

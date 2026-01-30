@@ -96,3 +96,21 @@ template LPToken
           void $ create this with amount = amount - qty
 
         return qty
+
+    -- BurnByIssuer: operator-controlled burn for pool-driven withdrawals
+    -- Used by HoldingPool remove-liquidity choice (no wallet-signed actions).
+    nonconsuming choice BurnByIssuer : Numeric 10
+      with qty : Numeric 10
+      controller issuer
+      do
+        assertMsg "Positive burn" (qty > 0.0)
+        assertMsg "Sufficient balance" (qty <= amount)
+
+        -- Archive FIRST (before creating remainder)
+        archive self
+
+        -- Create remainder if not burning full balance
+        when (qty < amount) $
+          void $ create this with amount = amount - qty
+
+        return qty

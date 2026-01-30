@@ -548,6 +548,120 @@ template HoldingPool
 
         return (newPoolCid, lpMinted, newReserveA, newReserveB)
 
+    -- | Remove liquidity by burning LP tokens and creating two payout TIs (V1).
+    -- Operator-controlled: validates LP ownership and burns via LPToken.BurnByIssuer.
+    choice RemoveLiquidityFromLpV1 : (ContractId HoldingPool, Decimal, Decimal, Decimal, Decimal, PayoutOutcome, PayoutOutcome)
+      with
+        requestId : Text
+        lpCid : ContractId LP.LPToken
+        lpBurnAmount : Decimal
+        receiverParty : Party
+        minOutA : Decimal
+        minOutB : Decimal
+        deadline : Time
+        poolIdText : Text
+        outputHoldingCidA : HoldingCid
+        outputHoldingCidB : HoldingCid
+        payoutFactoryCidA : ContractId TI.TransferFactory
+        payoutFactoryCidB : ContractId TI.TransferFactory
+        payoutExtraArgsA : M.ExtraArgs
+        payoutExtraArgsB : M.ExtraArgs
+        payoutMemo : Text
+      controller operator
+      do
+        assertMsg "Pool must be Active" (status == Active)
+        now <- getTime
+        assertMsg "Remove liquidity deadline has expired" (now < deadline)
+        assertMsg "LP burn amount must be positive" (lpBurnAmount > 0.0)
+        assertMsg "Pool LP supply must be positive" (lpSupply > 0.0)
+        assertMsg "MinOut A must be non-negative" (minOutA >= 0.0)
+        assertMsg "MinOut B must be non-negative" (minOutB >= 0.0)
+
+        lp <- fetch lpCid
+        assertMsg "LP owner mismatch" (lp.owner == receiverParty)
+        assertMsg "LP poolId mismatch" (lp.poolId == poolIdText)
+        assertMsg "LP burn exceeds balance" (lp.amount >= lpBurnAmount)
+
+        let share = lpBurnAmount / lpSupply
+        let outA = reserveAmountA * share
+        let outB = reserveAmountB * share
+
+        assertMsg "Output amount A must be positive" (outA > 0.0)
+        assertMsg "Output amount B must be positive" (outB > 0.0)
+        assertMsg "Slippage: output A below minimum" (outA >= minOutA)
+        assertMsg "Slippage: output B below minimum" (outB >= minOutB)
+
+        let availA = reserveAmountA - lockedAmountA
+        let availB = reserveAmountB - lockedAmountB
+        assertMsg "Insufficient available liquidity for output A" (outA <= availA)
+        assertMsg "Insufficient available liquidity for output B" (outB <= availB)
+
+        outInstA <- getHoldingInstrument outputHoldingCidA
+        outAmtA <- getHoldingAmount outputHoldingCidA
+        assertMsg "Output holding A has wrong instrument" (instrumentIdEq outInstA instrumentA)
+        assertMsg "Output holding A insufficient amount" (outAmtA >= outA)
+
+        outInstB <- getHoldingInstrument outputHoldingCidB
+        outAmtB <- getHoldingAmount outputHoldingCidB
+        assertMsg "Output holding B has wrong instrument" (instrumentIdEq outInstB instrumentB)
+        assertMsg "Output holding B insufficient amount" (outAmtB >= outB)
+
+        _ <- exercise lpCid LP.BurnByIssuer with qty = lpBurnAmount
+
+        let memoKey = "splice.lfdecentralizedtrust.org/reason"
+        let memoMeta = M.Metadata with values = TextMap.fromList [(memoKey, payoutMemo)]
+
+        let payoutTransferA = TI.Transfer with
+              sender = operator
+              receiver = receiverParty
+              amount = outA
+              instrumentId = instrumentA
+              requestedAt = now
+              executeBefore = deadline
+              inputHoldingCids = [outputHoldingCidA]
+              meta = memoMeta
+        payoutResultA <- exercise payoutFactoryCidA TI.TransferFactory_Transfer with
+          expectedAdmin = instrumentA.admin
+          transfer = payoutTransferA
+          extraArgs = payoutExtraArgsA
+        payoutOutcomeA <- case payoutResultA.output of
+          TI.TransferInstructionResult_Pending {transferInstructionCid} -> return (PayoutPending transferInstructionCid)
+          TI.TransferInstructionResult_Completed {} -> return PayoutCompleted
+          TI.TransferInstructionResult_Failed {} -> error "Payout A transfer failed"
+
+        let payoutTransferB = TI.Transfer with
+              sender = operator
+              receiver = receiverParty
+              amount = outB
+              instrumentId = instrumentB
+              requestedAt = now
+              executeBefore = deadline
+              inputHoldingCids = [outputHoldingCidB]
+              meta = memoMeta
+        payoutResultB <- exercise payoutFactoryCidB TI.TransferFactory_Transfer with
+          expectedAdmin = instrumentB.admin
+          transfer = payoutTransferB
+          extraArgs = payoutExtraArgsB
+        payoutOutcomeB <- case payoutResultB.output of
+          TI.TransferInstructionResult_Pending {transferInstructionCid} -> return (PayoutPending transferInstructionCid)
+          TI.TransferInstructionResult_Completed {} -> return PayoutCompleted
+          TI.TransferInstructionResult_Failed {} -> error "Payout B transfer failed"
+
+        let newReserveA = reserveAmountA - outA
+        let newReserveB = reserveAmountB - outB
+        let newLpSupply = lpSupply - lpBurnAmount
+
+        assertMsg "Reserve A cannot go below locked A" (newReserveA >= lockedAmountA)
+        assertMsg "Reserve B cannot go below locked B" (newReserveB >= lockedAmountB)
+        assertMsg "LP supply cannot be negative" (newLpSupply >= 0.0)
+
+        newPoolCid <- create this with
+          reserveAmountA = newReserveA
+          reserveAmountB = newReserveB
+          lpSupply = newLpSupply
+
+        return (newPoolCid, outA, outB, newReserveA, newReserveB, payoutOutcomeA, payoutOutcomeB)
+
     -- | UnlockPayout - called when payout is claimed.
     -- Deducts from reserves and unlocks.
     choice UnlockPayout : ContractId HoldingPool

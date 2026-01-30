@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw, X, Clock, CheckCircle2, Loader2, Copy, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { backendApi } from '../services/backendApi';
+import { useWalletAuth } from '../wallet';
 import type { PoolInfo, TransactionHistoryEntry, TransactionTimelineItem } from '../types/canton';
 
 const numberFormatter = new Intl.NumberFormat('en', {
@@ -109,6 +110,7 @@ const timelineIcon = (status: TransactionTimelineItem['status']) => {
 };
 
 const TransactionHistory: React.FC = () => {
+  const { partyId } = useWalletAuth();
   const [transactions, setTransactions] = useState<TransactionHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -118,6 +120,13 @@ const TransactionHistory: React.FC = () => {
   const [pools, setPools] = useState<PoolInfo[]>([]);
 
   const fetchHistory = useCallback(async () => {
+    if (!partyId) {
+      setTransactions([]);
+      setError(null);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     try {
       setError(null);
       const entries = await backendApi.getTransactionHistory();
@@ -129,7 +138,7 @@ const TransactionHistory: React.FC = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [partyId]);
 
   useEffect(() => {
     fetchHistory();
@@ -137,29 +146,36 @@ const TransactionHistory: React.FC = () => {
 
   useEffect(() => {
     let mounted = true;
-    backendApi
-      .getPools()
-      .then((data) => {
-        if (mounted) {
-          setPools(data);
-        }
-      })
-      .catch((err) => {
-        console.warn('Failed to load pools for history view', err);
-      });
+    if (partyId) {
+      backendApi
+        .getPools()
+        .then((data) => {
+          if (mounted) {
+            setPools(data);
+          }
+        })
+        .catch((err) => {
+          console.warn('Failed to load pools for history view', err);
+        });
+    } else if (mounted) {
+      setPools([]);
+    }
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [partyId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
+    if (!partyId) {
+      return;
+    }
     const handler = () => fetchHistory();
     window.addEventListener('clearportx:transactions:refresh', handler);
     return () => window.removeEventListener('clearportx:transactions:refresh', handler);
-  }, [fetchHistory]);
+  }, [fetchHistory, partyId]);
 
   const visibleTransactions = useMemo(
     () => transactions.filter((tx) => !dismissedIds.has(tx.id)),
@@ -180,6 +196,9 @@ const TransactionHistory: React.FC = () => {
   );
 
   const handleRefresh = async () => {
+    if (!partyId) {
+      return;
+    }
     setRefreshing(true);
     await fetchHistory();
   };
@@ -289,6 +308,10 @@ const TransactionHistory: React.FC = () => {
     { label: 'Expires At', value: formatDateTime(tx.expiresAt) },
     { label: 'Status', value: statusLabels[tx.status] },
   ];
+
+  if (!partyId) {
+    return <div className="max-w-5xl mx-auto pb-24 min-h-[calc(100vh-220px)]" />;
+  }
 
   if (loading) {
     return (

@@ -420,6 +420,16 @@ export class BackendApiService {
     }
   }
 
+  async getHoldingPool(poolCid: string): Promise<any | null> {
+    try {
+      const res = await this.client.get(`/api/holding-pools/${poolCid}`);
+      return res.data;
+    } catch (err) {
+      console.error('holding-pool fetch failed', err);
+      return null;
+    }
+  }
+
   private async loadPartyScopedPools(): Promise<PoolInfo[]> {
     const party = this.currentParty();
     const partyRows = await this.fetchPoolsForParty(party);

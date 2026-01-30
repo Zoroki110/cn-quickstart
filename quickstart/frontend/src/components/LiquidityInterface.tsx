@@ -47,6 +47,7 @@ const LiquidityInterface: React.FC = () => {
   const [liquidityResult, setLiquidityResult] = useState<any>(null);
   const [liquidityStatus, setLiquidityStatus] = useState<string | null>(null);
   const [rawPools, setRawPools] = useState<PoolInfo[]>([]);
+  const loopRequestStateRef = useRef({ lastCallAt: 0 });
   const LP_BASELINES_STORAGE_KEY = 'clearportx:lp-baselines:v1';
   const [lpBaselines, setLpBaselines] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') {
@@ -260,6 +261,20 @@ const LiquidityInterface: React.FC = () => {
     }
     await reloadUtxoBalances();
   }, [walletType, reloadLoopBalances, reloadUtxoBalances]);
+
+  const waitForLoopCooldown = useCallback(
+    async (label: string, minGapMs: number = LOOP_MIN_GAP_MS) => {
+      const now = Date.now();
+      const elapsed = now - loopRequestStateRef.current.lastCallAt;
+      if (elapsed < minGapMs) {
+        const delayMs = minGapMs - elapsed;
+        setLiquidityStatus(`Waiting ${Math.ceil(delayMs / 1000)}s to avoid Loop rate limits (${label})`);
+        await sleep(delayMs);
+      }
+      loopRequestStateRef.current.lastCallAt = Date.now();
+    },
+    []
+  );
 
   useEffect(() => {
     reloadBalances();
@@ -516,15 +531,20 @@ const LiquidityInterface: React.FC = () => {
         setLiquidityStatus('Submitting inbound transfer A');
         const preparedA = await withLoopRateLimitRetry(
           'Transfer A preparation',
-          () => prepareLoopTransfer(getLoopProvider(), {
-          recipient: OPERATOR_PARTY,
-          amount: amountForA.toFixed(10),
-          instrument: instrumentA,
-          memo,
-          requestedAt: new Date().toISOString(),
-          executeBefore: deadline,
-        }),
-          (delayMs) => setLiquidityStatus(`Transfer A preparation rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`)
+          () =>
+            prepareLoopTransfer(getLoopProvider(), {
+              recipient: OPERATOR_PARTY,
+              amount: amountForA.toFixed(10),
+              instrument: instrumentA,
+              memo,
+              requestedAt: new Date().toISOString(),
+              executeBefore: deadline,
+            }),
+          {
+            onRetry: (delayMs) =>
+              setLiquidityStatus(`Transfer A preparation rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`),
+            beforeAttempt: () => waitForLoopCooldown('prepare A'),
+          }
         );
         const commandsA = extractPreparedCommands(preparedA);
         if (commandsA.length === 0) {
@@ -545,7 +565,11 @@ const LiquidityInterface: React.FC = () => {
             synchronizerId: extractPreparedSynchronizerId(preparedA),
           },
           'Transfer A submission',
-          (delayMs) => setLiquidityStatus(`Transfer A submission rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`)
+          {
+            onRetry: (delayMs) =>
+              setLiquidityStatus(`Transfer A submission rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`),
+            beforeAttempt: () => waitForLoopCooldown('submit A'),
+          }
         );
 
         if (!transferA.ok || transferA.value?.txStatus !== 'SUCCEEDED') {
@@ -554,20 +578,24 @@ const LiquidityInterface: React.FC = () => {
           return;
         }
 
-        setLiquidityStatus('Inbound transfer A submitted. Opening transfer B');
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        setLiquidityStatus('Inbound transfer A submitted. Preparing transfer B');
         setLiquidityStatus('Submitting inbound transfer B');
         const preparedB = await withLoopRateLimitRetry(
           'Transfer B preparation',
-          () => prepareLoopTransfer(getLoopProvider(), {
-            recipient: OPERATOR_PARTY,
-            amount: amountForB.toFixed(10),
-            instrument: instrumentB,
-            memo,
-            requestedAt: new Date().toISOString(),
-            executeBefore: deadline,
-          }),
-          (delayMs) => setLiquidityStatus(`Transfer B preparation rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`)
+          () =>
+            prepareLoopTransfer(getLoopProvider(), {
+              recipient: OPERATOR_PARTY,
+              amount: amountForB.toFixed(10),
+              instrument: instrumentB,
+              memo,
+              requestedAt: new Date().toISOString(),
+              executeBefore: deadline,
+            }),
+          {
+            onRetry: (delayMs) =>
+              setLiquidityStatus(`Transfer B preparation rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`),
+            beforeAttempt: () => waitForLoopCooldown('prepare B'),
+          }
         );
         const commandsB = extractPreparedCommands(preparedB);
         if (commandsB.length === 0) {
@@ -588,7 +616,11 @@ const LiquidityInterface: React.FC = () => {
             synchronizerId: extractPreparedSynchronizerId(preparedB),
           },
           'Transfer B submission',
-          (delayMs) => setLiquidityStatus(`Transfer B submission rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`)
+          {
+            onRetry: (delayMs) =>
+              setLiquidityStatus(`Transfer B submission rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`),
+            beforeAttempt: () => waitForLoopCooldown('submit B'),
+          }
         );
 
         let consumeResult: any = null;
@@ -1076,7 +1108,8 @@ async function prepareLoopTransfer(
   return prepareTransfer.call(connection, authToken, payload);
 }
 
-const LOOP_RATE_LIMIT_RETRY_DELAYS_MS = [1200, 2500, 4000];
+const LOOP_RATE_LIMIT_RETRY_DELAYS_MS = [2000, 4000, 7000, 12000];
+const LOOP_MIN_GAP_MS = 4000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1101,21 +1134,52 @@ function isLoopRateLimitError(err: any): boolean {
   return message.includes('429') || message.includes('rate limit');
 }
 
+function extractRetryAfterMs(err: any): number | null {
+  const headers = err?.response?.headers ?? err?.headers ?? err?.error?.response?.headers ?? err?.details?.response?.headers;
+  if (!headers) return null;
+  const retryAfter = headers['retry-after'] ?? headers['Retry-After'] ?? headers['RETRY-AFTER'];
+  if (!retryAfter) return null;
+  if (typeof retryAfter === 'number') {
+    return Math.max(0, retryAfter * 1000);
+  }
+  const retryAfterStr = String(retryAfter).trim();
+  const asNumber = Number(retryAfterStr);
+  if (Number.isFinite(asNumber)) {
+    return Math.max(0, asNumber * 1000);
+  }
+  const asDate = Date.parse(retryAfterStr);
+  if (!Number.isNaN(asDate)) {
+    return Math.max(0, asDate - Date.now());
+  }
+  return null;
+}
+
+function resolveRateLimitDelayMs(err: any, fallbackMs: number): number {
+  const retryAfterMs = extractRetryAfterMs(err);
+  return retryAfterMs && Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : fallbackMs;
+}
+
 async function withLoopRateLimitRetry<T>(
   label: string,
   task: () => Promise<T>,
-  onRetry?: (delayMs: number) => void
+  options?: {
+    onRetry?: (delayMs: number) => void;
+    beforeAttempt?: () => Promise<void>;
+  }
 ): Promise<T> {
   for (let attempt = 0; attempt <= LOOP_RATE_LIMIT_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
+      if (options?.beforeAttempt) {
+        await options.beforeAttempt();
+      }
       return await task();
     } catch (err: any) {
       if (!isLoopRateLimitError(err) || attempt >= LOOP_RATE_LIMIT_RETRY_DELAYS_MS.length) {
         throw err;
       }
-      const delayMs = LOOP_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+      const delayMs = resolveRateLimitDelayMs(err, LOOP_RATE_LIMIT_RETRY_DELAYS_MS[attempt]);
       console.warn(`[loop] ${label} rate limited (429). Retrying in ${delayMs}ms.`);
-      onRetry?.(delayMs);
+      options?.onRetry?.(delayMs);
       await sleep(delayMs);
     }
   }
@@ -1125,9 +1189,15 @@ async function withLoopRateLimitRetry<T>(
 async function submitTxWithRateLimitRetry(
   input: Parameters<typeof submitTx>[0],
   label: string,
-  onRetry?: (delayMs: number) => void
+  options?: {
+    onRetry?: (delayMs: number) => void;
+    beforeAttempt?: () => Promise<void>;
+  }
 ): Promise<ReturnType<typeof submitTx>> {
   for (let attempt = 0; attempt <= LOOP_RATE_LIMIT_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (options?.beforeAttempt) {
+      await options.beforeAttempt();
+    }
     const result = await submitTx(input);
     if (result.ok || !isLoopRateLimitError(result.error)) {
       return result;
@@ -1135,9 +1205,9 @@ async function submitTxWithRateLimitRetry(
     if (attempt >= LOOP_RATE_LIMIT_RETRY_DELAYS_MS.length) {
       return result;
     }
-    const delayMs = LOOP_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+    const delayMs = resolveRateLimitDelayMs(result.error?.details ?? result.error, LOOP_RATE_LIMIT_RETRY_DELAYS_MS[attempt]);
     console.warn(`[loop] ${label} rate limited (429). Retrying in ${delayMs}ms.`);
-    onRetry?.(delayMs);
+    options?.onRetry?.(delayMs);
     await sleep(delayMs);
   }
   return submitTx(input);

@@ -1,7 +1,7 @@
 // ClearportX Backend API Service
 // Connects to Spring Boot backend at http://localhost:8080
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { TokenInfo, PoolInfo, SwapQuote, TransactionHistoryEntry, LpTokenInfo } from '../types/canton';
+import { TokenInfo, PoolInfo, SwapQuote, TransactionHistoryEntry, LpTokenInfo, LpPositionInfo } from '../types/canton';
 import { getAccessToken, getPartyId } from './auth';
 import { BUILD_INFO } from '../config/build-info';
 import { getActiveWalletParty, getAuthToken } from '../api/client';
@@ -621,6 +621,30 @@ export class BackendApiService {
       return mapped;
     } catch (error) {
       console.error('Error loading LP tokens:', error);
+      return [];
+    }
+  }
+
+  async getLpPositions(party: string, poolCid?: string): Promise<LpPositionInfo[]> {
+    const cantonParty = mapPartyToBackend(party);
+    console.log(`Getting LP positions for ${party} (mapped to ${cantonParty})`);
+    try {
+      const res = await this.client.get('/api/lp/positions', {
+        params: poolCid ? { ownerParty: cantonParty, poolCid } : { ownerParty: cantonParty },
+      });
+      const rows = Array.isArray(res.data) ? res.data : [];
+      const mapped: LpPositionInfo[] = rows.map((row: any) => ({
+        poolCid: row.poolCid || row.pool_id || '',
+        lpBalance: row.lpBalance ?? row.balance ?? '0',
+        shareBps: typeof row.shareBps === 'number' ? row.shareBps : row.shareBps ? Number(row.shareBps) : undefined,
+        reserveA: row.reserveA ?? undefined,
+        reserveB: row.reserveB ?? undefined,
+        updatedAt: row.updatedAt ?? undefined,
+      })).filter((pos) => pos.poolCid && pos.lpBalance);
+      console.log(`Fetched ${mapped.length} LP positions`, mapped[0] ? { first: mapped[0] } : '');
+      return mapped;
+    } catch (error) {
+      console.error('Error loading LP positions:', error);
       return [];
     }
   }

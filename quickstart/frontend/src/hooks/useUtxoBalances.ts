@@ -18,6 +18,7 @@ type UseUtxoBalancesOptions = {
 type UseUtxoBalancesResult = {
   balances: UtxoBalanceMap;
   loading: boolean;
+  isRefreshing: boolean;
   error: Error | null;
   reload: () => Promise<void>;
 };
@@ -31,17 +32,23 @@ export function useUtxoBalances(
   const { ownerOnly = true, refreshIntervalMs = 15000 } = options;
   const [balances, setBalances] = useState<UtxoBalanceMap>({});
   const [loading, setLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const hasBalances = Object.keys(balances).length > 0;
 
   const fetchBalances = useCallback(async () => {
     if (!partyId) {
       setBalances({});
       setError(null);
       setLoading(false);
+      setIsRefreshing(false);
       return;
     }
 
-    setLoading(true);
+    setIsRefreshing(true);
+    if (!hasBalances) {
+      setLoading(true);
+    }
     try {
       const res = await backendApi.getHoldingUtxos(partyId, ownerOnly);
       const rows: any[] = Array.isArray(res)
@@ -108,11 +115,11 @@ export function useUtxoBalances(
     } catch (err) {
       console.warn("Failed to load UTXO balances for", partyId, err);
       setError(err instanceof Error ? err : new Error("Failed to load balances"));
-      setBalances({});
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
-  }, [partyId, ownerOnly]);
+  }, [partyId, ownerOnly, hasBalances]);
 
   useEffect(() => {
     fetchBalances();
@@ -146,6 +153,7 @@ export function useUtxoBalances(
   return {
     balances,
     loading,
+    isRefreshing,
     error,
     reload: fetchBalances,
   };

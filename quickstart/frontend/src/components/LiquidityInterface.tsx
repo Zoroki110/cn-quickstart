@@ -514,31 +514,39 @@ const LiquidityInterface: React.FC = () => {
         const memo = JSON.stringify(memoPayload);
 
         setLiquidityStatus('Submitting inbound transfer A');
-        const preparedA = await prepareLoopTransfer(getLoopProvider(), {
+        const preparedA = await withLoopRateLimitRetry(
+          'Transfer A preparation',
+          () => prepareLoopTransfer(getLoopProvider(), {
           recipient: OPERATOR_PARTY,
           amount: amountForA.toFixed(10),
           instrument: instrumentA,
           memo,
           requestedAt: new Date().toISOString(),
           executeBefore: deadline,
-        });
+        }),
+          (delayMs) => setLiquidityStatus(`Transfer A preparation rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`)
+        );
         const commandsA = extractPreparedCommands(preparedA);
         if (commandsA.length === 0) {
           setLiquidityResult({ ok: false, error: { code: 'PREPARE_A', message: 'Transfer preparation returned no commands', details: preparedA } });
           toast.error('Transfer A preparation failed');
           return;
         }
-        const transferA = await submitTx({
-          commands: commandsA,
-          actAs: extractPreparedActAs(preparedA, partyId),
-          readAs: extractPreparedReadAs(preparedA, partyId),
-          deduplicationKey: `${requestId}-a`,
-          memo,
-          mode: 'LEGACY',
-          disclosedContracts: extractPreparedDisclosedContracts(preparedA),
-          packageIdSelectionPreference: extractPreparedPackagePreference(preparedA),
-          synchronizerId: extractPreparedSynchronizerId(preparedA),
-        });
+        const transferA = await submitTxWithRateLimitRetry(
+          {
+            commands: commandsA,
+            actAs: extractPreparedActAs(preparedA, partyId),
+            readAs: extractPreparedReadAs(preparedA, partyId),
+            deduplicationKey: `${requestId}-a`,
+            memo,
+            mode: 'LEGACY',
+            disclosedContracts: extractPreparedDisclosedContracts(preparedA),
+            packageIdSelectionPreference: extractPreparedPackagePreference(preparedA),
+            synchronizerId: extractPreparedSynchronizerId(preparedA),
+          },
+          'Transfer A submission',
+          (delayMs) => setLiquidityStatus(`Transfer A submission rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`)
+        );
 
         if (!transferA.ok || transferA.value?.txStatus !== 'SUCCEEDED') {
           setLiquidityResult({ transferA, transferB: null, consume: null });
@@ -547,33 +555,41 @@ const LiquidityInterface: React.FC = () => {
         }
 
         setLiquidityStatus('Inbound transfer A submitted. Opening transfer B');
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
         setLiquidityStatus('Submitting inbound transfer B');
-        const preparedB = await prepareLoopTransfer(getLoopProvider(), {
-          recipient: OPERATOR_PARTY,
-          amount: amountForB.toFixed(10),
-          instrument: instrumentB,
-          memo,
-          requestedAt: new Date().toISOString(),
-          executeBefore: deadline,
-        });
+        const preparedB = await withLoopRateLimitRetry(
+          'Transfer B preparation',
+          () => prepareLoopTransfer(getLoopProvider(), {
+            recipient: OPERATOR_PARTY,
+            amount: amountForB.toFixed(10),
+            instrument: instrumentB,
+            memo,
+            requestedAt: new Date().toISOString(),
+            executeBefore: deadline,
+          }),
+          (delayMs) => setLiquidityStatus(`Transfer B preparation rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`)
+        );
         const commandsB = extractPreparedCommands(preparedB);
         if (commandsB.length === 0) {
           setLiquidityResult({ ok: false, error: { code: 'PREPARE_B', message: 'Transfer preparation returned no commands', details: preparedB } });
           toast.error('Transfer B preparation failed');
           return;
         }
-        const transferB = await submitTx({
-          commands: commandsB,
-          actAs: extractPreparedActAs(preparedB, partyId),
-          readAs: extractPreparedReadAs(preparedB, partyId),
-          deduplicationKey: `${requestId}-b`,
-          memo,
-          mode: 'LEGACY',
-          disclosedContracts: extractPreparedDisclosedContracts(preparedB),
-          packageIdSelectionPreference: extractPreparedPackagePreference(preparedB),
-          synchronizerId: extractPreparedSynchronizerId(preparedB),
-        });
+        const transferB = await submitTxWithRateLimitRetry(
+          {
+            commands: commandsB,
+            actAs: extractPreparedActAs(preparedB, partyId),
+            readAs: extractPreparedReadAs(preparedB, partyId),
+            deduplicationKey: `${requestId}-b`,
+            memo,
+            mode: 'LEGACY',
+            disclosedContracts: extractPreparedDisclosedContracts(preparedB),
+            packageIdSelectionPreference: extractPreparedPackagePreference(preparedB),
+            synchronizerId: extractPreparedSynchronizerId(preparedB),
+          },
+          'Transfer B submission',
+          (delayMs) => setLiquidityStatus(`Transfer B submission rate limited. Retrying in ${Math.ceil(delayMs / 1000)}s`)
+        );
 
         let consumeResult: any = null;
         if (transferB.ok && transferB.value?.txStatus === 'SUCCEEDED') {
@@ -1058,6 +1074,73 @@ async function prepareLoopTransfer(
     memo: params.memo,
   };
   return prepareTransfer.call(connection, authToken, payload);
+}
+
+const LOOP_RATE_LIMIT_RETRY_DELAYS_MS = [1200, 2500, 4000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLoopRateLimitError(err: any): boolean {
+  const status =
+    err?.response?.status ??
+    err?.status ??
+    err?.error?.response?.status ??
+    err?.details?.response?.status;
+  if (status === 429) {
+    return true;
+  }
+  const message = String(
+    err?.message ??
+      err?.error?.message ??
+      err?.details?.message ??
+      err?.details?.toString?.() ??
+      ''
+  ).toLowerCase();
+  return message.includes('429') || message.includes('rate limit');
+}
+
+async function withLoopRateLimitRetry<T>(
+  label: string,
+  task: () => Promise<T>,
+  onRetry?: (delayMs: number) => void
+): Promise<T> {
+  for (let attempt = 0; attempt <= LOOP_RATE_LIMIT_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await task();
+    } catch (err: any) {
+      if (!isLoopRateLimitError(err) || attempt >= LOOP_RATE_LIMIT_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+      const delayMs = LOOP_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+      console.warn(`[loop] ${label} rate limited (429). Retrying in ${delayMs}ms.`);
+      onRetry?.(delayMs);
+      await sleep(delayMs);
+    }
+  }
+  throw new Error(`[loop] ${label} failed after rate limit retries`);
+}
+
+async function submitTxWithRateLimitRetry(
+  input: Parameters<typeof submitTx>[0],
+  label: string,
+  onRetry?: (delayMs: number) => void
+): Promise<ReturnType<typeof submitTx>> {
+  for (let attempt = 0; attempt <= LOOP_RATE_LIMIT_RETRY_DELAYS_MS.length; attempt += 1) {
+    const result = await submitTx(input);
+    if (result.ok || !isLoopRateLimitError(result.error)) {
+      return result;
+    }
+    if (attempt >= LOOP_RATE_LIMIT_RETRY_DELAYS_MS.length) {
+      return result;
+    }
+    const delayMs = LOOP_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+    console.warn(`[loop] ${label} rate limited (429). Retrying in ${delayMs}ms.`);
+    onRetry?.(delayMs);
+    await sleep(delayMs);
+  }
+  return submitTx(input);
 }
 
 function extractPreparedCommands(prepared: PreparedTransfer): any[] {

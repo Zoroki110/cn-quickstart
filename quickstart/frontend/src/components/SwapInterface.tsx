@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useAppStore } from '../stores';
 import { useContractStore } from '../stores/useContractStore';
 import { backendApi } from '../services/backendApi';
-import { TokenInfo, SwapQuote, PoolInfo } from '../types/canton';
+import { TokenInfo, SwapQuote, PoolInfo, LpPositionInfo } from '../types/canton';
 import TokenSelector from './TokenSelector';
 import SlippageSettings from './SlippageSettings';
 import toast from 'react-hot-toast';
@@ -11,6 +11,12 @@ import { useLoopBalances, useUtxoBalances } from '../hooks';
 import { submitTx } from '../loop/submitTx';
 import { getLoopProvider } from '../loop/loopProvider';
 import { calculateSwapQuoteFromPool } from '../utils/poolMath';
+import {
+  balancesKeyFromMap,
+  lpKeyFromPositions,
+  poolKeyFromPools,
+  refreshLedgerState,
+} from '../utils/refreshLedgerState';
 
 const AMULET_ADMIN = 'DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a';
 const AMULET_ID = 'Amulet';
@@ -25,10 +31,10 @@ const SwapInterface: React.FC = () => {
   const { selectedTokens, setSelectedTokens, swapTokens: swapSelectedTokens, slippage } = useAppStore();
   const { partyId, walletType } = useWalletAuth();
   const partyForBackend = walletType === 'loop' ? null : partyId || null;
-  const { balances: loopBalances, reload: reloadLoopBalances } = useLoopBalances(partyId || null, walletType, {
+  const { balances: loopBalances, reload: reloadLoopBalances, isRefreshing: loopRefreshing } = useLoopBalances(partyId || null, walletType, {
     refreshIntervalMs: 15000,
   });
-  const { balances: utxoBalances, reload: reloadUtxoBalances } = useUtxoBalances(partyForBackend, {
+  const { balances: utxoBalances, reload: reloadUtxoBalances, isRefreshing: utxoRefreshing } = useUtxoBalances(partyForBackend, {
     ownerOnly: true,
     refreshIntervalMs: 15000,
   });
@@ -53,7 +59,12 @@ const SwapInterface: React.FC = () => {
   const [devnetConsumeAvailable, setDevnetConsumeAvailable] = useState(false);
   const [pools, setPools] = useState<PoolInfo[]>([]);
   const [volume24h, setVolume24h] = useState<number>(0);
+  const [lpPositions, setLpPositions] = useState<LpPositionInfo[]>([]);
+  const [ledgerRefreshStatus, setLedgerRefreshStatus] = useState<string | null>(null);
   const lastConnectedParty = useRef<string | null>(null);
+  const balancesSnapshotRef = useRef('');
+  const poolSnapshotRef = useRef('');
+  const lpSnapshotRef = useRef('');
 
   const resolvedPoolId = useMemo(() => {
     if (!selectedTokens.from || !selectedTokens.to || pools.length === 0) return null;
@@ -104,6 +115,20 @@ const SwapInterface: React.FC = () => {
     return map;
   }, [walletType, loopBalances, utxoBalances]);
 
+  const balancesRefreshing = walletType === 'loop' ? loopRefreshing : utxoRefreshing;
+
+  useEffect(() => {
+    balancesSnapshotRef.current = balancesKeyFromMap(balancesBySymbol);
+  }, [balancesBySymbol]);
+
+  useEffect(() => {
+    poolSnapshotRef.current = poolKeyFromPools(pools, activePool?.contractId || resolvedPoolId);
+  }, [pools, activePool, resolvedPoolId]);
+
+  useEffect(() => {
+    lpSnapshotRef.current = lpKeyFromPositions(lpPositions);
+  }, [lpPositions]);
+
   const getBalanceEntry = useCallback((symbol?: string) => {
     if (!symbol) {
       return undefined;
@@ -132,6 +157,32 @@ const SwapInterface: React.FC = () => {
     return Number.isFinite(numeric) ? numeric : 0;
   }, [getBalanceEntry]);
 
+  const refreshLedger = useCallback(async (label: string, poolCid?: string | null) => {
+    if (!partyId) return;
+    await refreshLedgerState({
+      label,
+      getSnapshot: () => ({
+        balancesKey: balancesSnapshotRef.current,
+        poolKey: poolSnapshotRef.current,
+        lpKey: lpSnapshotRef.current,
+      }),
+      fetchSnapshot: async () => {
+        await reloadBalances();
+        const latestPools = await backendApi.getPools();
+        setPools(latestPools);
+        const latestPositions = await backendApi.getLpPositions(partyId);
+        setLpPositions(latestPositions);
+        console.log('[lpPositions] loaded', { count: latestPositions.length, first: latestPositions[0] });
+        return {
+          balancesKey: balancesSnapshotRef.current,
+          poolKey: poolKeyFromPools(latestPools, poolCid ?? activePool?.contractId ?? resolvedPoolId),
+          lpKey: lpKeyFromPositions(latestPositions),
+        };
+      },
+      onStatus: setLedgerRefreshStatus,
+    });
+  }, [partyId, reloadBalances, activePool, resolvedPoolId]);
+
   const parsedInputAmount = parseFloat(inputAmount || '0');
   const normalizedInputAmount = Number.isFinite(parsedInputAmount) ? parsedInputAmount : 0;
   const insufficientBalance = Boolean(
@@ -159,6 +210,21 @@ const SwapInterface: React.FC = () => {
     }
     lastConnectedParty.current = partyId;
   }, [partyId, reloadBalances]);
+
+  useEffect(() => {
+    if (!partyId) {
+      setLpPositions([]);
+      return;
+    }
+    backendApi.getLpPositions(partyId)
+      .then((positions) => {
+        setLpPositions(positions);
+        console.log('[lpPositions] loaded', { count: positions.length, first: positions[0] });
+      })
+      .catch((error) => {
+        console.warn('[lpPositions] load failed', error);
+      });
+  }, [partyId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -391,6 +457,7 @@ const SwapInterface: React.FC = () => {
         synchronizerId,
       });
       let consumeResult: any = null;
+      let didRefresh = false;
       if (transferResult.ok && transferResult.value.txStatus === 'SUCCEEDED') {
         const shouldConsume = devnetConsumeAvailable;
         if (shouldConsume) {
@@ -409,6 +476,8 @@ const SwapInterface: React.FC = () => {
                 detail: { source: 'swap', requestId },
               }));
             }
+            await refreshLedger('swap', poolCid);
+            didRefresh = true;
           }
         } else {
           consumeResult = {
@@ -431,6 +500,9 @@ const SwapInterface: React.FC = () => {
         setInputAmount('');
         setOutputAmount('');
         setQuote(null);
+        if (!didRefresh) {
+          await refreshLedger('swap', poolCid);
+        }
       } else if (transferResult.ok) {
         toast.error('Swap transfer failed');
       } else {
@@ -537,6 +609,7 @@ const SwapInterface: React.FC = () => {
               <span className="body-small">From</span>
               <span className="body-small">
                 Balance: {formatBalanceDisplay(selectedTokens.from?.symbol)}
+                {balancesRefreshing && <span className="ml-2 text-xs text-gray-500">Updating...</span>}
               </span>
             </div>
 
@@ -597,6 +670,7 @@ const SwapInterface: React.FC = () => {
               <span className="body-small">To</span>
               <span className="body-small">
                 Balance: {formatBalanceDisplay(selectedTokens.to?.symbol)}
+                {balancesRefreshing && <span className="ml-2 text-xs text-gray-500">Updating...</span>}
               </span>
             </div>
 
@@ -678,10 +752,13 @@ const SwapInterface: React.FC = () => {
           )}
         </button>
 
-        {(swapStatus || swapResult) && (
+        {(swapStatus || swapResult || ledgerRefreshStatus) && (
           <div className="mt-4 glass-subtle rounded-xl p-4 text-sm">
             {swapStatus && (
               <div className="font-semibold text-gray-900 dark:text-gray-100">{swapStatus}</div>
+            )}
+            {ledgerRefreshStatus && (
+              <div className="text-gray-600 dark:text-gray-300">{ledgerRefreshStatus}</div>
             )}
             {consumePayload && (
               <div className="mt-2 rounded-lg border border-gray-200 dark:border-dark-700 bg-white/70 dark:bg-dark-900/40 p-3">

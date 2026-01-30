@@ -212,6 +212,8 @@ public class LiquidityTiProcessorService {
                                 response.poolCid = request.poolCid;
                                 response.newPoolCid = outcome.newPoolCid;
                                 response.providerParty = picked.providerParty;
+                                response.lpOwnerParty = picked.providerParty;
+                                response.lpOwnerParty = picked.providerParty;
                                 response.tiCidA = a.transfer.contractId();
                                 response.tiCidB = b.transfer.contractId();
                                 response.amountA = amountA.toPlainString();

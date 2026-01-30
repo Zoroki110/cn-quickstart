@@ -522,14 +522,30 @@ const LiquidityInterface: React.FC = () => {
 
         const requestId = `liq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const deadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-        const memoPayload = {
+        const amountForAStr = amountForA.toFixed(10);
+        const amountForBStr = amountForB.toFixed(10);
+        const baseMemo = {
           v: 1,
+          kind: 'addLiquidity',
           requestId,
           poolCid,
-          receiverParty: partyId,
+          receiverParty: OPERATOR_PARTY,
           deadline,
         };
-        const memo = JSON.stringify(memoPayload);
+        const memoA = JSON.stringify({
+          ...baseMemo,
+          leg: 'A',
+          instrumentAdmin: instrumentA.instrumentAdmin,
+          instrumentId: instrumentA.instrumentId,
+          amount: amountForAStr,
+        });
+        const memoB = JSON.stringify({
+          ...baseMemo,
+          leg: 'B',
+          instrumentAdmin: instrumentB.instrumentAdmin,
+          instrumentId: instrumentB.instrumentId,
+          amount: amountForBStr,
+        });
 
         setLiquidityStatus('Submitting inbound transfer A');
         const preparedA = await withLoopRateLimitRetry(
@@ -537,9 +553,9 @@ const LiquidityInterface: React.FC = () => {
           () =>
             prepareLoopTransfer(getLoopProvider(), {
               recipient: OPERATOR_PARTY,
-              amount: amountForA.toFixed(10),
+              amount: amountForAStr,
               instrument: instrumentA,
-              memo,
+              memo: memoA,
               requestedAt: new Date().toISOString(),
               executeBefore: deadline,
             }),
@@ -561,7 +577,7 @@ const LiquidityInterface: React.FC = () => {
             actAs: extractPreparedActAs(preparedA, partyId),
             readAs: extractPreparedReadAs(preparedA, partyId),
             deduplicationKey: `${requestId}-a`,
-            memo,
+            memo: memoA,
             mode: 'LEGACY',
             disclosedContracts: extractPreparedDisclosedContracts(preparedA),
             packageIdSelectionPreference: extractPreparedPackagePreference(preparedA),
@@ -588,9 +604,9 @@ const LiquidityInterface: React.FC = () => {
           () =>
             prepareLoopTransfer(getLoopProvider(), {
               recipient: OPERATOR_PARTY,
-              amount: amountForB.toFixed(10),
+              amount: amountForBStr,
               instrument: instrumentB,
-              memo,
+              memo: memoB,
               requestedAt: new Date().toISOString(),
               executeBefore: deadline,
             }),
@@ -612,7 +628,7 @@ const LiquidityInterface: React.FC = () => {
             actAs: extractPreparedActAs(preparedB, partyId),
             readAs: extractPreparedReadAs(preparedB, partyId),
             deduplicationKey: `${requestId}-b`,
-            memo,
+            memo: memoB,
             mode: 'LEGACY',
             disclosedContracts: extractPreparedDisclosedContracts(preparedB),
             packageIdSelectionPreference: extractPreparedPackagePreference(preparedB),
@@ -627,7 +643,14 @@ const LiquidityInterface: React.FC = () => {
         );
 
         let consumeResult: any = null;
-        if (transferB.ok && transferB.value?.txStatus === 'SUCCEEDED') {
+        if (!transferB.ok) {
+          const cancelled = isUserCancelled(transferB.error);
+          const message = cancelled
+            ? 'Second transfer was cancelled. Liquidity was not submitted.'
+            : 'Inbound transfer B failed';
+          setLiquidityResult({ transferA, transferB, consume: null });
+          toast.error(message);
+        } else if (transferB.value?.txStatus === 'SUCCEEDED') {
           setLiquidityStatus('Consuming liquidity (backend)');
           consumeResult = await backendApi.consumeDevnetLiquidity({ requestId, poolCid });
           if (consumeResult?.ok) {
@@ -1136,6 +1159,21 @@ function isLoopRateLimitError(err: any): boolean {
       ''
   ).toLowerCase();
   return message.includes('429') || message.includes('rate limit');
+}
+
+function isUserCancelled(err: any): boolean {
+  if (!err) {
+    return false;
+  }
+  const code = String(err.code ?? err.name ?? '').toLowerCase();
+  const message = String(err.message ?? '').toLowerCase();
+  return (
+    code.includes('cancel') ||
+    code.includes('reject') ||
+    message.includes('cancel') ||
+    message.includes('rejected') ||
+    message.includes('user rejected')
+  );
 }
 
 function extractRetryAfterMs(err: any): number | null {

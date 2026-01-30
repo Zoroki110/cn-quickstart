@@ -1352,10 +1352,10 @@ export class BackendApiService {
     }
   }
 
-  async inspectDevnetLiquidity(requestId: string): Promise<any> {
+  async inspectDevnetLiquidity(requestId: string, poolCid?: string): Promise<any> {
     try {
       const res = await this.client.get('/api/devnet/liquidity/inspect', {
-        params: { requestId },
+        params: poolCid ? { requestId, poolCid } : { requestId },
       });
       return res.data;
     } catch (error: any) {

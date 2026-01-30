@@ -54,6 +54,10 @@ public class LiquidityTiProcessorService {
 
     @Value("${holdingpool.package-id:}")
     private String holdingPoolPackageId;
+    @Value("${liquidity.consume.wait-ms:15000}")
+    private long consumeWaitMs;
+    @Value("${liquidity.consume.poll-ms:1000}")
+    private long consumePollMs;
 
     public LiquidityTiProcessorService(
             TransferInstructionAcsQueryService tiQueryService,
@@ -94,11 +98,6 @@ public class LiquidityTiProcessorService {
                 ? request.maxAgeSeconds
                 : 7200L;
 
-        Result<List<TransferInstructionWithMemo>, DomainError> pending = tiQueryService.listForReceiverWithMemo(operator);
-        if (pending.isErr()) {
-            return CompletableFuture.completedFuture(Result.err(domainError("Failed to query pending TIs", pending.getErrorUnsafe())));
-        }
-
         return holdingPoolService.getByContractId(request.poolCid)
                 .thenCompose(poolResult -> {
                     if (poolResult.isErr()) {
@@ -112,13 +111,12 @@ public class LiquidityTiProcessorService {
                         return completedError(preconditionError("Pool instruments are missing", Map.of("poolCid", request.poolCid)));
                     }
 
-                    Result<PairSelection, ApiError> selection = selectPair(
-                            pending.getValueUnsafe(),
+                    Result<PairSelection, ApiError> selection = awaitPairSelection(
+                            operator,
                             request.requestId,
                             request.poolCid,
                             pool,
-                            maxAgeSeconds,
-                            operator
+                            maxAgeSeconds
                     );
                     if (selection.isErr()) {
                         return completedError(selection.getErrorUnsafe());
@@ -247,7 +245,7 @@ public class LiquidityTiProcessorService {
     }
 
     @WithSpan
-    public CompletableFuture<Result<LiquidityInspectResponse, ApiError>> inspect(final String requestId) {
+    public CompletableFuture<Result<LiquidityInspectResponse, ApiError>> inspect(final String requestId, final String poolCid) {
         if (requestId == null || requestId.isBlank()) {
             return CompletableFuture.completedFuture(Result.err(validationError("requestId is required", "requestId")));
         }
@@ -260,31 +258,69 @@ public class LiquidityTiProcessorService {
             return CompletableFuture.completedFuture(Result.err(domainError("Failed to query pending TIs", pending.getErrorUnsafe())));
         }
 
-        PairSelection selection = selectPairUnsafe(pending.getValueUnsafe(), requestId, operator);
+        List<Candidate> candidates = candidatesForRequest(pending.getValueUnsafe(), requestId, operator);
         LiquidityInspectResponse response = new LiquidityInspectResponse();
         response.requestId = requestId;
+        response.poolCid = poolCid;
         response.alreadyProcessed = alreadyProcessed;
+        response.foundTis = toInboundTiInfos(candidates);
+        response.foundInstruments = toInstrumentInfos(foundInstrumentKeys(candidates));
 
-        if (selection == null) {
+        String resolvedPoolCid = poolCid;
+        if ((resolvedPoolCid == null || resolvedPoolCid.isBlank()) && !candidates.isEmpty()) {
+            for (Candidate candidate : candidates) {
+                if (candidate.memo != null && candidate.memo.poolCid != null && !candidate.memo.poolCid.isBlank()) {
+                    resolvedPoolCid = candidate.memo.poolCid;
+                    break;
+                }
+            }
+        }
+        response.poolCid = resolvedPoolCid;
+
+        if (resolvedPoolCid == null || resolvedPoolCid.isBlank()) {
             return CompletableFuture.completedFuture(Result.ok(response));
         }
 
-        response.poolCid = selection.poolCid;
-        response.providerParty = selection.providerParty;
-        response.tiCidA = selection.candidateA.transfer.contractId();
-        response.tiCidB = selection.candidateB.transfer.contractId();
-        response.memoRaw = selection.memoRaw;
-        response.deadline = selection.deadline != null ? selection.deadline.toString() : null;
-        response.deadlineExpired = selection.deadline != null && Instant.now().isAfter(selection.deadline);
-
-        if (selection.poolCid == null) {
-            return CompletableFuture.completedFuture(Result.ok(response));
-        }
-
-        return holdingPoolService.getByContractId(selection.poolCid)
+        return holdingPoolService.getByContractId(resolvedPoolCid)
                 .thenApply(poolResult -> {
                     if (poolResult.isOk()) {
-                        response.poolStatus = poolResult.getValueUnsafe().status;
+                        HoldingPoolResponse pool = poolResult.getValueUnsafe();
+                        response.poolStatus = pool.status;
+                        InstrumentKey requiredA = instrumentKey(pool.instrumentA);
+                        InstrumentKey requiredB = instrumentKey(pool.instrumentB);
+                        List<InstrumentKey> required = List.of(requiredA, requiredB);
+                        response.instrumentA = toInstrumentInfo(pool.instrumentA);
+                        response.instrumentB = toInstrumentInfo(pool.instrumentB);
+                        response.requiredInstruments = toInstrumentInfos(required);
+                        response.missingInstruments = toInstrumentInfos(missingInstrumentKeys(required, foundInstrumentKeys(candidates)));
+
+                        Map<InstrumentKey, Candidate> latestByInstrument = latestByInstrument(candidates, required);
+                        Candidate a = latestByInstrument.get(requiredA);
+                        Candidate b = latestByInstrument.get(requiredB);
+                        if (a != null) {
+                            response.tiCidA = a.transfer.contractId();
+                        }
+                        if (b != null) {
+                            response.tiCidB = b.transfer.contractId();
+                        }
+
+                        String senderA = a != null ? a.transfer.sender() : null;
+                        String senderB = b != null ? b.transfer.sender() : null;
+                        if (senderA != null && senderB != null && senderA.equals(senderB)) {
+                            response.providerParty = senderA;
+                        } else if (senderA != null && senderB == null) {
+                            response.providerParty = senderA;
+                        } else if (senderB != null && senderA == null) {
+                            response.providerParty = senderB;
+                        }
+
+                        response.memoRaw = rowMemo(a, b);
+                        Instant deadline = earliestDeadline(
+                                parseDeadline(a != null && a.memo != null ? a.memo.deadline : null),
+                                parseDeadline(b != null && b.memo != null ? b.memo.deadline : null)
+                        );
+                        response.deadline = deadline != null ? deadline.toString() : null;
+                        response.deadlineExpired = deadline != null && Instant.now().isAfter(deadline);
                     } else {
                         response.poolStatus = "unknown";
                     }
@@ -301,47 +337,52 @@ public class LiquidityTiProcessorService {
             String operator
     ) {
         List<Candidate> candidates = candidatesForRequest(items, requestId, operator);
-        if (candidates.isEmpty()) {
-            return Result.err(ApiError.of(ErrorCode.NOT_FOUND, "No inbound TIs found for requestId"));
+        InstrumentKey requiredA = instrumentKey(pool.instrumentA);
+        InstrumentKey requiredB = instrumentKey(pool.instrumentB);
+        List<InstrumentKey> required = List.of(requiredA, requiredB);
+        if (requiredA == null || requiredB == null) {
+            return Result.err(preconditionError("Pool instruments are missing", Map.of("poolCid", poolCid)));
         }
-        Candidate a = candidates.stream()
-                .filter(c -> matchesInstrument(c.transfer, pool.instrumentA))
-                .max(Comparator.comparing(c -> c.transfer.executeBefore()))
-                .orElse(null);
-        Candidate b = candidates.stream()
-                .filter(c -> matchesInstrument(c.transfer, pool.instrumentB))
-                .max(Comparator.comparing(c -> c.transfer.executeBefore()))
-                .orElse(null);
+        if (candidates.isEmpty()) {
+            return Result.err(missingInboundTisError(requestId, poolCid, required, candidates));
+        }
+        Map<InstrumentKey, Candidate> latestByInstrument = latestByInstrument(candidates, required);
+        Candidate a = latestByInstrument.get(requiredA);
+        Candidate b = latestByInstrument.get(requiredB);
         if (a == null || b == null) {
-            return Result.err(preconditionError("Missing inbound TIs for pool instruments",
-                    Map.of("instrumentA", pool.instrumentA.id, "instrumentB", pool.instrumentB.id)));
+            return Result.err(missingInboundTisError(requestId, poolCid, required, candidates));
         }
         if (a.transfer.contractId().equals(b.transfer.contractId())) {
             return Result.err(preconditionError("TIs must be distinct", Map.of("tiCid", a.transfer.contractId())));
         }
 
-        LiquidityMemo memo = a.memo != null ? a.memo : b.memo;
-        if (memo == null || memo.poolCid == null || memo.poolCid.isBlank()) {
-            return Result.err(validationError("memo.poolCid is required", "poolCid"));
+        Result<LiquidityMemo, ApiError> memoValidation = validateMemoPool(a, b, poolCid);
+        if (memoValidation.isErr()) {
+            return Result.err(memoValidation.getErrorUnsafe());
         }
-        if (!memo.poolCid.equals(poolCid)) {
-            return Result.err(preconditionError("memo.poolCid does not match request", Map.of("memoPoolCid", memo.poolCid, "requestPoolCid", poolCid)));
+        LiquidityMemo memo = memoValidation.getValueUnsafe();
+
+        String senderA = a.transfer.sender();
+        String senderB = b.transfer.sender();
+        if (senderA != null && senderB != null && !senderA.equals(senderB)) {
+            return Result.err(preconditionError("Inbound TIs have different senders",
+                    Map.of("senderA", senderA, "senderB", senderB)));
         }
-        String provider = memo.receiverParty;
+        String provider = senderA != null ? senderA : senderB;
         if (provider == null || provider.isBlank()) {
-            return Result.err(validationError("memo.receiverParty is required", "receiverParty"));
-        }
-        if (a.memo != null && a.memo.receiverParty != null && !provider.equals(a.memo.receiverParty)) {
-            return Result.err(preconditionError("receiverParty mismatch across TIs", Map.of("tiCidA", a.transfer.contractId())));
-        }
-        if (b.memo != null && b.memo.receiverParty != null && !provider.equals(b.memo.receiverParty)) {
-            return Result.err(preconditionError("receiverParty mismatch across TIs", Map.of("tiCidB", b.transfer.contractId())));
+            return Result.err(preconditionError("Unable to determine provider party from TIs",
+                    Map.of("tiCidA", a.transfer.contractId(), "tiCidB", b.transfer.contractId())));
         }
 
-        Instant deadline = parseDeadline(memo.deadline);
+        Instant deadlineA = parseDeadline(a.memo != null ? a.memo.deadline : null);
+        Instant deadlineB = parseDeadline(b.memo != null ? b.memo.deadline : null);
+        Instant deadline = earliestDeadline(deadlineA, deadlineB);
         Instant now = Instant.now();
-        if (deadline == null || now.isAfter(deadline)) {
-            return Result.err(preconditionError("Liquidity deadline has expired", Map.of("deadline", memo.deadline)));
+        if (deadline == null) {
+            return Result.err(validationError("memo.deadline is required", "deadline"));
+        }
+        if (now.isAfter(deadline)) {
+            return Result.err(preconditionError("Liquidity deadline has expired", Map.of("deadline", deadline.toString())));
         }
         Instant cutoff = now.minusSeconds(maxAgeSeconds);
         if (a.transfer.executeBefore() != null && a.transfer.executeBefore().isBefore(cutoff)) {
@@ -352,12 +393,12 @@ public class LiquidityTiProcessorService {
         }
 
         if (a.transfer.sender() != null && !provider.equals(a.transfer.sender())) {
-            return Result.err(preconditionError("TI A sender does not match receiverParty",
-                    Map.of("tiCidA", a.transfer.contractId(), "sender", a.transfer.sender(), "receiverParty", provider)));
+            return Result.err(preconditionError("TI A sender does not match provider",
+                    Map.of("tiCidA", a.transfer.contractId(), "sender", a.transfer.sender(), "provider", provider)));
         }
         if (b.transfer.sender() != null && !provider.equals(b.transfer.sender())) {
-            return Result.err(preconditionError("TI B sender does not match receiverParty",
-                    Map.of("tiCidB", b.transfer.contractId(), "sender", b.transfer.sender(), "receiverParty", provider)));
+            return Result.err(preconditionError("TI B sender does not match provider",
+                    Map.of("tiCidB", b.transfer.contractId(), "sender", b.transfer.sender(), "provider", provider)));
         }
         if (a.transfer.receiver() != null && !operator.equals(a.transfer.receiver())) {
             return Result.err(preconditionError("TI A receiver is not operator",
@@ -394,48 +435,6 @@ public class LiquidityTiProcessorService {
         return Result.ok(selection);
     }
 
-    private PairSelection selectPairUnsafe(
-            List<TransferInstructionWithMemo> items,
-            String requestId,
-            String operator
-    ) {
-        List<Candidate> candidates = candidatesForRequest(items, requestId, operator);
-        if (candidates.isEmpty()) {
-            return null;
-        }
-
-        Optional<Candidate> newest = candidates.stream()
-                .max(Comparator.comparing(c -> c.transfer.executeBefore()));
-        if (newest.isEmpty()) {
-            return null;
-        }
-
-        LiquidityMemo memo = newest.get().memo;
-        String provider = memo.receiverParty;
-        if (provider == null || provider.isBlank()) {
-            return null;
-        }
-
-        Candidate a = candidates.stream()
-                .filter(c -> provider.equals(c.transfer.sender()))
-                .filter(c -> c.memo != null && provider.equals(c.memo.receiverParty))
-                .max(Comparator.comparing(c -> c.transfer.executeBefore()))
-                .orElse(null);
-        Candidate b = candidates.stream()
-                .filter(c -> provider.equals(c.transfer.sender()))
-                .filter(c -> c.memo != null && provider.equals(c.memo.receiverParty))
-                .filter(c -> !c.transfer.contractId().equals(a != null ? a.transfer.contractId() : ""))
-                .max(Comparator.comparing(c -> c.transfer.executeBefore()))
-                .orElse(null);
-
-        if (a == null || b == null) {
-            return null;
-        }
-
-        Instant deadline = parseDeadline(memo.deadline);
-        return new PairSelection(a, b, memo.poolCid, memo, deadline, provider, rowMemo(a, b));
-    }
-
     private List<Candidate> candidatesForRequest(
             List<TransferInstructionWithMemo> items,
             String requestId,
@@ -449,15 +448,94 @@ public class LiquidityTiProcessorService {
             LiquidityMemo memo = parseMemo(row.memo());
             if (memo == null || memo.requestId == null) continue;
             if (!requestId.equals(memo.requestId)) continue;
+            if (memo.kind == null || !"addLiquidity".equalsIgnoreCase(memo.kind)) continue;
             candidates.add(new Candidate(ti, memo, row.memo()));
         }
         return candidates;
+    }
+
+    private Result<PairSelection, ApiError> awaitPairSelection(
+            String operator,
+            String requestId,
+            String poolCid,
+            HoldingPoolResponse pool,
+            long maxAgeSeconds
+    ) {
+        long waitMs = consumeWaitMs;
+        long pollMs = consumePollMs <= 0 ? 1000L : consumePollMs;
+        long deadlineMs = System.currentTimeMillis() + Math.max(waitMs, 0L);
+        int attempts = 0;
+        ApiError lastMissing = null;
+        while (true) {
+            attempts += 1;
+            Result<List<TransferInstructionWithMemo>, DomainError> pending = tiQueryService.listForReceiverWithMemo(operator);
+            if (pending.isErr()) {
+                return Result.err(domainError("Failed to query pending TIs", pending.getErrorUnsafe()));
+            }
+            Result<PairSelection, ApiError> selection = selectPair(
+                    pending.getValueUnsafe(),
+                    requestId,
+                    poolCid,
+                    pool,
+                    maxAgeSeconds,
+                    operator
+            );
+            if (selection.isOk()) {
+                if (attempts > 1) {
+                    LOG.info("[LiquidityConsume] Found inbound TIs after {} attempts for requestId={}", attempts, requestId);
+                }
+                return selection;
+            }
+            ApiError error = selection.getErrorUnsafe();
+            if (error.code == ErrorCode.MISSING_INBOUND_TIS_FOR_POOL_INSTRUMENT) {
+                lastMissing = error;
+            } else {
+                return selection;
+            }
+            if (waitMs <= 0 || System.currentTimeMillis() >= deadlineMs) {
+                return Result.err(lastMissing != null ? lastMissing : error);
+            }
+            long sleepMs = Math.min(pollMs, Math.max(0L, deadlineMs - System.currentTimeMillis()));
+            if (sleepMs <= 0) {
+                return Result.err(lastMissing != null ? lastMissing : error);
+            }
+            try {
+                Thread.sleep(sleepMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return Result.err(lastMissing != null ? lastMissing : error);
+            }
+        }
     }
 
     private String rowMemo(Candidate a, Candidate b) {
         if (a != null && a.memoRaw != null && !a.memoRaw.isBlank()) return a.memoRaw;
         if (b != null) return b.memoRaw;
         return null;
+    }
+
+    private Result<LiquidityMemo, ApiError> validateMemoPool(Candidate a, Candidate b, String poolCid) {
+        LiquidityMemo memoA = a != null ? a.memo : null;
+        LiquidityMemo memoB = b != null ? b.memo : null;
+        if (memoA == null || memoA.poolCid == null || memoA.poolCid.isBlank()) {
+            return Result.err(validationError("memo.poolCid is required", "poolCid"));
+        }
+        if (memoB == null || memoB.poolCid == null || memoB.poolCid.isBlank()) {
+            return Result.err(validationError("memo.poolCid is required", "poolCid"));
+        }
+        if (!poolCid.equals(memoA.poolCid) || !poolCid.equals(memoB.poolCid)) {
+            return Result.err(preconditionError(
+                    "memo.poolCid does not match request",
+                    Map.of("memoPoolCidA", memoA.poolCid, "memoPoolCidB", memoB.poolCid, "requestPoolCid", poolCid)
+            ));
+        }
+        return Result.ok(memoA);
+    }
+
+    private Instant earliestDeadline(Instant a, Instant b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return a.isBefore(b) ? a : b;
     }
 
     private LiquidityMemo parseMemo(String memoRaw) {
@@ -483,12 +561,184 @@ public class LiquidityTiProcessorService {
         }
     }
 
-    private boolean matchesInstrument(TransferInstructionDto ti, HoldingPoolCreateRequest.InstrumentRef expected) {
-        return expected != null
-                && expected.admin != null
-                && expected.id != null
-                && expected.admin.equals(ti.admin())
-                && expected.id.equals(ti.instrumentId());
+    private String normalizeAdmin(String admin) {
+        if (admin == null) return null;
+        String trimmed = admin.trim();
+        return trimmed.isBlank() ? null : trimmed;
+    }
+
+    private String normalizeInstrumentId(String id) {
+        if (id == null) return null;
+        String trimmed = id.trim();
+        if (trimmed.isBlank()) return null;
+        if ("AMULET".equalsIgnoreCase(trimmed) || "CC".equalsIgnoreCase(trimmed)) {
+            return "CC";
+        }
+        return trimmed.toUpperCase();
+    }
+
+    private InstrumentKey instrumentKey(HoldingPoolCreateRequest.InstrumentRef ref) {
+        if (ref == null) return null;
+        String admin = normalizeAdmin(ref.admin);
+        String id = normalizeInstrumentId(ref.id);
+        if (admin == null || id == null) return null;
+        return new InstrumentKey(admin, id);
+    }
+
+    private InstrumentKey instrumentKey(Candidate candidate) {
+        if (candidate == null) return null;
+        LiquidityMemo memo = candidate.memo;
+        String admin = firstNonBlank(
+                normalizeAdmin(memo != null ? memo.instrumentAdmin : null),
+                normalizeAdmin(candidate.transfer.admin())
+        );
+        String id = firstNonBlank(
+                normalizeInstrumentId(memo != null ? memo.instrumentId : null),
+                normalizeInstrumentId(candidate.transfer.instrumentId())
+        );
+        if (admin == null || id == null) return null;
+        return new InstrumentKey(admin, id);
+    }
+
+    private Map<InstrumentKey, Candidate> latestByInstrument(List<Candidate> candidates, List<InstrumentKey> required) {
+        Map<InstrumentKey, Candidate> latest = new LinkedHashMap<>();
+        if (candidates == null) return latest;
+        for (Candidate c : candidates) {
+            InstrumentKey key = instrumentKey(c);
+            if (key == null) continue;
+            if (required != null && !required.contains(key)) continue;
+            Candidate existing = latest.get(key);
+            if (existing == null) {
+                latest.put(key, c);
+                continue;
+            }
+            Instant existingTime = existing.transfer.executeBefore();
+            Instant currentTime = c.transfer.executeBefore();
+            if (existingTime == null || (currentTime != null && currentTime.isAfter(existingTime))) {
+                latest.put(key, c);
+            }
+        }
+        return latest;
+    }
+
+    private List<InstrumentKey> foundInstrumentKeys(List<Candidate> candidates) {
+        List<InstrumentKey> keys = new ArrayList<>();
+        if (candidates == null) return keys;
+        for (Candidate c : candidates) {
+            InstrumentKey key = instrumentKey(c);
+            if (key != null && !keys.contains(key)) {
+                keys.add(key);
+            }
+        }
+        return keys;
+    }
+
+    private ApiError missingInboundTisError(
+            String requestId,
+            String poolCid,
+            List<InstrumentKey> required,
+            List<Candidate> candidates
+    ) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("requestId", requestId);
+        details.put("poolCid", poolCid);
+        details.put("requiredInstruments", instrumentKeyDetails(required));
+        details.put("foundInstruments", instrumentKeyDetails(foundInstrumentKeys(candidates)));
+        details.put("foundTis", foundTiDetails(candidates));
+        return new ApiError(
+                ErrorCode.MISSING_INBOUND_TIS_FOR_POOL_INSTRUMENT,
+                "Missing inbound TIs for pool instruments",
+                details,
+                false,
+                null,
+                null
+        );
+    }
+
+    private List<Map<String, Object>> instrumentKeyDetails(List<InstrumentKey> keys) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (keys == null) return out;
+        for (InstrumentKey key : keys) {
+            if (key == null) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("admin", key.admin());
+            row.put("id", key.id());
+            out.add(row);
+        }
+        return out;
+    }
+
+    private List<Map<String, Object>> foundTiDetails(List<Candidate> candidates) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (candidates == null) return out;
+        for (Candidate c : candidates) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("tiCid", c.transfer.contractId());
+            row.put("admin", c.transfer.admin());
+            row.put("instrumentId", c.transfer.instrumentId());
+            row.put("normalizedId", normalizeInstrumentId(c.transfer.instrumentId()));
+            row.put("sender", c.transfer.sender());
+            row.put("receiver", c.transfer.receiver());
+            row.put("executeBefore", c.transfer.executeBefore() != null ? c.transfer.executeBefore().toString() : null);
+            row.put("memoInstrumentAdmin", c.memo != null ? c.memo.instrumentAdmin : null);
+            row.put("memoInstrumentId", c.memo != null ? c.memo.instrumentId : null);
+            row.put("memoLeg", c.memo != null ? c.memo.leg : null);
+            row.put("memoAmount", c.memo != null ? c.memo.amount : null);
+            row.put("memoRaw", c.memoRaw);
+            out.add(row);
+        }
+        return out;
+    }
+
+    private List<LiquidityInspectResponse.InstrumentInfo> toInstrumentInfos(List<InstrumentKey> keys) {
+        List<LiquidityInspectResponse.InstrumentInfo> out = new ArrayList<>();
+        if (keys == null) return out;
+        for (InstrumentKey key : keys) {
+            if (key == null) continue;
+            out.add(new LiquidityInspectResponse.InstrumentInfo(key.admin(), key.id(), normalizeInstrumentId(key.id())));
+        }
+        return out;
+    }
+
+    private LiquidityInspectResponse.InstrumentInfo toInstrumentInfo(HoldingPoolCreateRequest.InstrumentRef ref) {
+        if (ref == null) {
+            return null;
+        }
+        return new LiquidityInspectResponse.InstrumentInfo(ref.admin, ref.id, normalizeInstrumentId(ref.id));
+    }
+
+    private List<InstrumentKey> missingInstrumentKeys(List<InstrumentKey> required, List<InstrumentKey> found) {
+        List<InstrumentKey> missing = new ArrayList<>();
+        if (required == null) return missing;
+        for (InstrumentKey key : required) {
+            if (key == null) continue;
+            if (found == null || !found.contains(key)) {
+                missing.add(key);
+            }
+        }
+        return missing;
+    }
+
+    private List<LiquidityInspectResponse.InboundTiInfo> toInboundTiInfos(List<Candidate> candidates) {
+        List<LiquidityInspectResponse.InboundTiInfo> out = new ArrayList<>();
+        if (candidates == null) return out;
+        for (Candidate c : candidates) {
+            LiquidityInspectResponse.InboundTiInfo row = new LiquidityInspectResponse.InboundTiInfo();
+            row.tiCid = c.transfer.contractId();
+            row.admin = c.transfer.admin();
+            row.instrumentId = c.transfer.instrumentId();
+            row.normalizedId = normalizeInstrumentId(c.transfer.instrumentId());
+            row.memoInstrumentAdmin = c.memo != null ? c.memo.instrumentAdmin : null;
+            row.memoInstrumentId = c.memo != null ? c.memo.instrumentId : null;
+            row.memoLeg = c.memo != null ? c.memo.leg : null;
+            row.memoAmount = c.memo != null ? c.memo.amount : null;
+            row.sender = c.transfer.sender();
+            row.receiver = c.transfer.receiver();
+            row.executeBefore = c.transfer.executeBefore() != null ? c.transfer.executeBefore().toString() : null;
+            row.memoRaw = c.memoRaw;
+            out.add(row);
+        }
+        return out;
     }
 
     private BigDecimal normalizeAmount(String value) {
@@ -685,6 +935,8 @@ public class LiquidityTiProcessorService {
 
     private record Candidate(TransferInstructionDto transfer, LiquidityMemo memo, String memoRaw) {}
 
+    private record InstrumentKey(String admin, String id) {}
+
     private static final class PairSelection {
         private final Candidate candidateA;
         private final Candidate candidateB;
@@ -718,8 +970,13 @@ public class LiquidityTiProcessorService {
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static final class LiquidityMemo {
         public int v;
+        public String kind;
         public String requestId;
         public String poolCid;
+        public String leg;
+        public String instrumentAdmin;
+        public String instrumentId;
+        public String amount;
         public String receiverParty;
         public String deadline;
     }

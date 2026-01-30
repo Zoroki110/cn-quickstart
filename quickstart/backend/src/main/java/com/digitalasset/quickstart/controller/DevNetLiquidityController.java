@@ -55,11 +55,12 @@ public class DevNetLiquidityController {
     }
 
     /**
-     * GET /api/devnet/liquidity/inspect?requestId=...
+     * GET /api/devnet/liquidity/inspect?requestId=...&poolCid=...
      */
     @GetMapping("/inspect")
     public java.util.concurrent.CompletableFuture<ResponseEntity<ApiResponse<LiquidityInspectResponse>>> inspect(
             @RequestParam("requestId") String requestId,
+            @RequestParam(value = "poolCid", required = false) String poolCid,
             HttpServletRequest httpRequest
     ) {
         if (requestId == null || requestId.isBlank()) {
@@ -69,8 +70,8 @@ public class DevNetLiquidityController {
         if (httpRequest != null) {
             httpRequest.setAttribute("requestId", requestId);
         }
-        logger.info("[DevNetLiquidity] GET /liquidity/inspect requestId={}", requestId);
-        return liquidityService.inspect(requestId)
+        logger.info("[DevNetLiquidity] GET /liquidity/inspect requestId={} poolCid={}", requestId, poolCid);
+        return liquidityService.inspect(requestId, poolCid)
                 .thenApply(result -> respond(requestId, result));
     }
 

@@ -274,7 +274,11 @@ const LiquidityInterface: React.FC = () => {
     if (!poolCid) return 'Unknown pool';
     const match = rawPools.find(p => p.contractId === poolCid || p.poolId === poolCid);
     if (!match) {
-      return poolCid;
+      const trimmed = poolCid.trim();
+      if (trimmed.length <= 16) {
+        return trimmed;
+      }
+      return `${trimmed.slice(0, 8)}…${trimmed.slice(-4)}`;
     }
     return `${match.tokenA.symbol}/${match.tokenB.symbol}`;
   }, [rawPools]);
@@ -1139,17 +1143,17 @@ const LiquidityInterface: React.FC = () => {
               </div>
             )}
             {lpPositions.map(position => (
-              <div key={`${position.poolCid}-${position.lpBalance}`} className="flex items-center justify-between glass-subtle rounded-xl p-3">
-                <div>
-                  <div className="font-semibold text-gray-900 dark:text-gray-100">
+              <div key={`${position.poolCid}-${position.lpBalance}`} className="flex items-center justify-between gap-3 glass-subtle rounded-xl p-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-gray-900 dark:text-gray-100 truncate">
                     {resolvePoolLabel(position.poolCid)}
                   </div>
-                  <div className="body-small text-gray-600 dark:text-gray-400">
-                    LP Balance: {formatLpBalance(position.lpBalance)} • Share: {formatShareBps(position.shareBps)}
+                  <div className="body-small text-gray-600 dark:text-gray-400 truncate">
+                    LP Balance: {formatLpBalance(position.lpBalance)}
                   </div>
                 </div>
                 {position.updatedAt && (
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     Updated {new Date(position.updatedAt).toLocaleTimeString('en-US')}
                   </div>
                 )}

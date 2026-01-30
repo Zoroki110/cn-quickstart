@@ -10,6 +10,7 @@ export type LoopBalanceMap = Record<string, LoopBalance>;
 
 type UseLoopBalancesOptions = {
   refreshIntervalMs?: number;
+  paused?: boolean;
 };
 
 type UseLoopBalancesResult = {
@@ -26,12 +27,15 @@ export function useLoopBalances(
   walletType: string | null | undefined,
   options: UseLoopBalancesOptions = {}
 ): UseLoopBalancesResult {
-  const { refreshIntervalMs = 15000 } = options;
+  const { refreshIntervalMs = 15000, paused = false } = options;
   const [balances, setBalances] = useState<LoopBalanceMap>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const fetchBalances = useCallback(async () => {
+  const fetchBalances = useCallback(async (force = false) => {
+    if (paused && !force) {
+      return;
+    }
     if (!partyId || walletType !== "loop") {
       setBalances({});
       setError(null);
@@ -75,14 +79,17 @@ export function useLoopBalances(
     } finally {
       setLoading(false);
     }
-  }, [partyId, walletType]);
+  }, [partyId, walletType, paused]);
 
   useEffect(() => {
+    if (paused) {
+      return;
+    }
     fetchBalances();
-  }, [fetchBalances]);
+  }, [fetchBalances, paused]);
 
   useEffect(() => {
-    if (!partyId || walletType !== "loop" || refreshIntervalMs <= 0) {
+    if (paused || !partyId || walletType !== "loop" || refreshIntervalMs <= 0) {
       return;
     }
     const interval = window.setInterval(() => {
@@ -95,6 +102,9 @@ export function useLoopBalances(
 
   useEffect(() => {
     if (typeof window === "undefined") {
+      return;
+    }
+    if (paused) {
       return;
     }
     const handleWalletConnected = () => {
@@ -110,7 +120,7 @@ export function useLoopBalances(
     balances,
     loading,
     error,
-    reload: fetchBalances,
+    reload: () => fetchBalances(true),
   };
 }
 

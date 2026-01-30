@@ -25,13 +25,6 @@ const LiquidityInterface: React.FC = () => {
   const { pools, setPools } = useAppStore();
   const { partyId, walletType } = useWalletAuth();
   const partyForBackend = walletType === 'loop' ? null : partyId || null;
-  const { balances: loopBalances, reload: reloadLoopBalances } = useLoopBalances(partyId || null, walletType, {
-    refreshIntervalMs: 15000,
-  });
-  const { balances: utxoBalances, reload: reloadUtxoBalances } = useUtxoBalances(partyForBackend, {
-    ownerOnly: true,
-    refreshIntervalMs: 15000,
-  });
 
   const [mode, setMode] = useState<'add' | 'remove'>('add');
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
@@ -43,11 +36,20 @@ const LiquidityInterface: React.FC = () => {
   const [amountA, setAmountA] = useState('');
   const [amountB, setAmountB] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isSubmittingLiquidity, setIsSubmittingLiquidity] = useState(false);
   const [calculating, setCalculating] = useState(false);
   const [liquidityResult, setLiquidityResult] = useState<any>(null);
   const [liquidityStatus, setLiquidityStatus] = useState<string | null>(null);
   const [rawPools, setRawPools] = useState<PoolInfo[]>([]);
   const loopRequestStateRef = useRef({ lastCallAt: 0 });
+  const { balances: loopBalances, reload: reloadLoopBalances } = useLoopBalances(partyId || null, walletType, {
+    refreshIntervalMs: 15000,
+    paused: walletType === 'loop' && isSubmittingLiquidity,
+  });
+  const { balances: utxoBalances, reload: reloadUtxoBalances } = useUtxoBalances(partyForBackend, {
+    ownerOnly: true,
+    refreshIntervalMs: 15000,
+  });
   const LP_BASELINES_STORAGE_KEY = 'clearportx:lp-baselines:v1';
   const [lpBaselines, setLpBaselines] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') {
@@ -496,6 +498,7 @@ const LiquidityInterface: React.FC = () => {
         })();
         toast.success(`Liquidity added! LP tokens: ${toastAmount}`);
       } else {
+        setIsSubmittingLiquidity(true);
         const connector = walletManager.getOrCreateLoopConnector();
         const status = await connector.ensureConnected(`liquidity-${Date.now()}`);
         if (!status.connected || !getLoopProvider()) {
@@ -682,6 +685,7 @@ const LiquidityInterface: React.FC = () => {
         toast.error('An error occurred while adding liquidity');
       }
     } finally {
+      setIsSubmittingLiquidity(false);
       setLoading(false);
     }
   };

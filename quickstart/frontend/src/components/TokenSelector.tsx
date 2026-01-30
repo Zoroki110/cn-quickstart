@@ -16,7 +16,6 @@ interface TokenSelectorProps {
   selectedToken: TokenInfo | null;
   type: 'from' | 'to';
   balances?: Record<string, BalanceEntry>;
-  isRefreshing?: boolean;
 }
 
 const TokenSelector: React.FC<TokenSelectorProps> = ({
@@ -27,7 +26,6 @@ const TokenSelector: React.FC<TokenSelectorProps> = ({
   selectedToken,
   type,
   balances,
-  isRefreshing,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -91,9 +89,6 @@ const TokenSelector: React.FC<TokenSelectorProps> = ({
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                   Select a token
                 </h3>
-                {isRefreshing && (
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Updating…</div>
-                )}
               </div>
               <button
                 onClick={onClose}

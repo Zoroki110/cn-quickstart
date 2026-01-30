@@ -9,12 +9,6 @@ import { useLoopBalances, useUtxoBalances } from '../hooks';
 import TokenSelector from './TokenSelector';
 import { submitTx } from '../loop/submitTx';
 import { getLoopProvider } from '../loop/loopProvider';
-import {
-  balancesKeyFromMap,
-  lpKeyFromPositions,
-  poolKeyFromPools,
-  refreshLedgerState,
-} from '../utils/refreshLedgerState';
 
 const OPERATOR_PARTY =
   process.env.REACT_APP_OPERATOR_PARTY ||
@@ -43,17 +37,13 @@ const LiquidityInterface: React.FC = () => {
   const [calculating, setCalculating] = useState(false);
   const [liquidityResult, setLiquidityResult] = useState<any>(null);
   const [liquidityStatus, setLiquidityStatus] = useState<string | null>(null);
-  const [ledgerRefreshStatus, setLedgerRefreshStatus] = useState<string | null>(null);
   const [rawPools, setRawPools] = useState<PoolInfo[]>([]);
   const loopRequestStateRef = useRef({ lastCallAt: 0 });
-  const balancesSnapshotRef = useRef('');
-  const poolSnapshotRef = useRef('');
-  const lpSnapshotRef = useRef('');
-  const { balances: loopBalances, reload: reloadLoopBalances, isRefreshing: loopRefreshing } = useLoopBalances(partyId || null, walletType, {
+  const { balances: loopBalances, reload: reloadLoopBalances } = useLoopBalances(partyId || null, walletType, {
     refreshIntervalMs: 15000,
     paused: walletType === 'loop' && isSubmittingLiquidity,
   });
-  const { balances: utxoBalances, reload: reloadUtxoBalances, isRefreshing: utxoRefreshing } = useUtxoBalances(partyForBackend, {
+  const { balances: utxoBalances, reload: reloadUtxoBalances } = useUtxoBalances(partyForBackend, {
     ownerOnly: true,
     refreshIntervalMs: 15000,
   });
@@ -244,33 +234,6 @@ const LiquidityInterface: React.FC = () => {
     return map;
   }, [walletType, loopBalances, utxoBalances]);
 
-  const balancesRefreshing = walletType === 'loop' ? loopRefreshing : utxoRefreshing;
-
-  useEffect(() => {
-    balancesSnapshotRef.current = balancesKeyFromMap(balancesBySymbol);
-  }, [balancesBySymbol]);
-
-  const poolSnapshotKey = useMemo(() => {
-    if (!rawPools.length || !selectedTokenA || !selectedTokenB) {
-      return '';
-    }
-    const match = rawPools.find(p =>
-      (p.tokenA.symbol === selectedTokenA.symbol && p.tokenB.symbol === selectedTokenB.symbol) ||
-      (p.tokenA.symbol === selectedTokenB.symbol && p.tokenB.symbol === selectedTokenA.symbol)
-    );
-    if (!match) {
-      return '';
-    }
-    return poolKeyFromPools(rawPools, match.contractId || match.poolId);
-  }, [rawPools, selectedTokenA, selectedTokenB]);
-
-  useEffect(() => {
-    poolSnapshotRef.current = poolSnapshotKey;
-  }, [poolSnapshotKey]);
-
-  useEffect(() => {
-    lpSnapshotRef.current = lpKeyFromPositions(lpPositions);
-  }, [lpPositions]);
 
   const getBalanceEntry = useCallback((symbol?: string) => {
     if (!symbol) {
@@ -323,32 +286,6 @@ const LiquidityInterface: React.FC = () => {
     }
     await reloadUtxoBalances();
   }, [walletType, reloadLoopBalances, reloadUtxoBalances]);
-
-  const refreshLedger = useCallback(async (label: string, poolCid?: string | null) => {
-    if (!partyId) return;
-    await refreshLedgerState({
-      label,
-      getSnapshot: () => ({
-        balancesKey: balancesSnapshotRef.current,
-        poolKey: poolSnapshotRef.current,
-        lpKey: lpSnapshotRef.current,
-      }),
-      fetchSnapshot: async () => {
-        await reloadBalances();
-        const latestPools = await backendApi.getPools();
-        setRawPools(latestPools);
-        const latestPositions = await backendApi.getLpPositions(partyId, poolCid || undefined);
-        setLpPositions(latestPositions);
-        console.log('[lpPositions] loaded', { count: latestPositions.length, first: latestPositions[0] });
-        return {
-          balancesKey: balancesSnapshotRef.current,
-          poolKey: poolKeyFromPools(latestPools, poolCid ?? undefined),
-          lpKey: lpKeyFromPositions(latestPositions, poolCid ?? undefined),
-        };
-      },
-      onStatus: setLedgerRefreshStatus,
-    });
-  }, [partyId, reloadBalances]);
 
   const waitForLoopCooldown = useCallback(
     async (label: string, minGapMs: number = LOOP_MIN_GAP_MS) => {
@@ -608,7 +545,6 @@ const LiquidityInterface: React.FC = () => {
           return estimatedLPTokens.toFixed(4);
         })();
         toast.success(`Liquidity added! LP tokens: ${toastAmount}`);
-        await refreshLedger('liquidity', poolCid);
       } else {
         setIsSubmittingLiquidity(true);
         const connector = walletManager.getOrCreateLoopConnector();
@@ -800,7 +736,6 @@ const LiquidityInterface: React.FC = () => {
                 detail: { source: 'liquidity:add', requestId },
               }));
             }
-            await refreshLedger('liquidity', poolCid);
           } else {
             if (consumeResult?.error?.code === 'MISSING_INBOUND_TIS_FOR_POOL_INSTRUMENT') {
               try {
@@ -940,7 +875,6 @@ const LiquidityInterface: React.FC = () => {
                 <span className="body-small">Token A</span>
                 <span className="body-small">
                   Balance: {formatBalanceDisplay(selectedTokenA?.symbol)}
-                  {balancesRefreshing && <span className="ml-2 text-xs text-gray-500">Updating...</span>}
                 </span>
               </div>
 
@@ -984,7 +918,6 @@ const LiquidityInterface: React.FC = () => {
                 <span className="body-small">Token B</span>
                 <span className="body-small">
                   Balance: {formatBalanceDisplay(selectedTokenB?.symbol)}
-                  {balancesRefreshing && <span className="ml-2 text-xs text-gray-500">Updating...</span>}
                 </span>
               </div>
 
@@ -1103,11 +1036,6 @@ const LiquidityInterface: React.FC = () => {
             {liquidityStatus && (
               <div className="mt-4 text-sm text-gray-600 dark:text-gray-300">
                 {liquidityStatus}
-              </div>
-            )}
-            {ledgerRefreshStatus && (
-              <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                {ledgerRefreshStatus}
               </div>
             )}
 

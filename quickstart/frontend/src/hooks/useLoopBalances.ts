@@ -16,7 +16,6 @@ type UseLoopBalancesOptions = {
 type UseLoopBalancesResult = {
   balances: LoopBalanceMap;
   loading: boolean;
-  isRefreshing: boolean;
   error: Error | null;
   reload: () => Promise<void>;
 };
@@ -31,9 +30,7 @@ export function useLoopBalances(
   const { refreshIntervalMs = 15000, paused = false } = options;
   const [balances, setBalances] = useState<LoopBalanceMap>({});
   const [loading, setLoading] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const hasBalances = Object.keys(balances).length > 0;
 
   const fetchBalances = useCallback(async (force = false) => {
     if (paused && !force) {
@@ -43,24 +40,20 @@ export function useLoopBalances(
       setBalances({});
       setError(null);
       setLoading(false);
-      setIsRefreshing(false);
       return;
     }
 
     const connector = walletManager.getOrCreateLoopConnector();
     const status = await connector.checkConnected();
     if (!status.connected) {
+      setBalances({});
       setError(null);
       setLoading(false);
-      setIsRefreshing(false);
       return;
     }
 
-    setIsRefreshing(true);
-    if (!hasBalances) {
-      setLoading(true);
-    }
     try {
+      setLoading(true);
       const rawHoldings = await connector.getHoldings();
       const rows = Array.isArray(rawHoldings) ? rawHoldings : [];
       const map = rows.reduce((acc: LoopBalanceMap, row: any) => {
@@ -82,11 +75,11 @@ export function useLoopBalances(
     } catch (err) {
       console.warn("Failed to load Loop balances", err);
       setError(err instanceof Error ? err : new Error("Failed to load Loop balances"));
+      setBalances({});
     } finally {
       setLoading(false);
-      setIsRefreshing(false);
     }
-  }, [partyId, walletType, paused, hasBalances]);
+  }, [partyId, walletType, paused]);
 
   useEffect(() => {
     if (paused) {
@@ -126,7 +119,6 @@ export function useLoopBalances(
   return {
     balances,
     loading,
-    isRefreshing,
     error,
     reload: () => fetchBalances(true),
   };

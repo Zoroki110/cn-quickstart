@@ -821,6 +821,12 @@ const LiquidityInterface: React.FC = () => {
     ? (estimatedLPTokens / (existingPool.totalLiquidity + estimatedLPTokens)) * 100
     : 100;
 
+  const poolPositions = useMemo(
+    () => pools.filter(p => p.userLiquidity && p.userLiquidity > 0),
+    [pools]
+  );
+  const hasAnyPositions = poolPositions.length > 0 || lpPositions.length > 0;
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       {/* Header */}
@@ -1101,7 +1107,7 @@ const LiquidityInterface: React.FC = () => {
           </button>
         </div>
 
-        {pools.filter(p => p.userLiquidity && p.userLiquidity > 0).length === 0 ? (
+        {!hasAnyPositions ? (
           <div className="text-center py-8">
           <div className="text-4xl mb-3"></div>
             <p className="text-gray-500 dark:text-gray-400">
@@ -1110,56 +1116,47 @@ const LiquidityInterface: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-3">
-            {pools
-              .filter(p => p.userLiquidity && p.userLiquidity > 0)
-              .map(pool => (
-                <div key={pool.contractId} className="glass-subtle rounded-xl p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-bold text-gray-900 dark:text-gray-100">
-                        {pool.tokenA.symbol}/{pool.tokenB.symbol}
-                      </h4>
-                      <p className="body-small">
-                        {pool.userLiquidity?.toFixed(4)} LP Tokens • {pool.userShare?.toFixed(2)}% of pool
-                      </p>
-                    </div>
-                    <button className="btn-secondary px-4 py-2">
-                      Remove
-                    </button>
+            {poolPositions.map(pool => (
+              <div key={pool.contractId} className="glass-subtle rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-gray-900 dark:text-gray-100">
+                      {pool.tokenA.symbol}/{pool.tokenB.symbol}
+                    </h4>
+                    <p className="body-small">
+                      {pool.userLiquidity?.toFixed(4)} LP Tokens • {pool.userShare?.toFixed(2)}% of pool
+                    </p>
+                  </div>
+                  <button className="btn-secondary px-4 py-2">
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+            {lpPositions.length > 0 && (
+              <div className="pt-2 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 border-t border-gray-200/60 dark:border-dark-700/60">
+                LP (ledger)
+              </div>
+            )}
+            {lpPositions.map(position => (
+              <div key={`${position.poolCid}-${position.lpBalance}`} className="flex items-center justify-between glass-subtle rounded-xl p-3">
+                <div>
+                  <div className="font-semibold text-gray-900 dark:text-gray-100">
+                    {resolvePoolLabel(position.poolCid)}
+                  </div>
+                  <div className="body-small text-gray-600 dark:text-gray-400">
+                    LP Balance: {formatLpBalance(position.lpBalance)} • Share: {formatShareBps(position.shareBps)}
                   </div>
                 </div>
-              ))}
+                {position.updatedAt && (
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    Updated {new Date(position.updatedAt).toLocaleTimeString('en-US')}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
-
-        <div className="mt-6">
-          <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-2">Your LP (ledger)</h3>
-          {lpPositions.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              No LP positions detected yet.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {lpPositions.map(position => (
-                <div key={`${position.poolCid}-${position.lpBalance}`} className="flex items-center justify-between glass-subtle rounded-xl p-3">
-                  <div>
-                    <div className="font-semibold text-gray-900 dark:text-gray-100">
-                      {resolvePoolLabel(position.poolCid)}
-                    </div>
-                    <div className="body-small text-gray-600 dark:text-gray-400">
-                      LP Balance: {formatLpBalance(position.lpBalance)} • Share: {formatShareBps(position.shareBps)}
-                    </div>
-                  </div>
-                  {position.updatedAt && (
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      Updated {new Date(position.updatedAt).toLocaleTimeString('en-US')}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
 
       <TokenSelector

@@ -10,10 +10,6 @@ import TokenSelector from './TokenSelector';
 import { submitTx } from '../loop/submitTx';
 import { getLoopProvider } from '../loop/loopProvider';
 
-const AMULET_ADMIN = 'DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a';
-const AMULET_ID = 'Amulet';
-const CBTC_ADMIN = 'cbtc-network::12202a83c6f4082217c175e29bc53da5f2703ba2675778ab99217a5a881a949203ff';
-const CBTC_ID = 'CBTC';
 const OPERATOR_PARTY =
   process.env.REACT_APP_OPERATOR_PARTY ||
   process.env.REACT_APP_OPERATOR_PARTY_ID ||
@@ -508,12 +504,21 @@ const LiquidityInterface: React.FC = () => {
           return;
         }
 
-        const instrumentA = resolveInstrumentForSymbol(pool.tokenA.symbol);
-        const instrumentB = resolveInstrumentForSymbol(pool.tokenB.symbol);
-        if (!instrumentA || !instrumentB) {
-          toast.error('Unsupported token pair for liquidity');
+        const holdingPool = await backendApi.getHoldingPool(poolCid);
+        const poolInstrumentA = holdingPool?.instrumentA;
+        const poolInstrumentB = holdingPool?.instrumentB;
+        if (!poolInstrumentA?.admin || !poolInstrumentA?.id || !poolInstrumentB?.admin || !poolInstrumentB?.id) {
+          toast.error('Pool instruments missing. Refresh pools and try again.');
           return;
         }
+        const instrumentA = {
+          instrumentAdmin: poolInstrumentA.admin,
+          instrumentId: poolInstrumentA.id,
+        };
+        const instrumentB = {
+          instrumentAdmin: poolInstrumentB.admin,
+          instrumentId: poolInstrumentB.id,
+        };
 
         const poolSymbolA = pool.tokenA.symbol;
         const isSelectedAForPoolA = selectedTokenA.symbol === poolSymbolA;
@@ -571,6 +576,13 @@ const LiquidityInterface: React.FC = () => {
           toast.error('Transfer A preparation failed');
           return;
         }
+        console.log('[addLiquidity] submitting TI', {
+          leg: 'A',
+          instrumentAdmin: instrumentA.instrumentAdmin,
+          instrumentId: instrumentA.instrumentId,
+          amount: amountForAStr,
+          requestId,
+        });
         const transferA = await submitTxWithRateLimitRetry(
           {
             commands: commandsA,
@@ -622,6 +634,13 @@ const LiquidityInterface: React.FC = () => {
           toast.error('Transfer B preparation failed');
           return;
         }
+        console.log('[addLiquidity] submitting TI', {
+          leg: 'B',
+          instrumentAdmin: instrumentB.instrumentAdmin,
+          instrumentId: instrumentB.instrumentId,
+          amount: amountForBStr,
+          requestId,
+        });
         const transferB = await submitTxWithRateLimitRetry(
           {
             commands: commandsB,
@@ -662,6 +681,14 @@ const LiquidityInterface: React.FC = () => {
               }));
             }
           } else {
+            if (consumeResult?.error?.code === 'MISSING_INBOUND_TIS_FOR_POOL_INSTRUMENT') {
+              try {
+                const inspect = await backendApi.inspectDevnetLiquidity(requestId, poolCid);
+                console.log('[addLiquidity] inspect', inspect);
+              } catch (inspectError) {
+                console.warn('[addLiquidity] inspect failed', inspectError);
+              }
+            }
             toast.error(consumeResult?.error?.message || 'Liquidity consume failed');
           }
         } else {
@@ -1088,18 +1115,6 @@ type InstrumentRef = {
   instrumentAdmin: string;
   instrumentId: string;
 };
-
-function resolveInstrumentForSymbol(symbol?: string): InstrumentRef | null {
-  if (!symbol) return null;
-  const upper = symbol.toUpperCase();
-  if (upper === 'CC' || upper === 'AMULET') {
-    return { instrumentAdmin: AMULET_ADMIN, instrumentId: AMULET_ID };
-  }
-  if (upper === 'CBTC') {
-    return { instrumentAdmin: CBTC_ADMIN, instrumentId: CBTC_ID };
-  }
-  return null;
-}
 
 async function prepareLoopTransfer(
   provider: any,

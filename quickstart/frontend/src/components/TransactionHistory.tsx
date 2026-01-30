@@ -310,7 +310,25 @@ const TransactionHistory: React.FC = () => {
   ];
 
   if (!partyId) {
-    return <div className="max-w-5xl mx-auto pb-24 min-h-[calc(100vh-220px)]" />;
+    return (
+      <div className="max-w-5xl mx-auto space-y-8 pb-24 min-h-[calc(100vh-220px)]">
+        <div className="card">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+            <div>
+              <h2 className="heading-2">Transaction History</h2>
+            </div>
+          </div>
+          <div className="text-center py-20">
+            <p className="text-gray-500 dark:text-gray-400 mb-2">
+              Do a swap or add liquidity to see a transaction.
+            </p>
+            <p className="text-sm text-gray-400">
+              Connect your wallet to view your personal history.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (loading) {

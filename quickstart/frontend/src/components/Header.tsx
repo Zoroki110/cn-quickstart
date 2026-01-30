@@ -20,15 +20,14 @@ const Header: React.FC = () => {
     disconnect,
   } = useWalletAuth();
   const partyForBackend = walletType === 'loop' ? null : partyId || null;
-  const { balances: loopBalances, loading: loopLoading, isRefreshing: loopRefreshing } = useLoopBalances(partyId || null, walletType, {
+  const { balances: loopBalances, loading: loopLoading } = useLoopBalances(partyId || null, walletType, {
     refreshIntervalMs: 15000,
   });
-  const { balances: utxoBalances, loading: utxoLoading, isRefreshing: utxoRefreshing } = useUtxoBalances(partyForBackend, {
+  const { balances: utxoBalances, loading: utxoLoading } = useUtxoBalances(partyForBackend, {
     ownerOnly: true,
     refreshIntervalMs: 15000,
   });
   const balancesLoading = walletType === 'loop' ? loopLoading : utxoLoading;
-  const balancesRefreshing = walletType === 'loop' ? loopRefreshing : utxoRefreshing;
   const balanceEntries = useMemo(() => {
     if (walletType === 'loop') {
       return Object.entries(loopBalances)
@@ -228,10 +227,7 @@ const Header: React.FC = () => {
                         {balancesLoading && (
                           <div className="text-xs opacity-70">Loading on-ledger balances…</div>
                         )}
-                        {!balancesLoading && balancesRefreshing && (
-                          <div className="text-xs opacity-70">Updating…</div>
-                        )}
-                        {!balancesLoading && !balancesRefreshing && balanceEntries.length === 0 && (
+                        {!balancesLoading && balanceEntries.length === 0 && (
                           <div className="text-xs opacity-70">No holdings visible</div>
                         )}
                         {!balancesLoading && balanceEntries.length > 0 &&

@@ -85,6 +85,13 @@ const SwapInterface: React.FC = () => {
     return `$${value.toFixed(0)}`;
   };
 
+  const formatContractId = (value?: string | null) => {
+    if (!value) return 'none (completed)';
+    const trimmed = value.trim();
+    if (trimmed.length <= 16) return trimmed;
+    return `${trimmed.slice(0, 8)}…${trimmed.slice(-4)}`;
+  };
+
   const balancesBySymbol = useMemo(() => {
     if (walletType === 'loop') {
       const map: Record<string, { amount: string; decimals: number }> = {};
@@ -709,14 +716,12 @@ const SwapInterface: React.FC = () => {
                   {payoutMessage && <div>{payoutMessage}</div>}
                   <div>Amount out: {consumePayload?.amountOut ?? '-'}</div>
                   <div>Execute before: {consumePayload?.payoutExecuteBefore ?? '-'}</div>
-                  <div>Payout CID: {payoutCid || 'none (completed)'}</div>
+                  <div className="flex items-start gap-2">
+                    <span className="shrink-0">Payout CID:</span>
+                    <span className="truncate min-w-0">{formatContractId(payoutCid)}</span>
+                  </div>
                 </div>
               </div>
-            )}
-            {swapResult && (
-              <pre className="mt-2 text-xs bg-gray-900 text-emerald-200 rounded-lg p-3 overflow-auto">
-                {JSON.stringify(swapResult, null, 2)}
-              </pre>
             )}
           </div>
         )}

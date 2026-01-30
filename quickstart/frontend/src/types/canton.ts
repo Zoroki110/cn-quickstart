@@ -130,6 +130,15 @@ export interface LpTokenInfo {
   owner?: string;
 }
 
+export interface LpPositionInfo {
+  poolCid: string;
+  lpBalance: string;
+  shareBps?: number;
+  reserveA?: string;
+  reserveB?: string;
+  updatedAt?: string;
+}
+
 export interface SwapQuote {
   inputAmount: number;
   outputAmount: number;
@@ -195,6 +204,8 @@ export interface PoolInfo {
   volume24h: number;
   userLiquidity?: number;
   userShare?: number;
+  lpBalance?: number;
+  lpShareBps?: number;
 }
 
 export interface LiquidityPosition {

@@ -41,6 +41,7 @@ const LiquidityInterface: React.FC = () => {
   const [removeAmount, setRemoveAmount] = useState('');
   const [removePreview, setRemovePreview] = useState<any>(null);
   const [removePreviewError, setRemovePreviewError] = useState<string | null>(null);
+  const [removePoolCid, setRemovePoolCid] = useState<string | null>(null);
   const [removeStatus, setRemoveStatus] = useState<string | null>(null);
   const [removeResult, setRemoveResult] = useState<any>(null);
   const [removeLoading, setRemoveLoading] = useState(false);
@@ -825,6 +826,10 @@ const LiquidityInterface: React.FC = () => {
       toast.error('LP burn amount exceeds your balance');
       return;
     }
+    if (!removePoolCid) {
+      toast.error('Pool not found or not visible. Refresh pools and try again.');
+      return;
+    }
 
     const requestId = `remove-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const deadlineIso = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
@@ -836,7 +841,7 @@ const LiquidityInterface: React.FC = () => {
 
       const consumeResult = await backendApi.consumeDevnetLiquidityRemove({
         requestId,
-        poolCid: selectedLpToken.poolId,
+        poolCid: removePoolCid,
         lpCid: selectedLpToken.contractId,
         receiverParty: partyId,
         lpBurnAmount: burnAmountNum.toFixed(10),
@@ -896,14 +901,34 @@ const LiquidityInterface: React.FC = () => {
     () => removePositions.find(position => position.contractId === removeSelectionCid) || null,
     [removePositions, removeSelectionCid]
   );
+  const resolveRemovePoolCid = useCallback(async (poolId: string): Promise<string | null> => {
+    if (!poolId) {
+      return null;
+    }
+    const match = rawPools.find(p => p.contractId === poolId || p.poolId === poolId);
+    if (match?.contractId) {
+      return match.contractId;
+    }
+    if (poolId.startsWith('00')) {
+      return poolId;
+    }
+    try {
+      return await backendApi.resolvePoolCid(poolId);
+    } catch (err) {
+      console.warn('Failed to resolve pool CID for remove', err);
+      return null;
+    }
+  }, [rawPools]);
+
   const removePool = useMemo(() => {
     if (!selectedLpToken) {
       return null;
     }
+    const target = removePoolCid || selectedLpToken.poolId;
     return rawPools.find(pool =>
-      pool.contractId === selectedLpToken.poolId || pool.poolId === selectedLpToken.poolId
+      pool.contractId === target || pool.poolId === target || pool.poolId === selectedLpToken.poolId
     ) || null;
-  }, [rawPools, selectedLpToken]);
+  }, [rawPools, selectedLpToken, removePoolCid]);
 
   useEffect(() => {
     if (mode !== 'remove') {
@@ -917,6 +942,22 @@ const LiquidityInterface: React.FC = () => {
       setRemoveSelectionCid(removePositions[0].contractId);
     }
   }, [mode, removePositions, selectedLpToken]);
+
+  useEffect(() => {
+    if (mode !== 'remove' || !selectedLpToken) {
+      setRemovePoolCid(null);
+      return;
+    }
+    let cancelled = false;
+    resolveRemovePoolCid(selectedLpToken.poolId).then((cid) => {
+      if (!cancelled) {
+        setRemovePoolCid(cid);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, selectedLpToken, resolveRemovePoolCid]);
 
   useEffect(() => {
     if (mode !== 'remove') {
@@ -935,6 +976,11 @@ const LiquidityInterface: React.FC = () => {
       setRemovePreviewError(null);
       return;
     }
+    if (!removePoolCid) {
+      setRemovePreview(null);
+      setRemovePreviewError('Pool not found or not visible.');
+      return;
+    }
     const amountNum = parseFloat(removeAmount);
     if (!Number.isFinite(amountNum) || amountNum <= 0) {
       setRemovePreview(null);
@@ -950,7 +996,7 @@ const LiquidityInterface: React.FC = () => {
     const timeout = setTimeout(() => {
       backendApi.inspectDevnetLiquidityRemove({
         requestId,
-        poolCid: selectedLpToken.poolId,
+        poolCid: removePoolCid,
         lpCid: selectedLpToken.contractId,
         receiverParty: partyId,
         lpBurnAmount: amountNum.toFixed(10),
@@ -969,7 +1015,7 @@ const LiquidityInterface: React.FC = () => {
       });
     }, 300);
     return () => clearTimeout(timeout);
-  }, [mode, partyId, selectedLpToken, removeAmount]);
+  }, [mode, partyId, selectedLpToken, removeAmount, removePoolCid]);
 
   const poolPositions = useMemo(
     () => pools.filter(p => p.userLiquidity && p.userLiquidity > 0),

@@ -739,6 +739,7 @@ const LiquidityInterface: React.FC = () => {
           toast.error(message);
         } else if (transferB.value?.txStatus === 'SUCCEEDED') {
           setLiquidityStatus('Consuming liquidity (backend)');
+          await sleep(4000);
           consumeResult = await backendApi.consumeDevnetLiquidity({ requestId, poolCid });
           if (consumeResult?.ok) {
             setLiquidityStatus('Liquidity added. LP minted.');

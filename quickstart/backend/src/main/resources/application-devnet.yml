@@ -121,7 +121,12 @@ management:
       packageId: ${DAR_PACKAGE_ID:unknown}
 
 holdingpool:
-  package-id: 11c6ce318a534bc90d1b60a0ef83e13a48e6a8789991b53a32c84227b1842aaf
+  package-id: 782249463e3c27c0ad0ee501dd0f679ccd96abeeea72d54cf1d405a798561843
+
+liquidity:
+  consume:
+    wait-ms: 45000
+    poll-ms: 2000
 
 # AppProvider party binding (DevNet)
 application:

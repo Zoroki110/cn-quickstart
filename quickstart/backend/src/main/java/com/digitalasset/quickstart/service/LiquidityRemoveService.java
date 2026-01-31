@@ -202,8 +202,8 @@ public class LiquidityRemoveService {
                                                 "No output holding found for payout B",
                                                 Map.of("admin", instB.admin, "id", instB.id, "minAmount", outB.toPlainString())));
                                     }
-                                    return Result.ok(new HoldingSelectResponsePair(selA, selB));
-                                }).thenCompose(pairResult -> {
+                                    return Result.<HoldingSelectResponsePair, ApiError>ok(new HoldingSelectResponsePair(selA, selB));
+                                }).thenCompose((Result<HoldingSelectResponsePair, ApiError> pairResult) -> {
                                     if (pairResult.isErr()) {
                                         return completedError(pairResult.getErrorUnsafe());
                                     }

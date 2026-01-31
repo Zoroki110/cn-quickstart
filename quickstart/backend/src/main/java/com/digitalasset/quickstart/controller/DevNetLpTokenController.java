@@ -56,8 +56,8 @@ public class DevNetLpTokenController {
                 .thenCompose(acs -> {
                     List<LedgerApi.RawActiveContract> candidates = acs.stream()
                             .filter(c -> isLpToken(c.templateId()))
-                            .filter(c -> ownerParty.equals(readPartyField(c.createArguments(), "owner")))
-                            .filter(c -> poolIdFilter == null || poolIdFilter.equals(readTextField(c.createArguments(), "poolId")))
+                            .filter(c -> ownerParty.equals(readPartyField(c.createArguments(), "owner", 1)))
+                            .filter(c -> poolIdFilter == null || poolIdFilter.equals(readTextField(c.createArguments(), "poolId", 2)))
                             .toList();
 
                     if (candidates.isEmpty()) {
@@ -122,21 +122,37 @@ public class DevNetLpTokenController {
                 && "LPToken".equals(id.getEntityName());
     }
 
-    private String readPartyField(ValueOuterClass.Record record, String label) {
-        if (record == null || label == null) return null;
-        for (ValueOuterClass.RecordField field : record.getFieldsList()) {
-            if (label.equals(field.getLabel()) && field.getValue().hasParty()) {
-                return field.getValue().getParty();
+    private String readPartyField(ValueOuterClass.Record record, String label, int indexFallback) {
+        if (record == null) return null;
+        if (label != null) {
+            for (ValueOuterClass.RecordField field : record.getFieldsList()) {
+                if (label.equals(field.getLabel()) && field.getValue().hasParty()) {
+                    return field.getValue().getParty();
+                }
+            }
+        }
+        if (indexFallback >= 0 && record.getFieldsCount() > indexFallback) {
+            ValueOuterClass.Value value = record.getFields(indexFallback).getValue();
+            if (value.hasParty()) {
+                return value.getParty();
             }
         }
         return null;
     }
 
-    private String readTextField(ValueOuterClass.Record record, String label) {
-        if (record == null || label == null) return null;
-        for (ValueOuterClass.RecordField field : record.getFieldsList()) {
-            if (label.equals(field.getLabel()) && field.getValue().hasText()) {
-                return field.getValue().getText();
+    private String readTextField(ValueOuterClass.Record record, String label, int indexFallback) {
+        if (record == null) return null;
+        if (label != null) {
+            for (ValueOuterClass.RecordField field : record.getFieldsList()) {
+                if (label.equals(field.getLabel()) && field.getValue().hasText()) {
+                    return field.getValue().getText();
+                }
+            }
+        }
+        if (indexFallback >= 0 && record.getFieldsCount() > indexFallback) {
+            ValueOuterClass.Value value = record.getFields(indexFallback).getValue();
+            if (value.hasText()) {
+                return value.getText();
             }
         }
         return null;

@@ -634,13 +634,14 @@ export class BackendApiService {
       });
       const rows = Array.isArray(res.data) ? res.data : [];
       const mapped: LpPositionInfo[] = rows.map((row: any) => ({
-        poolCid: row.poolCid || row.pool_id || '',
+        poolId: row.poolId ?? row.pool_id ?? undefined,
+        poolCid: row.poolCid ?? row.pool_cid ?? undefined,
         lpBalance: row.lpBalance ?? row.balance ?? '0',
         shareBps: typeof row.shareBps === 'number' ? row.shareBps : row.shareBps ? Number(row.shareBps) : undefined,
         reserveA: row.reserveA ?? undefined,
         reserveB: row.reserveB ?? undefined,
         updatedAt: row.updatedAt ?? undefined,
-      })).filter((pos) => pos.poolCid && pos.lpBalance);
+      })).filter((pos) => (pos.poolCid || pos.poolId) && pos.lpBalance);
       console.log(`Fetched ${mapped.length} LP positions`, mapped[0] ? { first: mapped[0] } : '');
       return mapped;
     } catch (error) {
@@ -957,7 +958,7 @@ export class BackendApiService {
     const feeRate = row.feeBps ? Number(row.feeBps) / 10000 : 0.003;
     return {
       contractId: row.contractId || '',
-      poolId: row.contractId || '',
+      poolId: row.poolId || row.pool_id || row.contractId || '',
       tokenA: {
         symbol: tokenA.symbol,
         name: tokenA.name,
@@ -1388,7 +1389,7 @@ export class BackendApiService {
 
   async consumeDevnetLiquidityRemove(payload: {
     requestId: string;
-    poolCid: string;
+    poolCid?: string;
     lpCid: string;
     receiverParty: string;
     lpBurnAmount: string;
@@ -1408,7 +1409,7 @@ export class BackendApiService {
 
   async inspectDevnetLiquidityRemove(params: {
     requestId: string;
-    poolCid: string;
+    poolCid?: string;
     lpCid: string;
     receiverParty: string;
     lpBurnAmount?: string;

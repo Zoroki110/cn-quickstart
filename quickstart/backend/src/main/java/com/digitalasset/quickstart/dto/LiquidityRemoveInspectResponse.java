@@ -6,6 +6,7 @@ package com.digitalasset.quickstart.dto;
 public class LiquidityRemoveInspectResponse {
     public String requestId;
     public String poolCid;
+    public String poolId;
     public String poolStatus;
     public HoldingPoolCreateRequest.InstrumentRef instrumentA;
     public HoldingPoolCreateRequest.InstrumentRef instrumentB;

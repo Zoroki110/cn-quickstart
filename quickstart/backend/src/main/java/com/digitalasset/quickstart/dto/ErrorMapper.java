@@ -8,7 +8,7 @@ public class ErrorMapper {
             case VALIDATION, MISSING_INBOUND_TIS_FOR_POOL_INSTRUMENT -> HttpStatus.BAD_REQUEST;
             case NOT_FOUND -> HttpStatus.NOT_FOUND;
             case FORBIDDEN, LEDGER_AUTH -> HttpStatus.FORBIDDEN;
-            case PRECONDITION_FAILED -> HttpStatus.PRECONDITION_FAILED;
+            case PRECONDITION_FAILED, LEGACY_LP_POOL_NOT_FOUND -> HttpStatus.PRECONDITION_FAILED;
             case CONFLICT -> HttpStatus.CONFLICT;
             case LEDGER_REJECTED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;

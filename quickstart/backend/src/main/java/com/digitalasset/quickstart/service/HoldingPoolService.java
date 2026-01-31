@@ -227,16 +227,17 @@ public class HoldingPoolService {
                         return Result.err(new UnexpectedError(throwable.getMessage()));
                     }
                     String cid = extractCreatedCid(resp, tid);
-        HoldingPoolResponse dto = new HoldingPoolResponse(
-                cid,
-                "Uninitialized",
-                req.instrumentA,
-                req.instrumentB,
-                req.feeBps,
-                Instant.now().toString(),
-                "0", "0", "0", "0", "0",
-                false
-        );
+                    HoldingPoolResponse dto = new HoldingPoolResponse(
+                            cid,
+                            "Uninitialized",
+                            req.instrumentA,
+                            req.instrumentB,
+                            req.feeBps,
+                            Instant.now().toString(),
+                            "0", "0", "0", "0", "0",
+                            false
+                    );
+                    dto.poolId = req.poolId;
                     return Result.ok(dto);
                 });
     }
@@ -289,6 +290,29 @@ public class HoldingPoolService {
     }
 
     @WithSpan
+    public CompletableFuture<Result<HoldingPoolResponse, DomainError>> resolveActiveByPoolId(final String poolId) {
+        if (poolId == null || poolId.isBlank()) {
+            return completedError(new ValidationError("poolId is required", ValidationError.Type.REQUEST));
+        }
+        return list().thenApply(result -> {
+            if (result.isErr()) {
+                return Result.err(result.getErrorUnsafe());
+            }
+            List<HoldingPoolResponse> matches = result.getValueUnsafe().stream()
+                    .filter(pool -> pool != null && pool.poolId != null && pool.poolId.equals(poolId))
+                    .filter(pool -> pool.status != null && "active".equalsIgnoreCase(pool.status))
+                    .toList();
+            if (matches.isEmpty()) {
+                return Result.err(new ValidationError("No active pool found for poolId: " + poolId, ValidationError.Type.REQUEST));
+            }
+            if (matches.size() > 1) {
+                return Result.err(new ValidationError("Multiple active pools found for poolId: " + poolId, ValidationError.Type.REQUEST));
+            }
+            return Result.ok(matches.get(0));
+        });
+    }
+
+    @WithSpan
     public Result<Void, DomainError> bootstrapStub() {
         return Result.err(new UnexpectedError("Bootstrap not implemented. Required inputs: holdingCidA, holdingCidB, amounts, minLpOut"));
     }
@@ -299,6 +323,9 @@ public class HoldingPoolService {
         }
         if (isBlank(packageId)) {
             return Optional.of(new ValidationError("holdingpool.package-id is not configured", ValidationError.Type.REQUEST));
+        }
+        if (isBlank(req.poolId)) {
+            return Optional.of(new ValidationError("poolId is required", ValidationError.Type.REQUEST));
         }
         if (req.instrumentA == null || isBlank(req.instrumentA.admin) || isBlank(req.instrumentA.id)) {
             return Optional.of(new ValidationError("instrumentA.admin and instrumentA.id are required", ValidationError.Type.REQUEST));
@@ -323,6 +350,7 @@ public class HoldingPoolService {
     private ValueOuterClass.Record buildCreateArgs(final HoldingPoolCreateRequest req, final String operator) {
         return ValueOuterClass.Record.newBuilder()
                 .addFields(recordField("operator", ValueOuterClass.Value.newBuilder().setParty(operator).build()))
+                .addFields(recordField("poolId", optionalTextValue(req.poolId)))
                 .addFields(recordField("instrumentA", instrumentRecord(req.instrumentA)))
                 .addFields(recordField("instrumentB", instrumentRecord(req.instrumentB)))
                 .addFields(recordField("status", statusVariant("Uninitialized")))
@@ -371,6 +399,7 @@ public class HoldingPoolService {
         if (args == null) {
             return Optional.empty();
         }
+        String poolId = textOrOptionalTextField(args, "poolId");
         HoldingPoolCreateRequest.InstrumentRef instrumentA = parseInstrument(args, "instrumentA");
         HoldingPoolCreateRequest.InstrumentRef instrumentB = parseInstrument(args, "instrumentB");
         String status = statusField(args, "status");
@@ -384,7 +413,7 @@ public class HoldingPoolService {
             return Optional.empty();
         }
         Integer feeBps = feeRate != null ? feeRate.multiply(BigDecimal.valueOf(10000)).intValue() : null;
-        return Optional.of(new HoldingPoolResponse(
+        HoldingPoolResponse response = new HoldingPoolResponse(
                 contractId,
                 status,
                 instrumentA,
@@ -397,7 +426,9 @@ public class HoldingPoolService {
                 toStringOrZero(lockedB),
                 toStringOrZero(lpSupply),
                 false
-        ));
+        );
+        response.poolId = poolId;
+        return Optional.of(response);
     }
 
     private HoldingPoolCreateRequest.InstrumentRef parseInstrument(final ValueOuterClass.Record args, final String label) {
@@ -433,6 +464,29 @@ public class HoldingPoolService {
         ValueOuterClass.Value v = field(args, label);
         if (v == null || v.getSumCase() != ValueOuterClass.Value.SumCase.TEXT) return null;
         return v.getText();
+    }
+
+    private String textOrOptionalTextField(final ValueOuterClass.Record args, final String label) {
+        ValueOuterClass.Value v = field(args, label);
+        if (v == null) return null;
+        if (v.getSumCase() == ValueOuterClass.Value.SumCase.TEXT) {
+            return v.getText();
+        }
+        if (v.getSumCase() == ValueOuterClass.Value.SumCase.OPTIONAL && v.getOptional().hasValue()) {
+            ValueOuterClass.Value inner = v.getOptional().getValue();
+            if (inner.getSumCase() == ValueOuterClass.Value.SumCase.TEXT) {
+                return inner.getText();
+            }
+        }
+        return null;
+    }
+
+    private ValueOuterClass.Value optionalTextValue(final String value) {
+        ValueOuterClass.Optional.Builder opt = ValueOuterClass.Optional.newBuilder();
+        if (value != null && !value.isBlank()) {
+            opt.setValue(ValueOuterClass.Value.newBuilder().setText(value).build());
+        }
+        return ValueOuterClass.Value.newBuilder().setOptional(opt.build()).build();
     }
 
     private String textOrParty(final ValueOuterClass.Record args, final String label) {
@@ -505,6 +559,7 @@ public class HoldingPoolService {
             case "lockedAmountB" -> 7;
             case "feeRate" -> 8;
             case "lpSupply" -> 9;
+            case "poolId" -> 10;
             case "admin" -> 0;
             case "id" -> 1;
             default -> -1;

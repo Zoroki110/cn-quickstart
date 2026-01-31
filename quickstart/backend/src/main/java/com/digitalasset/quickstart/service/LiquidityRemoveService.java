@@ -77,9 +77,6 @@ public class LiquidityRemoveService {
         if (request == null || request.requestId == null || request.requestId.isBlank()) {
             return completedError(validationError("requestId is required", "requestId"));
         }
-        if (request.poolCid == null || request.poolCid.isBlank()) {
-            return completedError(validationError("poolCid is required", "poolCid"));
-        }
         if (request.lpCid == null || request.lpCid.isBlank()) {
             return completedError(validationError("lpCid is required", "lpCid"));
         }
@@ -110,42 +107,54 @@ public class LiquidityRemoveService {
 
         String operator = authUtils.getAppProviderPartyId();
         String receiverParty = request.receiverParty;
+        String providedPoolCid = request.poolCid;
 
-        return holdingPoolService.getByContractId(request.poolCid)
-                .thenCompose(poolResult -> {
-                    if (poolResult.isErr()) {
-                        return completedError(domainError("Pool not found or not visible", poolResult.getErrorUnsafe()));
+        return ledgerReader.lpTokensForParty(receiverParty)
+                .thenCompose(tokens -> {
+                    Optional<LpTokenDTO> lpTokenOpt = tokens.stream()
+                            .filter(t -> request.lpCid.equals(t.contractId))
+                            .findFirst();
+                    if (lpTokenOpt.isEmpty()) {
+                        return completedError(preconditionError("LP position not found for owner",
+                                Map.of("lpCid", request.lpCid, "owner", receiverParty)));
                     }
-                    HoldingPoolResponse pool = poolResult.getValueUnsafe();
-                    if (pool.status == null || !"active".equalsIgnoreCase(pool.status)) {
-                        return completedError(preconditionError("Pool is not active", Map.of("status", pool.status)));
-                    }
-                    if (pool.instrumentA == null || pool.instrumentB == null) {
-                        return completedError(preconditionError("Pool instruments are missing",
-                                Map.of("poolCid", request.poolCid)));
-                    }
-
-                    BigDecimal reserveA = parseDecimalOrZero(pool.reserveAmountA);
-                    BigDecimal reserveB = parseDecimalOrZero(pool.reserveAmountB);
-                    BigDecimal lpSupply = parseDecimalOrZero(pool.lpSupply);
-                    if (lpSupply.compareTo(BigDecimal.ZERO) <= 0) {
-                        return completedError(preconditionError("LP supply must be positive", Map.of("lpSupply", pool.lpSupply)));
-                    }
-
-                    return ledgerReader.lpTokensForParty(receiverParty)
-                            .thenCompose(tokens -> {
-                                Optional<LpTokenDTO> lpTokenOpt = tokens.stream()
-                                        .filter(t -> request.lpCid.equals(t.contractId))
-                                        .findFirst();
-                                if (lpTokenOpt.isEmpty()) {
-                                    return completedError(preconditionError("LP position not found for owner",
-                                            Map.of("lpCid", request.lpCid, "owner", receiverParty)));
+                    LpTokenDTO lpToken = lpTokenOpt.get();
+                    return resolvePoolForRemove(lpToken, providedPoolCid)
+                            .thenCompose(poolResult -> {
+                                if (poolResult.isErr()) {
+                                    return completedError(poolResult.getErrorUnsafe());
                                 }
-                                LpTokenDTO lpToken = lpTokenOpt.get();
-                                if (!request.poolCid.equals(lpToken.poolId)) {
+                                HoldingPoolResponse pool = poolResult.getValueUnsafe();
+                                String resolvedPoolCid = pool.contractId;
+                                String poolIdText = (pool.poolId != null && !pool.poolId.isBlank())
+                                        ? pool.poolId
+                                        : lpToken.poolId;
+                                if (poolIdText == null || poolIdText.isBlank()) {
+                                    return completedError(preconditionError("PoolId is missing",
+                                            Map.of("poolCid", resolvedPoolCid)));
+                                }
+                                if (poolIdText != null && lpToken.poolId != null && !poolIdText.equals(lpToken.poolId)) {
+                                    if (looksLikeCid(lpToken.poolId)) {
+                                        return completedError(legacyPoolNotFound(lpToken, providedPoolCid, poolIdText, null));
+                                    }
                                     return completedError(preconditionError("LP position pool mismatch",
-                                            Map.of("lpCid", request.lpCid, "poolId", lpToken.poolId)));
+                                            Map.of("lpCid", request.lpCid, "poolId", lpToken.poolId, "resolvedPoolId", poolIdText)));
                                 }
+                                if (pool.status == null || !"active".equalsIgnoreCase(pool.status)) {
+                                    return completedError(preconditionError("Pool is not active", Map.of("status", pool.status)));
+                                }
+                                if (pool.instrumentA == null || pool.instrumentB == null) {
+                                    return completedError(preconditionError("Pool instruments are missing",
+                                            Map.of("poolCid", resolvedPoolCid)));
+                                }
+
+                                BigDecimal reserveA = parseDecimalOrZero(pool.reserveAmountA);
+                                BigDecimal reserveB = parseDecimalOrZero(pool.reserveAmountB);
+                                BigDecimal lpSupply = parseDecimalOrZero(pool.lpSupply);
+                                if (lpSupply.compareTo(BigDecimal.ZERO) <= 0) {
+                                    return completedError(preconditionError("LP supply must be positive", Map.of("lpSupply", pool.lpSupply)));
+                                }
+
                                 BigDecimal lpBalance = parseDecimalOrZero(lpToken.amount);
                                 if (lpBalance.compareTo(lpBurnAmount) < 0) {
                                     return completedError(preconditionError("LP burn exceeds balance",
@@ -211,7 +220,7 @@ public class LiquidityRemoveService {
                                     String holdingCidA = pair.a.holdingCid();
                                     String holdingCidB = pair.b.holdingCid();
 
-                                    String memoRaw = buildMemo(request.requestId, request.poolCid, request.lpCid, receiverParty, deadline,
+                                String memoRaw = buildMemo(request.requestId, resolvedPoolCid, request.lpCid, receiverParty, deadline,
                                             lpBurnAmount, outA, outB);
                                     Result<PayoutService.TransferFactoryPlan, ApiError> payoutPlanAResult =
                                             payoutService.prepareTransferFactory(
@@ -256,10 +265,12 @@ public class LiquidityRemoveService {
                                             mergeDisclosed(planA.disclosedContracts(), planB.disclosedContracts());
                                     String synchronizerId = firstNonBlank(planA.synchronizerId(), planB.synchronizerId());
 
-                                    LOG.info("[LiquidityRemove] requestId={} operator={} poolCid={} lpCid={} lpBurnAmount={} outA={} outB={} receiver={} payoutFactoryA={} payoutFactoryB={} actAs=[{}]",
+                                LOG.info("[LiquidityRemove] requestId={} operator={} poolCid={} poolIdText={} lpPoolId={} lpCid={} lpBurnAmount={} outA={} outB={} receiver={} payoutFactoryA={} payoutFactoryB={} actAs=[{}]",
                                             request.requestId,
                                             operator,
-                                            request.poolCid,
+                                        resolvedPoolCid,
+                                        poolIdText,
+                                        lpToken.poolId,
                                             request.lpCid,
                                             lpBurnAmount.toPlainString(),
                                             outA.toPlainString(),
@@ -277,7 +288,7 @@ public class LiquidityRemoveService {
                                             .addFields(recordField("minOutA", numericValue(minOutA)))
                                             .addFields(recordField("minOutB", numericValue(minOutB)))
                                             .addFields(recordField("deadline", timestampValue(deadline)))
-                                            .addFields(recordField("poolIdText", textValue(request.poolCid)))
+                                        .addFields(recordField("poolIdText", textValue(poolIdText)))
                                             .addFields(recordField("outputHoldingCidA", contractIdValue(holdingCidA)))
                                             .addFields(recordField("outputHoldingCidB", contractIdValue(holdingCidB)))
                                             .addFields(recordField("payoutFactoryCidA", contractIdValue(planA.factoryCid())))
@@ -290,7 +301,7 @@ public class LiquidityRemoveService {
                                     return ledgerApi.exerciseRawWithLabel(
                                                     "RemoveLiquidityFromLpV1",
                                                     holdingPoolTemplateId(),
-                                                    request.poolCid,
+                                                resolvedPoolCid,
                                                     "RemoveLiquidityFromLpV1",
                                                     choiceArgs,
                                                     List.of(operator),
@@ -325,7 +336,7 @@ public class LiquidityRemoveService {
 
                                                 LiquidityRemoveConsumeResponse response = new LiquidityRemoveConsumeResponse();
                                                 response.requestId = request.requestId;
-                                                response.poolCid = request.poolCid;
+                                                response.poolCid = resolvedPoolCid;
                                                 response.lpCid = request.lpCid;
                                                 response.receiverParty = receiverParty;
                                                 response.lpBurnAmount = lpBurnAmount.toPlainString();
@@ -361,9 +372,6 @@ public class LiquidityRemoveService {
         if (requestId == null || requestId.isBlank()) {
             return completedError(validationError("requestId is required", "requestId"));
         }
-        if (poolCid == null || poolCid.isBlank()) {
-            return completedError(validationError("poolCid is required", "poolCid"));
-        }
         if (lpCid == null || lpCid.isBlank()) {
             return completedError(validationError("lpCid is required", "lpCid"));
         }
@@ -373,26 +381,43 @@ public class LiquidityRemoveService {
 
         boolean alreadyConsumed = idempotencyService.checkIdempotency(requestId) instanceof LiquidityRemoveConsumeResponse;
 
-        return holdingPoolService.getByContractId(poolCid)
-                .thenCompose(poolResult -> {
-                    if (poolResult.isErr()) {
-                        return completedError(domainError("Pool not found or not visible", poolResult.getErrorUnsafe()));
-                    }
-                    HoldingPoolResponse pool = poolResult.getValueUnsafe();
-                    BigDecimal reserveA = parseDecimalOrZero(pool.reserveAmountA);
-                    BigDecimal reserveB = parseDecimalOrZero(pool.reserveAmountB);
-                    BigDecimal lpSupply = parseDecimalOrZero(pool.lpSupply);
+        String providedPoolCid = poolCid;
 
-                    return ledgerReader.lpTokensForParty(receiverParty)
-                            .thenCompose(tokens -> {
-                                Optional<LpTokenDTO> lpTokenOpt = tokens.stream()
-                                        .filter(t -> lpCid.equals(t.contractId))
-                                        .findFirst();
-                                if (lpTokenOpt.isEmpty()) {
-                                    return completedError(preconditionError("LP position not found for owner",
-                                            Map.of("lpCid", lpCid, "owner", receiverParty)));
+        return ledgerReader.lpTokensForParty(receiverParty)
+                .thenCompose(tokens -> {
+                    Optional<LpTokenDTO> lpTokenOpt = tokens.stream()
+                            .filter(t -> lpCid.equals(t.contractId))
+                            .findFirst();
+                    if (lpTokenOpt.isEmpty()) {
+                        return completedError(preconditionError("LP position not found for owner",
+                                Map.of("lpCid", lpCid, "owner", receiverParty)));
+                    }
+                    LpTokenDTO lpToken = lpTokenOpt.get();
+                    return resolvePoolForRemove(lpToken, providedPoolCid)
+                            .thenCompose(poolResult -> {
+                                if (poolResult.isErr()) {
+                                    return completedError(poolResult.getErrorUnsafe());
                                 }
-                                LpTokenDTO lpToken = lpTokenOpt.get();
+                                HoldingPoolResponse pool = poolResult.getValueUnsafe();
+                                String resolvedPoolCid = pool.contractId;
+                                String poolIdText = (pool.poolId != null && !pool.poolId.isBlank())
+                                        ? pool.poolId
+                                        : lpToken.poolId;
+                                if (poolIdText == null || poolIdText.isBlank()) {
+                                    return completedError(preconditionError("PoolId is missing",
+                                            Map.of("poolCid", resolvedPoolCid)));
+                                }
+                                if (poolIdText != null && lpToken.poolId != null && !poolIdText.equals(lpToken.poolId)) {
+                                    if (looksLikeCid(lpToken.poolId)) {
+                                        return completedError(legacyPoolNotFound(lpToken, providedPoolCid, poolIdText, null));
+                                    }
+                                    return completedError(preconditionError("LP position pool mismatch",
+                                            Map.of("lpCid", lpCid, "poolId", lpToken.poolId, "resolvedPoolId", poolIdText)));
+                                }
+
+                                BigDecimal reserveA = parseDecimalOrZero(pool.reserveAmountA);
+                                BigDecimal reserveB = parseDecimalOrZero(pool.reserveAmountB);
+                                BigDecimal lpSupply = parseDecimalOrZero(pool.lpSupply);
                                 BigDecimal lpBalance = parseDecimalOrZero(lpToken.amount);
                                 BigDecimal burnAmount = lpBurnAmount == null || lpBurnAmount.isBlank()
                                         ? lpBalance
@@ -406,7 +431,8 @@ public class LiquidityRemoveService {
 
                                 LiquidityRemoveInspectResponse resp = new LiquidityRemoveInspectResponse();
                                 resp.requestId = requestId;
-                                resp.poolCid = poolCid;
+                                resp.poolCid = resolvedPoolCid;
+                                resp.poolId = poolIdText;
                                 resp.poolStatus = pool.status;
                                 resp.instrumentA = pool.instrumentA;
                                 resp.instrumentB = pool.instrumentB;
@@ -485,6 +511,81 @@ public class LiquidityRemoveService {
         } catch (Exception e) {
             return Instant.now().plusSeconds(DEFAULT_DEADLINE_SECONDS);
         }
+    }
+
+    private CompletableFuture<Result<HoldingPoolResponse, ApiError>> resolvePoolForRemove(
+            LpTokenDTO lpToken,
+            String providedPoolCid
+    ) {
+        String lpPoolId = lpToken != null ? lpToken.poolId : null;
+        boolean legacyHint = looksLikeCid(lpPoolId);
+        if (!legacyHint && lpPoolId != null && !lpPoolId.isBlank()) {
+            return holdingPoolService.resolveActiveByPoolId(lpPoolId)
+                    .thenCompose(result -> {
+                        if (result.isOk()) {
+                            return CompletableFuture.completedFuture(Result.ok(result.getValueUnsafe()));
+                        }
+                        return resolveLegacyFallback(lpToken, providedPoolCid, result.getErrorUnsafe());
+                    });
+        }
+        return resolveLegacyFallback(lpToken, providedPoolCid, null);
+    }
+
+    private CompletableFuture<Result<HoldingPoolResponse, ApiError>> resolveLegacyFallback(
+            LpTokenDTO lpToken,
+            String providedPoolCid,
+            DomainError resolveError
+    ) {
+        if (providedPoolCid != null && !providedPoolCid.isBlank()) {
+            return holdingPoolService.getByContractId(providedPoolCid)
+                    .thenApply(poolResult -> {
+                        if (poolResult.isOk()) {
+                            return Result.ok(poolResult.getValueUnsafe());
+                        }
+                        return Result.err(legacyPoolNotFound(lpToken, providedPoolCid, null, resolveError));
+                    });
+        }
+        return CompletableFuture.completedFuture(Result.err(legacyPoolNotFound(lpToken, providedPoolCid, null, resolveError)));
+    }
+
+    private boolean looksLikeCid(String value) {
+        if (value == null) {
+            return false;
+        }
+        String trimmed = value.trim();
+        return trimmed.startsWith("00") && trimmed.length() > 20;
+    }
+
+    private ApiError legacyPoolNotFound(
+            LpTokenDTO lpToken,
+            String providedPoolCid,
+            String resolvedPoolId,
+            DomainError resolveError
+    ) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        if (lpToken != null) {
+            details.put("lpCid", lpToken.contractId);
+            details.put("lpPoolIdText", lpToken.poolId);
+            details.put("lpOwner", lpToken.owner);
+        }
+        if (providedPoolCid != null && !providedPoolCid.isBlank()) {
+            details.put("providedPoolCid", providedPoolCid);
+        }
+        if (resolvedPoolId != null && !resolvedPoolId.isBlank()) {
+            details.put("resolvedPoolId", resolvedPoolId);
+        }
+        if (resolveError != null) {
+            details.put("resolveError", resolveError.message());
+            details.put("resolveErrorCode", resolveError.code());
+        }
+        return new ApiError(
+                ErrorCode.LEGACY_LP_POOL_NOT_FOUND,
+                "This LP references an old pool contractId. Please migrate (burn/mint new LP) or contact operator.",
+                details,
+                false,
+                null,
+                null
+        );
     }
 
     private ValueOuterClass.Identifier holdingPoolTemplateId() {

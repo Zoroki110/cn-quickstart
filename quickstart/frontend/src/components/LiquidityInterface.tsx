@@ -41,7 +41,6 @@ const LiquidityInterface: React.FC = () => {
   const [removeAmount, setRemoveAmount] = useState('');
   const [removePreview, setRemovePreview] = useState<any>(null);
   const [removePreviewError, setRemovePreviewError] = useState<string | null>(null);
-  const [removePoolCid, setRemovePoolCid] = useState<string | null>(null);
   const [removeStatus, setRemoveStatus] = useState<string | null>(null);
   const [removeResult, setRemoveResult] = useState<any>(null);
   const [removeLoading, setRemoveLoading] = useState(false);
@@ -278,18 +277,23 @@ const LiquidityInterface: React.FC = () => {
     return `${(bps / 100).toFixed(2)}%`;
   }, []);
 
-  const resolvePoolLabel = useCallback((poolCid?: string) => {
-    if (!poolCid) return 'Unknown pool';
-    const match = rawPools.find(p => p.contractId === poolCid || p.poolId === poolCid);
+  const truncateId = useCallback((value?: string) => {
+    if (!value) return '—';
+    const trimmed = value.trim();
+    if (trimmed.length <= 16) {
+      return trimmed;
+    }
+    return `${trimmed.slice(0, 8)}…${trimmed.slice(-4)}`;
+  }, []);
+
+  const resolvePoolLabel = useCallback((poolIdOrCid?: string) => {
+    if (!poolIdOrCid) return 'Unknown pool';
+    const match = rawPools.find(p => p.contractId === poolIdOrCid || p.poolId === poolIdOrCid);
     if (!match) {
-      const trimmed = poolCid.trim();
-      if (trimmed.length <= 16) {
-        return trimmed;
-      }
-      return `${trimmed.slice(0, 8)}…${trimmed.slice(-4)}`;
+      return truncateId(poolIdOrCid);
     }
     return `${match.tokenA.symbol}/${match.tokenB.symbol}`;
-  }, [rawPools]);
+  }, [rawPools, truncateId]);
 
   const reloadBalances = useCallback(async () => {
     if (walletType === 'loop') {
@@ -826,10 +830,6 @@ const LiquidityInterface: React.FC = () => {
       toast.error('LP burn amount exceeds your balance');
       return;
     }
-    if (!removePoolCid) {
-      toast.error('Pool not found or not visible. Refresh pools and try again.');
-      return;
-    }
 
     const requestId = `remove-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const deadlineIso = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
@@ -839,16 +839,19 @@ const LiquidityInterface: React.FC = () => {
       setRemoveResult(null);
       setRemoveStatus(null);
 
-      const consumeResult = await backendApi.consumeDevnetLiquidityRemove({
+      const consumePayload: any = {
         requestId,
-        poolCid: removePoolCid,
         lpCid: selectedLpToken.contractId,
         receiverParty: partyId,
         lpBurnAmount: burnAmountNum.toFixed(10),
         minOutA: '0',
         minOutB: '0',
         deadlineIso,
-      });
+      };
+      if (resolvedRemovePoolCid) {
+        consumePayload.poolCid = resolvedRemovePoolCid;
+      }
+      const consumeResult = await backendApi.consumeDevnetLiquidityRemove(consumePayload);
 
       setRemoveResult(consumeResult);
       if (consumeResult?.ok) {
@@ -857,11 +860,21 @@ const LiquidityInterface: React.FC = () => {
         const updatedPools = await backendApi.getPools();
         setRawPools(updatedPools);
       } else {
-        setRemoveStatus(consumeResult?.error?.message || 'Remove liquidity failed.');
+        if (consumeResult?.error?.code === 'LEGACY_LP_POOL_NOT_FOUND') {
+          setRemoveStatus('This LP references an old pool contract. Please migrate your LP with the operator.');
+          toast.error('Legacy LP detected. Please migrate your LP.');
+        } else {
+          setRemoveStatus(consumeResult?.error?.message || 'Remove liquidity failed.');
+        }
       }
     } catch (error: any) {
       console.error('Error removing liquidity:', error);
-      toast.error('An error occurred while removing liquidity');
+      const legacyCode = error?.response?.data?.error?.code;
+      if (legacyCode === 'LEGACY_LP_POOL_NOT_FOUND') {
+        toast.error('This LP references an old pool contract. Please migrate your LP with the operator.');
+      } else {
+        toast.error('An error occurred while removing liquidity');
+      }
       setRemoveStatus('Remove liquidity failed.');
     } finally {
       setRemoveLoading(false);
@@ -901,34 +914,30 @@ const LiquidityInterface: React.FC = () => {
     () => removePositions.find(position => position.contractId === removeSelectionCid) || null,
     [removePositions, removeSelectionCid]
   );
-  const resolveRemovePoolCid = useCallback(async (poolId: string): Promise<string | null> => {
-    if (!poolId) {
+  const resolvedRemovePoolCid = useMemo(() => {
+    if (!selectedLpToken?.poolId) {
       return null;
     }
-    const match = rawPools.find(p => p.contractId === poolId || p.poolId === poolId);
+    const poolId = selectedLpToken.poolId;
+    const match = rawPools.find(p => p.poolId === poolId);
     if (match?.contractId) {
       return match.contractId;
     }
-    if (poolId.startsWith('00')) {
+    if (poolId.startsWith('00') && poolId.length > 20) {
       return poolId;
     }
-    try {
-      return await backendApi.resolvePoolCid(poolId);
-    } catch (err) {
-      console.warn('Failed to resolve pool CID for remove', err);
-      return null;
-    }
-  }, [rawPools]);
+    return null;
+  }, [rawPools, selectedLpToken]);
 
   const removePool = useMemo(() => {
     if (!selectedLpToken) {
       return null;
     }
-    const target = removePoolCid || selectedLpToken.poolId;
+    const poolId = selectedLpToken.poolId;
     return rawPools.find(pool =>
-      pool.contractId === target || pool.poolId === target || pool.poolId === selectedLpToken.poolId
+      pool.poolId === poolId || pool.contractId === resolvedRemovePoolCid
     ) || null;
-  }, [rawPools, selectedLpToken, removePoolCid]);
+  }, [rawPools, selectedLpToken, resolvedRemovePoolCid]);
 
   useEffect(() => {
     if (mode !== 'remove') {
@@ -942,22 +951,6 @@ const LiquidityInterface: React.FC = () => {
       setRemoveSelectionCid(removePositions[0].contractId);
     }
   }, [mode, removePositions, selectedLpToken]);
-
-  useEffect(() => {
-    if (mode !== 'remove' || !selectedLpToken) {
-      setRemovePoolCid(null);
-      return;
-    }
-    let cancelled = false;
-    resolveRemovePoolCid(selectedLpToken.poolId).then((cid) => {
-      if (!cancelled) {
-        setRemovePoolCid(cid);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, selectedLpToken, resolveRemovePoolCid]);
 
   useEffect(() => {
     if (mode !== 'remove') {
@@ -976,9 +969,9 @@ const LiquidityInterface: React.FC = () => {
       setRemovePreviewError(null);
       return;
     }
-    if (!removePoolCid) {
+    if (!resolvedRemovePoolCid) {
       setRemovePreview(null);
-      setRemovePreviewError('Pool not found or not visible.');
+      setRemovePreviewError('Pool details unavailable. You can still submit removal.');
       return;
     }
     const amountNum = parseFloat(removeAmount);
@@ -994,19 +987,27 @@ const LiquidityInterface: React.FC = () => {
     }
     const requestId = `preview-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const timeout = setTimeout(() => {
-      backendApi.inspectDevnetLiquidityRemove({
+      const inspectParams: any = {
         requestId,
-        poolCid: removePoolCid,
         lpCid: selectedLpToken.contractId,
         receiverParty: partyId,
         lpBurnAmount: amountNum.toFixed(10),
-      }).then((res) => {
+      };
+      if (resolvedRemovePoolCid) {
+        inspectParams.poolCid = resolvedRemovePoolCid;
+      }
+      backendApi.inspectDevnetLiquidityRemove(inspectParams).then((res) => {
         if (res?.ok) {
           setRemovePreview(res.result ?? res);
           setRemovePreviewError(null);
         } else {
-          setRemovePreview(null);
-          setRemovePreviewError(res?.error?.message || 'Unable to preview removal.');
+          if (res?.error?.code === 'LEGACY_LP_POOL_NOT_FOUND') {
+            setRemovePreview(null);
+            setRemovePreviewError('Legacy LP detected. Please migrate your LP with the operator.');
+          } else {
+            setRemovePreview(null);
+            setRemovePreviewError(res?.error?.message || 'Unable to preview removal.');
+          }
         }
       }).catch((err) => {
         console.warn('Remove liquidity preview failed', err);
@@ -1015,7 +1016,7 @@ const LiquidityInterface: React.FC = () => {
       });
     }, 300);
     return () => clearTimeout(timeout);
-  }, [mode, partyId, selectedLpToken, removeAmount, removePoolCid]);
+  }, [mode, partyId, selectedLpToken, removeAmount, resolvedRemovePoolCid]);
 
   const poolPositions = useMemo(
     () => pools.filter(p => p.userLiquidity && p.userLiquidity > 0),
@@ -1421,7 +1422,9 @@ const LiquidityInterface: React.FC = () => {
 
                 {removeResult?.ok === false && (
                   <div className="mt-4 text-sm text-error-600 dark:text-error-400">
-                    {removeResult?.error?.message || 'Remove liquidity failed.'}
+                    {removeResult?.error?.code === 'LEGACY_LP_POOL_NOT_FOUND'
+                      ? 'This LP references an old pool contract. Please migrate your LP with the operator.'
+                      : (removeResult?.error?.message || 'Remove liquidity failed.')}
                   </div>
                 )}
               </>
@@ -1474,23 +1477,42 @@ const LiquidityInterface: React.FC = () => {
                 LP (ledger)
               </div>
             )}
-            {lpPositions.map(position => (
-              <div key={`${position.poolCid}-${position.lpBalance}`} className="flex items-center justify-between gap-3 glass-subtle rounded-xl p-3">
-                <div className="min-w-0">
-                  <div className="font-semibold text-gray-900 dark:text-gray-100 truncate">
-                    {resolvePoolLabel(position.poolCid)}
+            {lpPositions.map(position => {
+              const stablePoolId = position.poolId;
+              const activePool = stablePoolId
+                ? rawPools.find(pool => pool.poolId === stablePoolId)
+                : null;
+              const activePoolCid = activePool?.contractId || position.poolCid;
+              const label = activePool
+                ? `${activePool.tokenA.symbol}/${activePool.tokenB.symbol}`
+                : resolvePoolLabel(stablePoolId || activePoolCid);
+              return (
+                <div
+                  key={`${stablePoolId || activePoolCid || 'lp'}-${position.lpBalance}`}
+                  className="flex items-center justify-between gap-3 glass-subtle rounded-xl p-3"
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold text-gray-900 dark:text-gray-100 truncate">
+                      {label}
+                    </div>
+                    <div className="body-small text-gray-600 dark:text-gray-400 truncate">
+                      LP Balance: {formatLpBalance(position.lpBalance)}
+                    </div>
+                    <div className="body-small text-gray-600 dark:text-gray-400 truncate">
+                      Pool ID: {stablePoolId || '—'}
+                    </div>
+                    <div className="body-small text-gray-600 dark:text-gray-400 truncate">
+                      Pool CID: {truncateId(activePoolCid)}
+                    </div>
                   </div>
-                  <div className="body-small text-gray-600 dark:text-gray-400 truncate">
-                    LP Balance: {formatLpBalance(position.lpBalance)}
-                  </div>
+                  {position.updatedAt && (
+                    <div className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                      Updated {new Date(position.updatedAt).toLocaleTimeString('en-US')}
+                    </div>
+                  )}
                 </div>
-                {position.updatedAt && (
-                  <div className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    Updated {new Date(position.updatedAt).toLocaleTimeString('en-US')}
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

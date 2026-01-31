@@ -131,7 +131,8 @@ export interface LpTokenInfo {
 }
 
 export interface LpPositionInfo {
-  poolCid: string;
+  poolId?: string;
+  poolCid?: string;
   lpBalance: string;
   shareBps?: number;
   reserveA?: string;

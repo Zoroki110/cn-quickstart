@@ -60,7 +60,7 @@ public class DevNetLiquidityRemoveController {
     @GetMapping("/inspect")
     public java.util.concurrent.CompletableFuture<ResponseEntity<ApiResponse<LiquidityRemoveInspectResponse>>> inspect(
             @RequestParam("requestId") String requestId,
-            @RequestParam("poolCid") String poolCid,
+            @RequestParam(value = "poolCid", required = false) String poolCid,
             @RequestParam("lpCid") String lpCid,
             @RequestParam("receiverParty") String receiverParty,
             @RequestParam(value = "lpBurnAmount", required = false) String lpBurnAmount,

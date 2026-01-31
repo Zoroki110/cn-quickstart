@@ -1378,7 +1378,11 @@ export class BackendApiService {
     maxAgeSeconds?: number;
   }): Promise<any> {
     try {
-      const res = await this.client.post('/api/devnet/liquidity/consume', payload);
+      const res = await this.client.post(
+        '/api/devnet/liquidity/consume',
+        payload,
+        { timeout: 90000 }
+      );
       return res.data;
     } catch (error: any) {
       const data = error?.response?.data;

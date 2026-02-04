@@ -25,6 +25,7 @@ import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
@@ -33,8 +34,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * PQS adapter that provides access to Daml contracts from a Postgres database.
+ * Only activated when JdbcTemplate bean is available (requires pqs.enabled=true)
  */
 @Component
+@ConditionalOnBean(JdbcTemplate.class)
 public class Pqs {
 
     private static final Logger logger = LoggerFactory.getLogger(Pqs.class);

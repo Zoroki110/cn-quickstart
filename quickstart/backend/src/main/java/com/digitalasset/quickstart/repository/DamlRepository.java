@@ -15,6 +15,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Repository;
 import quickstart_licensing.licensing.appinstall.AppInstall;
 import quickstart_licensing.licensing.appinstall.AppInstallRequest;
@@ -25,8 +26,10 @@ import splice_api_token_allocation_v1.splice.api.token.allocationv1.Allocation;
 
 /**
  * Repository for accessing active Daml contracts via PQS.
+ * Only activated when PQS is enabled (requires pqs.enabled=true)
  */
 @Repository
+@ConditionalOnBean(Pqs.class)
 public class DamlRepository {
 
     private final Pqs pqs;

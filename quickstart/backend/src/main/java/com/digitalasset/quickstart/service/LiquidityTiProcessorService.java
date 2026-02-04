@@ -146,10 +146,12 @@ public class LiquidityTiProcessorService {
                             mergeDisclosed(ctxA.disclosedContracts(), ctxB.disclosedContracts());
                     String synchronizerId = firstNonBlank(ctxA.synchronizerId(), ctxB.synchronizerId());
 
-                    LOG.info("[LiquidityConsume] requestId={} operator={} poolCid={} tiA={} tiB={} amountA={} amountB={} provider={} ctxAKeys={} ctxBKeys={} actAs=[{}]",
+                    String poolIdText = (pool.poolId != null && !pool.poolId.isBlank()) ? pool.poolId : request.poolCid;
+                    LOG.info("[LiquidityConsume] requestId={} operator={} poolCid={} poolIdText={} tiA={} tiB={} amountA={} amountB={} provider={} ctxAKeys={} ctxBKeys={} actAs=[{}]",
                             request.requestId,
                             operator,
                             request.poolCid,
+                            poolIdText,
                             a.transfer.contractId(),
                             b.transfer.contractId(),
                             amountA.toPlainString(),
@@ -166,7 +168,7 @@ public class LiquidityTiProcessorService {
                             .addFields(recordField("amountA", numericValue(amountA)))
                             .addFields(recordField("amountB", numericValue(amountB)))
                             .addFields(recordField("deadline", timestampValue(deadline)))
-                            .addFields(recordField("poolIdText", textValue(request.poolCid)))
+                            .addFields(recordField("poolIdText", textValue(poolIdText)))
                             .addFields(recordField("acceptExtraArgsA", optionalValue(recordValue(ctxA.extraArgs()))))
                             .addFields(recordField("acceptExtraArgsB", optionalValue(recordValue(ctxB.extraArgs()))))
                             .build();

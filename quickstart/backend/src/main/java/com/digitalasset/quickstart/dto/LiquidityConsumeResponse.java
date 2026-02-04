@@ -8,6 +8,7 @@ public class LiquidityConsumeResponse {
     public String poolCid;
     public String newPoolCid;
     public String providerParty;
+    public String lpOwnerParty;
     public String tiCidA;
     public String tiCidB;
     public String amountA;

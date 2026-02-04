@@ -1,7 +1,7 @@
 sdk-version: 3.4.7
 name: clearportx-amm-drain-credit
 source: daml
-version: 1.0.8
+version: 1.0.11
 parties:
   - PoolOperator
   - PoolParty

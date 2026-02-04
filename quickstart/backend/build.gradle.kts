@@ -48,6 +48,11 @@ dependencies {
     implementation(Deps.springBoot.security)
     implementation("org.springframework.boot:spring-boot-starter-data-redis:3.4.2")
     implementation("commons-codec:commons-codec:1.17.1")  // For SHA-256 hashing
+    // Daml LF archive reader (DEVNET debug-only schema inspection)
+    implementation("com.daml:daml-lf-archive-reader_2.13:3.1.0-snapshot.20240708.13168.0.v7ed18470")
+    implementation("com.daml:daml-lf-data_2.13:3.1.0-snapshot.20240708.13168.0.v7ed18470")
+    implementation("com.daml:daml-lf-language_2.13:3.1.0-snapshot.20240708.13168.0.v7ed18470")
+    implementation("com.daml:daml-lf-dev-archive-java-proto:3.1.0-snapshot.20240708.13168.0.v7ed18470")
 
     runtimeOnly("org.postgresql:postgresql:42.7.3")
     runtimeOnly(Deps.grpc.api)
@@ -173,6 +178,7 @@ val manualDrainCreditBindings = tasks.register("applyManualDrainCreditBindings")
     val targetRoot = file("$projectDir/build/generated-daml-bindings")
     inputs.dir(manualDir)
     outputs.dir(targetRoot)
+    outputs.upToDateWhen { false }
     doLast {
         if (!manualDir.exists()) {
             throw GradleException("Manual drain+credit bindings not found at ${manualDir.absolutePath}")
@@ -191,6 +197,10 @@ val manualDrainCreditBindings = tasks.register("applyManualDrainCreditBindings")
         copyManual("Identifiers.manual.java", "clearportx_amm_drain_credit/Identifiers.java")
         println("✅ Applied manual drain+credit bindings overlay into ${targetRoot.absolutePath}")
     }
+}
+
+manualDrainCreditBindings.configure {
+    mustRunAfter(":daml:build")
 }
 
 tasks.getByName("compileJava").dependsOn(

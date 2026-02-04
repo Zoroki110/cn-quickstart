@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -27,7 +28,9 @@ public class LedgerHealthService {
 
     private static final Logger logger = LoggerFactory.getLogger(LedgerHealthService.class);
 
+    @Nullable
     private final JdbcTemplate jdbcTemplate;
+    @Nullable
     private final Pqs pqs;
     private final LedgerReader ledgerReader;
 
@@ -38,10 +41,17 @@ public class LedgerHealthService {
     private String applicationVersion;
 
     @Autowired
-    public LedgerHealthService(JdbcTemplate jdbcTemplate, Pqs pqs, LedgerReader ledgerReader) {
+    public LedgerHealthService(
+            @Autowired(required = false) @Nullable JdbcTemplate jdbcTemplate,
+            @Autowired(required = false) @Nullable Pqs pqs,
+            LedgerReader ledgerReader
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.pqs = pqs;
         this.ledgerReader = ledgerReader;
+        if (jdbcTemplate == null) {
+            logger.info("JdbcTemplate not available - PQS health checks disabled");
+        }
     }
 
     /**
@@ -61,49 +71,65 @@ public class LedgerHealthService {
             Map<String, Object> health = new HashMap<>();
 
             try {
-                // Get PQS current offset (best-effort with 200ms timeout)
-                try {
-                    String pqsOffsetQuery = "SELECT COALESCE(MAX(pk), 0) as max_offset FROM __events";
-                    Long pqsOffset = CompletableFuture.supplyAsync(() ->
-                        jdbcTemplate.queryForObject(pqsOffsetQuery, Long.class)
-                    ).orTimeout(200, java.util.concurrent.TimeUnit.MILLISECONDS).join();
-                    health.put("pqsOffset", pqsOffset);
-                } catch (Exception ex) {
-                    logger.debug("PQS offset query timeout/failed (best-effort): {}", ex.getMessage());
-                    // Omit pqsOffset field on timeout
+                // PQS-specific checks (only if jdbcTemplate available)
+                java.util.List<String> packageNames = java.util.Collections.emptyList();
+                Long clearportxCount = 0L;
+                boolean hasClearportxPackage = false;
+                boolean hasClearportxTemplates = false;
+
+                if (jdbcTemplate != null) {
+                    // Get PQS current offset (best-effort with 200ms timeout)
+                    try {
+                        String pqsOffsetQuery = "SELECT COALESCE(MAX(pk), 0) as max_offset FROM __events";
+                        Long pqsOffset = CompletableFuture.supplyAsync(() ->
+                            jdbcTemplate.queryForObject(pqsOffsetQuery, Long.class)
+                        ).orTimeout(200, java.util.concurrent.TimeUnit.MILLISECONDS).join();
+                        health.put("pqsOffset", pqsOffset);
+                    } catch (Exception ex) {
+                        logger.debug("PQS offset query timeout/failed (best-effort): {}", ex.getMessage());
+                        // Omit pqsOffset field on timeout
+                    }
+
+                    // Get distinct package names in PQS
+                    String packageQuery = "SELECT DISTINCT package_name FROM __contract_tpe LIMIT 20";
+                    packageNames = jdbcTemplate.queryForList(packageQuery, String.class);
+                    health.put("pqsPackageNames", packageNames);
+
+                    // Count ClearportX contracts (Pool, Token, LPToken, SwapRequest)
+                    // Query active contracts (where archived_at_ix is null)
+                    String clearportxQuery = """
+                        SELECT COUNT(*) FROM __contracts c
+                        JOIN __contract_tpe ct ON c.tpe_pk = ct.pk
+                        WHERE c.archived_at_ix IS NULL
+                        AND (ct.module_name LIKE '%AMM%'
+                             OR ct.module_name LIKE '%Token%'
+                             OR ct.module_name LIKE '%LPToken%'
+                             OR ct.package_name LIKE '%clearportx%')
+                    """;
+                    clearportxCount = jdbcTemplate.queryForObject(clearportxQuery, Long.class);
+                    health.put("clearportxContractCount", clearportxCount);
+
+                    // Check if ClearportX packages are indexed
+                    hasClearportxPackage = packageNames.stream()
+                            .anyMatch(name -> name != null && name.startsWith("clearportx"));
+
+                    // Check if we have active ClearportX contracts
+                    hasClearportxTemplates = clearportxCount != null && clearportxCount > 0;
+                } else {
+                    logger.debug("JdbcTemplate not available - skipping PQS health checks");
+                    health.put("pqsEnabled", false);
                 }
-
-                // Get distinct package names in PQS
-                String packageQuery = "SELECT DISTINCT package_name FROM __contract_tpe LIMIT 20";
-                var packageNames = jdbcTemplate.queryForList(packageQuery, String.class);
-                health.put("pqsPackageNames", packageNames);
-
-                // Count ClearportX contracts (Pool, Token, LPToken, SwapRequest)
-                // Query active contracts (where archived_at_ix is null)
-                String clearportxQuery = """
-                    SELECT COUNT(*) FROM __contracts c
-                    JOIN __contract_tpe ct ON c.tpe_pk = ct.pk
-                    WHERE c.archived_at_ix IS NULL
-                    AND (ct.module_name LIKE '%AMM%'
-                         OR ct.module_name LIKE '%Token%'
-                         OR ct.module_name LIKE '%LPToken%'
-                         OR ct.package_name LIKE '%clearportx%')
-                """;
-                Long clearportxCount = jdbcTemplate.queryForObject(clearportxQuery, Long.class);
-                health.put("clearportxContractCount", clearportxCount);
-
-                // Check if ClearportX packages are indexed
-                boolean hasClearportxPackage = packageNames.stream()
-                        .anyMatch(name -> name != null && name.startsWith("clearportx"));
-
-                // Check if we have active ClearportX contracts
-                boolean hasClearportxTemplates = clearportxCount != null && clearportxCount > 0;
 
                 // Determine sync status with detailed diagnostics
                 String status;
                 String diagnostic = null;
 
-                if (!hasClearportxPackage) {
+                if (jdbcTemplate == null) {
+                    // PQS disabled - using Ledger API only (Canton 3.4.7 mode)
+                    status = "OK";
+                    diagnostic = "Running in Ledger API-only mode (PQS disabled)";
+                    logger.info("Health check OK: PQS disabled, using Ledger API directly");
+                } else if (!hasClearportxPackage) {
                     // Package not in PQS at all - allowlist issue
                     status = "PACKAGE_NOT_INDEXED";
                     diagnostic = "ClearportX package not found in PQS. Check PQS allowlist configuration.";
@@ -120,7 +146,7 @@ public class LedgerHealthService {
                     logger.info("✅ Health check OK: clearportxContracts={}", clearportxCount);
                 }
 
-                health.put("synced", hasClearportxTemplates);
+                health.put("synced", hasClearportxTemplates || jdbcTemplate == null);
                 health.put("status", status);
                 if (diagnostic != null) {
                     health.put("diagnostic", diagnostic);
@@ -145,23 +171,25 @@ public class LedgerHealthService {
                 }
 
                 // Get package ID from PQS if available
-                try {
-                    String packageIdQuery = """
-                        SELECT DISTINCT package_id FROM __contract_tpe
-                        WHERE package_name LIKE 'clearportx%'
-                        LIMIT 1
-                    """;
-                    String packageId = jdbcTemplate.queryForObject(packageIdQuery, String.class);
-                    health.put("clearportxPackageId", packageId);
-                } catch (Exception e) {
-                    logger.debug("Could not retrieve clearportx package ID: {}", e.getMessage());
-                }
+                if (jdbcTemplate != null) {
+                    try {
+                        String packageIdQuery = """
+                            SELECT DISTINCT package_id FROM __contract_tpe
+                            WHERE package_name LIKE 'clearportx%'
+                            LIMIT 1
+                        """;
+                        String packageId = jdbcTemplate.queryForObject(packageIdQuery, String.class);
+                        health.put("clearportxPackageId", packageId);
+                    } catch (Exception e) {
+                        logger.debug("Could not retrieve clearportx package ID: {}", e.getMessage());
+                    }
 
-                // Emit metrics for Grafana (only if PQS offset available)
-                if (health.containsKey("pqsOffset")) {
-                    logMetric("pqs_offset", (Long) health.get("pqsOffset"));
+                    // Emit metrics for Grafana (only if PQS offset available)
+                    if (health.containsKey("pqsOffset")) {
+                        logMetric("pqs_offset", (Long) health.get("pqsOffset"));
+                    }
+                    logMetric("clearportx_contract_count", clearportxCount != null ? clearportxCount : 0);
                 }
-                logMetric("clearportx_contract_count", clearportxCount != null ? clearportxCount : 0);
 
             } catch (Exception e) {
                 logger.error("Failed to get health status: {}", e.getMessage(), e);

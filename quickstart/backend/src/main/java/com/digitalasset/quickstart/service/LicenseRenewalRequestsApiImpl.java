@@ -10,6 +10,7 @@ import com.digitalasset.quickstart.security.AuthUtils;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -30,6 +31,7 @@ import static com.digitalasset.quickstart.utility.TracingUtils.tracingCtx;
  */
 @Controller
 @RequestMapping("${openapi.asset.base-path:}")
+@ConditionalOnBean(DamlRepository.class)
 public class LicenseRenewalRequestsApiImpl implements LicenseRenewalRequestsApi {
 
     private static final Logger logger = LoggerFactory.getLogger(LicenseRenewalRequestsApiImpl.class);

@@ -552,6 +552,7 @@ public class ClearportxDebugController {
         payload.put("newPoolCid", response.newPoolCid());
         payload.put("reserveA", response.reserveA());
         payload.put("reserveB", response.reserveB());
+        payload.put("lpAmount", response.lpAmount());
         return payload;
     }
 

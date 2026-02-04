@@ -36,11 +36,16 @@ template HoldingPool
     lockedAmountB : Decimal                -- Amount of B locked for pending payouts
     feeRate : Decimal                      -- Fee rate (e.g., 0.003 = 0.3%)
     lpSupply : Decimal                     -- Total LP tokens in circulation
+    poolId : Optional Text                 -- Stable pool identifier (does not change across updates)
   where
     signatory operator
 
     -- Canonical ordering: instrumentA < instrumentB
     ensure
+      (case poolId of
+        None -> True
+        Some pid -> pid /= ""
+      ) &&
       (instrumentA.admin, instrumentA.id) < (instrumentB.admin, instrumentB.id) &&
       reserveAmountA >= 0.0 &&
       reserveAmountB >= 0.0 &&
@@ -466,6 +471,7 @@ template HoldingPool
       controller operator
       do
         assertMsg "Pool must be Active" (status == Active)
+        assertMsg "PoolId mismatch" (poolId == None || poolId == Some poolIdText)
         now <- getTime
         assertMsg "Liquidity deadline has expired" (now < deadline)
         assertMsg "Amount A must be positive" (amountA > 0.0)
@@ -545,6 +551,7 @@ template HoldingPool
           reserveAmountA = newReserveA
           reserveAmountB = newReserveB
           lpSupply = newLpSupply
+          poolId = Some poolIdText
 
         return (newPoolCid, lpMinted, newReserveA, newReserveB)
 
@@ -570,6 +577,7 @@ template HoldingPool
       controller operator
       do
         assertMsg "Pool must be Active" (status == Active)
+        assertMsg "PoolId mismatch" (poolId == None || poolId == Some poolIdText)
         now <- getTime
         assertMsg "Remove liquidity deadline has expired" (now < deadline)
         assertMsg "LP burn amount must be positive" (lpBurnAmount > 0.0)
@@ -659,6 +667,7 @@ template HoldingPool
           reserveAmountA = newReserveA
           reserveAmountB = newReserveB
           lpSupply = newLpSupply
+          poolId = Some poolIdText
 
         return (newPoolCid, outA, outB, newReserveA, newReserveB, payoutOutcomeA, payoutOutcomeB)
 
@@ -727,8 +736,8 @@ template HoldingPool
           lockedAmountB = newLockedB
 
 -- | Helper to create an empty uninitialized pool.
-createEmptyPool : Party -> InstrumentId -> InstrumentId -> Decimal -> Update (ContractId HoldingPool)
-createEmptyPool op instA instB fee = do
+createEmptyPool : Party -> Text -> InstrumentId -> InstrumentId -> Decimal -> Update (ContractId HoldingPool)
+createEmptyPool op poolId instA instB fee = do
   -- Ensure canonical ordering
   let (orderedA, orderedB) =
         if (instA.admin, instA.id) < (instB.admin, instB.id)
@@ -737,6 +746,7 @@ createEmptyPool op instA instB fee = do
 
   create HoldingPool with
     operator = op
+    poolId = Some poolId
     instrumentA = orderedA
     instrumentB = orderedB
     status = Uninitialized

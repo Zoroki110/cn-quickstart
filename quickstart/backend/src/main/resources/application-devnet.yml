@@ -3,6 +3,9 @@
 spring:
   application:
     name: clearportx-backend
+  mvc:
+    async:
+      request-timeout: 120000
 
   # Disable DataSource autoconfiguration when PQS is not enabled
   # This allows Ledger API-only mode for Canton 3.4.7

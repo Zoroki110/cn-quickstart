@@ -25,6 +25,7 @@ import org.openapitools.model.AppInstallCreateLicenseResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -37,6 +38,7 @@ import splice_api_token_metadata_v1.splice.api.token.metadatav1.Metadata;
 
 @Controller
 @RequestMapping("${openapi.asset.base-path:}")
+@ConditionalOnBean(DamlRepository.class)
 public class AppInstallsApiImpl implements AppInstallsApi {
 
     private final LedgerApi ledger;

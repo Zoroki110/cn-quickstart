@@ -3,28 +3,35 @@
 
 package com.digitalasset.quickstart.controller;
 
-import clearportx_amm_production.amm.pool.Pool;
-import clearportx_amm_production.amm.receipt.Receipt;
-import clearportx_amm_production.amm.swaprequest.SwapReady;
-import clearportx_amm_production.amm.swaprequest.SwapRequest;
-import clearportx_amm_production.amm.atomicswap.AtomicSwapProposal;
-import clearportx_amm_production.token.token.Token;
+import clearportx_amm_drain_credit.amm.pool.Pool;
+import clearportx_amm_drain_credit.amm.receipt.Receipt;
+import clearportx_amm_drain_credit.amm.swaprequest.SwapReady;
+import clearportx_amm_drain_credit.amm.swaprequest.SwapRequest;
+import com.digitalasset.quickstart.controller.DomainErrorStatusMapper;
+import clearportx_amm_drain_credit.amm.atomicswap.AtomicSwapProposal;
+import clearportx_amm_drain_credit.token.token.Token;
+import com.digitalasset.quickstart.common.DomainError;
+import com.digitalasset.quickstart.common.Result;
 import com.digitalasset.quickstart.dto.*;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 import com.digitalasset.quickstart.ledger.StaleAcsRetry;
 import com.digitalasset.quickstart.security.AuthUtils;
 import com.digitalasset.quickstart.security.PartyMappingService;
 import com.digitalasset.quickstart.metrics.SwapMetrics;
+import com.digitalasset.quickstart.security.JwtAuthService;
+import com.digitalasset.quickstart.security.JwtAuthService.AuthenticatedUser;
 import com.digitalasset.quickstart.validation.SwapValidator;
 import com.digitalasset.quickstart.service.IdempotencyService;
 import com.digitalasset.quickstart.service.TokenMergeService;
 import com.digitalasset.quickstart.constants.SwapConstants;
 import com.digitalasset.transcode.java.ContractId;
 import com.digitalasset.transcode.java.Party;
+import jakarta.servlet.http.HttpServletRequest;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -58,10 +65,11 @@ public class SwapController {
     private final SwapValidator swapValidator;
     private final IdempotencyService idempotencyService;
     private final TokenMergeService tokenMergeService;
+    private final JwtAuthService jwtAuthService;
 
     public SwapController(LedgerApi ledger, AuthUtils authUtils, PartyMappingService partyMappingService,
                           SwapMetrics swapMetrics, SwapValidator swapValidator, IdempotencyService idempotencyService,
-                          TokenMergeService tokenMergeService) {
+                          TokenMergeService tokenMergeService, JwtAuthService jwtAuthService) {
         this.ledger = ledger;
         this.authUtils = authUtils;
         this.partyMappingService = partyMappingService;
@@ -69,6 +77,7 @@ public class SwapController {
         this.swapValidator = swapValidator;
         this.idempotencyService = idempotencyService;
         this.tokenMergeService = tokenMergeService;
+        this.jwtAuthService = jwtAuthService;
     }
 
     /**
@@ -472,16 +481,12 @@ public class SwapController {
     public CompletableFuture<AtomicSwapResponse> atomicSwap(
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody PrepareSwapRequest req,
+            HttpServletRequest request,
             @RequestHeader(value = SwapConstants.IDEMPOTENCY_HEADER, required = false) String idempotencyKey
     ) {
-        // SECURITY: Verify JWT is present and valid
-        if (jwt == null || jwt.getSubject() == null) {
-            logger.error("POST /api/swap/atomic called without valid JWT");
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required - JWT subject missing");
-        }
-
-        String jwtSubject = jwt.getSubject();
-        String trader = partyMappingService.mapJwtSubjectToParty(jwtSubject);
+        String authorization = request != null ? request.getHeader(HttpHeaders.AUTHORIZATION) : null;
+        String trader = resolveTraderParty(jwt, authorization);
+        String jwtSubject = jwt != null ? jwt.getSubject() : trader;
 
         // IDEMPOTENCY: Check if this request was already processed
         if (idempotencyKey != null) {
@@ -781,4 +786,22 @@ public class SwapController {
             this.tokens = tokens;
         }
     }
+
+    private String resolveTraderParty(Jwt jwt, String authorizationHeader) {
+        if (authorizationHeader != null && !authorizationHeader.isBlank()) {
+            Result<AuthenticatedUser, DomainError> authResult = jwtAuthService.authenticate(authorizationHeader);
+            if (authResult.isOk()) {
+                return authResult.getValueUnsafe().partyId();
+            }
+            DomainError error = authResult.getErrorUnsafe();
+            throw new ResponseStatusException(DomainErrorStatusMapper.map(error), error.message());
+        }
+        if (jwt != null && jwt.getSubject() != null) {
+            return partyMappingService.mapJwtSubjectToParty(jwt.getSubject());
+        }
+        logger.error("POST /api/swap/atomic called without valid JWT");
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required - JWT subject missing");
+    }
+
 }
+

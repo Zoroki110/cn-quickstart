@@ -124,6 +124,7 @@ testHoldingPool = script do
   poolCid <- submit operator do
     createCmd HoldingPool with
       operator
+      poolId = Some "pool-test"
       instrumentA = amuletId
       instrumentB = cbtcId
       status = Uninitialized
@@ -171,6 +172,7 @@ testHoldingPool = script do
   poolCid2 <- submit operator do
     createCmd HoldingPool with
       operator
+      poolId = Some "pool-test"
       instrumentA = amuletId
       instrumentB = cbtcId
       status = Active
@@ -326,6 +328,7 @@ testPayoutExpiry = script do
   poolCid <- submit operator do
     createCmd HoldingPool with
       operator
+      poolId = Some "pool-test"
       instrumentA = amuletId
       instrumentB = cbtcId
       status = Active

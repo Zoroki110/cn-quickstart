@@ -3,7 +3,7 @@
 
 package com.digitalasset.quickstart.metrics;
 
-import clearportx_amm_production.amm.pool.Pool;
+import clearportx_amm_drain_credit.amm.pool.Pool;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

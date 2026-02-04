@@ -350,7 +350,6 @@ public class HoldingPoolService {
     private ValueOuterClass.Record buildCreateArgs(final HoldingPoolCreateRequest req, final String operator) {
         return ValueOuterClass.Record.newBuilder()
                 .addFields(recordField("operator", ValueOuterClass.Value.newBuilder().setParty(operator).build()))
-                .addFields(recordField("poolId", optionalTextValue(req.poolId)))
                 .addFields(recordField("instrumentA", instrumentRecord(req.instrumentA)))
                 .addFields(recordField("instrumentB", instrumentRecord(req.instrumentB)))
                 .addFields(recordField("status", statusVariant("Uninitialized")))
@@ -360,6 +359,7 @@ public class HoldingPoolService {
                 .addFields(recordField("lockedAmountB", decimalValue(BigDecimal.ZERO)))
                 .addFields(recordField("feeRate", decimalValue(bpsToRate(req.feeBps))))
                 .addFields(recordField("lpSupply", decimalValue(BigDecimal.ZERO)))
+                .addFields(recordField("poolId", optionalTextValue(req.poolId)))
                 .build();
     }
 

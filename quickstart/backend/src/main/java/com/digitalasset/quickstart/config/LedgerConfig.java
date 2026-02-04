@@ -3,6 +3,7 @@
 
 package com.digitalasset.quickstart.config;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +16,12 @@ public class LedgerConfig {
     private String applicationId;
     private String registryBaseUri;
     private String grpcAuthority;
+    private String registryAuthHeader;
+    private String registryAuthToken;
+    private String registryTransferFactoryUrl;
+
+    @Autowired(required = false)
+    private RegistryRoutingConfig registryRouting;
 
     public String getHost() {
         return host;
@@ -40,7 +47,15 @@ public class LedgerConfig {
         this.applicationId = applicationId;
     }
 
+    /**
+     * Get registry base URI. For multi-asset routing, use RegistryRoutingConfig directly.
+     * This method returns the default for backward compatibility.
+     */
     public String getRegistryBaseUri() {
+        // Prefer new nested config if available
+        if (registryRouting != null && registryRouting.getDefaultBaseUri() != null) {
+            return registryRouting.getDefaultBaseUri();
+        }
         return registryBaseUri;
     }
 
@@ -54,5 +69,37 @@ public class LedgerConfig {
 
     public void setGrpcAuthority(String grpcAuthority) {
         this.grpcAuthority = grpcAuthority;
+    }
+
+    public String getRegistryAuthHeader() {
+        return registryAuthHeader;
+    }
+
+    public void setRegistryAuthHeader(String registryAuthHeader) {
+        this.registryAuthHeader = registryAuthHeader;
+    }
+
+    public String getRegistryAuthToken() {
+        return registryAuthToken;
+    }
+
+    public void setRegistryAuthToken(String registryAuthToken) {
+        this.registryAuthToken = registryAuthToken;
+    }
+
+    public String getRegistryTransferFactoryUrl() {
+        return registryTransferFactoryUrl;
+    }
+
+    public void setRegistryTransferFactoryUrl(String registryTransferFactoryUrl) {
+        this.registryTransferFactoryUrl = registryTransferFactoryUrl;
+    }
+
+    /**
+     * Get the registry routing config for multi-asset support.
+     * May be null if not in devnet profile.
+     */
+    public RegistryRoutingConfig getRegistryRouting() {
+        return registryRouting;
     }
 }

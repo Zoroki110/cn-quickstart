@@ -34,6 +34,7 @@ import java.util.stream.Collectors;
 import org.openapitools.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -52,6 +53,7 @@ import splice_api_token_metadata_v1.splice.api.token.metadatav1.ExtraArgs;
  */
 @Controller
 @RequestMapping("${openapi.asset.base-path:}")
+@ConditionalOnBean(DamlRepository.class)
 public class LicenseApiImpl implements LicensesApi {
 
     private static final Logger logger = LoggerFactory.getLogger(LicenseApiImpl.class);

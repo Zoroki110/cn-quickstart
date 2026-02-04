@@ -7,6 +7,7 @@ import com.digitalasset.quickstart.config.PostgresConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -16,8 +17,10 @@ import javax.sql.DataSource;
 
 /**
  * Configuration class that sets up a DataSource and JdbcTemplate for interacting with a Postgres database.
+ * Only activated when pqs.enabled=true (default: false for Canton 3.4.7 Ledger API-only mode)
  */
 @Configuration
+@ConditionalOnProperty(name = "pqs.enabled", havingValue = "true", matchIfMissing = false)
 public class JdbcDataSource {
 
     private Logger logger = LoggerFactory.getLogger(JdbcDataSource.class);

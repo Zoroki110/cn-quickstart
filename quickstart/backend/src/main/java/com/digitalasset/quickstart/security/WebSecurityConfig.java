@@ -8,6 +8,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.core.userdetails.User;
@@ -15,14 +17,21 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.config.Customizer;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-import org.springframework.http.HttpMethod;
 
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
@@ -38,6 +47,7 @@ import java.util.List;
  */
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 @ConditionalOnProperty(name = "security.actuator.username")
 public class WebSecurityConfig {
 
@@ -65,6 +75,12 @@ public class WebSecurityConfig {
     @Value("${cors.max-age:3600}")
     private long maxAge;
 
+    @Value("${clearportx.auth.jwt-secret:devnet-secret}")
+    private String walletJwtSecret;
+
+    @Value("${clearportx.auth.jwt-issuer:clearportx-backend}")
+    private String walletJwtIssuer;
+
     /**
      * Security filter chain for actuator endpoints.
      * Higher precedence (Order 1) to apply Basic Auth before OAuth2.
@@ -89,17 +105,14 @@ public class WebSecurityConfig {
      */
     @Bean
     @Order(2)
-    public SecurityFilterChain apiSecurityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain apiSecurityFilterChain(HttpSecurity http, JwtDecoder walletJwtDecoder) throws Exception {
         http
             .securityMatcher("/api/**")
             .cors(Customizer.withDefaults())  // Enable CORS for API endpoints
             .authorizeHttpRequests(authz -> authz
-                // TEMPORARILY: Allow ALL requests for Netlify testing
-                // TODO: Re-enable OAuth2 JWT authentication after CORS is working
                 .anyRequest().permitAll()
             )
-            // TEMPORARILY DISABLED FOR DEBUGGING:
-            // .oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults()))
+            .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.decoder(walletJwtDecoder)))
             .csrf(csrf -> csrf.disable());  // API uses JWT, not session-based auth
 
         return http.build();
@@ -170,4 +183,20 @@ public class WebSecurityConfig {
 
         return source;
     }
+
+    @Bean
+    public JwtDecoder walletJwtDecoder() {
+        byte[] keyBytes = walletJwtSecret != null ? walletJwtSecret.getBytes(StandardCharsets.UTF_8) : new byte[0];
+        SecretKeySpec secretKey = new SecretKeySpec(keyBytes, "HmacSHA256");
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(secretKey)
+                .macAlgorithm(MacAlgorithm.HS256)
+                .build();
+        OAuth2TokenValidator<Jwt> validator =
+                walletJwtIssuer == null || walletJwtIssuer.isBlank()
+                        ? JwtValidators.createDefault()
+                        : JwtValidators.createDefaultWithIssuer(walletJwtIssuer);
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(validator));
+        return decoder;
+    }
+
 }

@@ -3,9 +3,9 @@
 
 package com.digitalasset.quickstart.service;
 
-import clearportx_amm_production.amm.pool.Pool;
-import clearportx_amm_production.lptoken.lptoken.LPToken;
-import clearportx_amm_production.token.token.Token;
+import clearportx_amm_drain_credit.amm.pool.Pool;
+import clearportx_amm_drain_credit.lptoken.lptoken.LPToken;
+import clearportx_amm_drain_credit.token.token.Token;
 import com.daml.ledger.api.v2.CommandsOuterClass;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 import com.digitalasset.quickstart.pqs.Contract;
@@ -19,6 +19,8 @@ import daml_stdlib_da_time_types.da.time.types.RelTime;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -48,7 +50,9 @@ public class ClearportXInitService {
     private static final Logger logger = LoggerFactory.getLogger(ClearportXInitService.class);
 
     private final LedgerApi ledger;
+    @Nullable
     private final Pqs pqs;
+    @Nullable
     private final DamlRepository damlRepository;
     private final AuthUtils authUtils;
     private final LedgerHealthService healthService;
@@ -65,10 +69,11 @@ public class ClearportXInitService {
         FAILED
     }
 
+    @Autowired
     public ClearportXInitService(
             LedgerApi ledger,
-            Pqs pqs,
-            DamlRepository damlRepository,
+            @Autowired(required = false) @Nullable Pqs pqs,
+            @Autowired(required = false) @Nullable DamlRepository damlRepository,
             AuthUtils authUtils,
             LedgerHealthService healthService
     ) {
@@ -77,6 +82,9 @@ public class ClearportXInitService {
         this.damlRepository = damlRepository;
         this.authUtils = authUtils;
         this.healthService = healthService;
+        if (pqs == null) {
+            logger.info("PQS not available - init service will use Ledger API only");
+        }
     }
 
     /**
@@ -322,11 +330,12 @@ public class ClearportXInitService {
                     BigDecimal.ZERO,         // totalLPSupply (empty pool)
                     BigDecimal.ZERO,         // reserveA (empty pool)
                     BigDecimal.ZERO,         // reserveB (empty pool)
-                    Optional.empty(),        // tokenACid (no reserves)
-                    Optional.empty(),        // tokenBCid (no reserves)
+                    Optional.<ContractId<Token>>empty(),        // tokenACid (no reserves)
+                    Optional.<ContractId<Token>>empty(),        // tokenBCid (no reserves)
                     appProviderParty,        // protocolFeeReceiver
                     1000L,                   // maxInBps (10%)
-                    1000L                    // maxOutBps (10%)
+                    1000L,                   // maxOutBps (10%)
+                    List.of()                // extraObservers
                 );
 
                 String commandId = commandIdPrefix + "-pool-" + config.poolId.toLowerCase() + "-" + UUID.randomUUID();

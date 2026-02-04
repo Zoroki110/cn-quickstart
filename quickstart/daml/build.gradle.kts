@@ -89,11 +89,8 @@ tasks.named("build") {
     // Keep licensing codegen, do not force ClearportX codegen during normal build
     dependsOn("codeGen")
     if (enableClearportxCodegen.get()) {
-        // Also generate ClearportX (gv-compat) bindings and run it AFTER licensing so its Daml.java wins
+        // Also generate ClearportX (gv-compat) bindings so its Daml.java wins
         dependsOn("codeGenClearportX")
-        tasks.named("codeGenClearportX") {
-            mustRunAfter("codeGen")
-        }
     } else {
         doFirst {
             println("✅ ClearportX manual bindings overlay active (transcode codegen disabled).")

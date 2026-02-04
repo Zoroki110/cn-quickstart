@@ -3,7 +3,7 @@
 
 package com.digitalasset.quickstart.service;
 
-import clearportx_amm_production.token.token.Token;
+import clearportx_amm_drain_credit.token.token.Token;
 import com.digitalasset.quickstart.ledger.LedgerApi;
 import com.digitalasset.transcode.java.ContractId;
 import io.opentelemetry.instrumentation.annotations.WithSpan;

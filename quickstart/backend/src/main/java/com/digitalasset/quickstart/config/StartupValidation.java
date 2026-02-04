@@ -35,7 +35,7 @@ public class StartupValidation {
         boolean allValid = true;
 
         // Validate AtomicSwapProposal (critical for atomic swap feature)
-        if (!checkClassExists("clearportx_amm.amm.atomicswap.AtomicSwapProposal")) {
+        if (!checkClassExists("clearportx_amm_drain_credit.amm.atomicswap.AtomicSwapProposal")) {
             logger.error("❌ CRITICAL: AtomicSwapProposal template NOT found in bindings!");
             logger.error("   → Atomic swap endpoint will not work");
             logger.error("   → Ensure clearportx-amm-1.0.1.dar is built and code-generated");
@@ -45,28 +45,28 @@ public class StartupValidation {
         }
 
         // Validate core templates
-        if (!checkClassExists("clearportx_amm.amm.pool.Pool")) {
+        if (!checkClassExists("clearportx_amm_drain_credit.amm.pool.Pool")) {
             logger.error("❌ CRITICAL: Pool template NOT found in bindings!");
             allValid = false;
         } else {
             logger.info("✅ Pool template found");
         }
 
-        if (!checkClassExists("clearportx_amm.token.token.Token")) {
+        if (!checkClassExists("clearportx_amm_drain_credit.token.token.Token")) {
             logger.error("❌ CRITICAL: Token template NOT found in bindings!");
             allValid = false;
         } else {
             logger.info("✅ Token template found");
         }
 
-        if (!checkClassExists("clearportx_amm.lptoken.lptoken.LPToken")) {
+        if (!checkClassExists("clearportx_amm_drain_credit.lptoken.lptoken.LPToken")) {
             logger.error("❌ CRITICAL: LPToken template NOT found in bindings!");
             allValid = false;
         } else {
             logger.info("✅ LPToken template found");
         }
 
-        if (!checkClassExists("clearportx_amm.amm.swaprequest.SwapRequest")) {
+        if (!checkClassExists("clearportx_amm_drain_credit.amm.swaprequest.SwapRequest")) {
             logger.error("❌ CRITICAL: SwapRequest template NOT found in bindings!");
             allValid = false;
         } else {
@@ -76,7 +76,7 @@ public class StartupValidation {
         // Log final status
         if (allValid) {
             logger.info("✅ All DAML template validations passed");
-            logger.info("📦 DAR Version: 1.0.1 (with AtomicSwap support)");
+            logger.info("📦 DAR Version: 1.0.0 (Drain+Credit / Canton 3.4.7 ready)");
         } else {
             logger.error("❌ Some DAML template validations FAILED");
             logger.error("⚠️  Application may not function correctly");

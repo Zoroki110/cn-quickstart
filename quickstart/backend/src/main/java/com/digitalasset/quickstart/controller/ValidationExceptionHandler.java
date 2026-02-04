@@ -10,7 +10,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -18,11 +17,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * ValidationExceptionHandler - Global exception handler for validation errors
- *
- * Maps validation errors to clean 400 responses and CONTRACT_NOT_FOUND to 409
+ * Legacy validation handler (disabled). Global handling is centralized in GlobalExceptionHandler.
  */
-@ControllerAdvice
 public class ValidationExceptionHandler {
     private static final Logger logger = LoggerFactory.getLogger(ValidationExceptionHandler.class);
 

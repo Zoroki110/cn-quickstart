@@ -23,16 +23,16 @@ import DA.Action (void, when)
      - Create new tokens FIRST, then archive self at END
 
   4. POOLID:
-     - Text identifier for the pool (e.g., "ETH-USDC-0x123")
-     - Allows multiple pools with same token pair
-     - Used for key uniqueness
+     - Stable pool identifier (e.g., "pool-cbtc-amulet-prod")
+     - Does NOT change across HoldingPool contract updates
+     - Used to resolve the active pool at runtime
 -}
 
 template LPToken
   with
     issuer : Party      -- lpIssuer (the party that mints LP tokens for a pool)
     owner  : Party      -- LP provider who owns these tokens
-    poolId : Text       -- Unique pool identifier
+    poolId : Text       -- Stable pool identifier
     amount : Numeric 10 -- Number of LP tokens
   where
     signatory issuer  -- ONLY issuer is signatory

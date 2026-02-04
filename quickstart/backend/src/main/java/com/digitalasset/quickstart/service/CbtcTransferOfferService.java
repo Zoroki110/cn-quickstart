@@ -30,6 +30,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.stream.Collectors;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 
 /**
  * Service for querying incoming CBTC TransferOffer contracts.
@@ -58,6 +61,7 @@ public class CbtcTransferOfferService {
     private final LedgerConfig ledgerConfig;
     private final RegistryRoutingConfig registryRouting;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final HttpClient httpClient = HttpClient.newHttpClient();
 
     public CbtcTransferOfferService(final LedgerApi ledgerApi,
                                     final LedgerConfig ledgerConfig,
@@ -134,6 +138,13 @@ public class CbtcTransferOfferService {
             String hint,
             String rawError,
             List<RegistryProbeAttempt> attempts
+    ) {}
+
+    private record RegistryFetchResult(
+            ChoiceContextDto ctx,
+            String url,
+            Integer status,
+            String bodySnippet
     ) {}
 
     /**
@@ -280,20 +291,15 @@ public class CbtcTransferOfferService {
                         ));
                     }
 
-                    // Try TI id first, then fall back to offer cid if needed
-                    ChoiceContextDto ctx = null;
-                    List<String> idCandidates = List.of(dto.transferInstructionId, offerCid);
-                    for (String cid : idCandidates) {
-                        if (cid == null || cid.isBlank()) continue;
-                        ctx = fetchChoiceContext(registries, cid, requestId);
-                        if (ctx != null && ctx.disclosedContracts != null && !ctx.disclosedContracts.isEmpty()) {
-                            dto = new CbtcTransferOfferDto(dto.contractId(), dto.sender(), dto.receiver(), dto.amount(),
-                                    dto.reason(), dto.executeBefore(), dto.instrumentId(), dto.instrumentAdmin(), dto.rawTemplateId(), cid);
-                            break;
-                        }
-                    }
+                    RegistryFetchResult ctxResult = fetchChoiceContextForOffer(registries, offerCid, requestId);
+                    ChoiceContextDto ctx = ctxResult != null ? ctxResult.ctx : null;
 
                     if (ctx == null || ctx.disclosedContracts == null || ctx.disclosedContracts.isEmpty()) {
+                        String snippet = ctxResult != null ? ctxResult.bodySnippet : null;
+                        Integer status = ctxResult != null ? ctxResult.status : null;
+                        String url = ctxResult != null ? abbreviate(ctxResult.url) : null;
+                        LOGGER.warn("[CbtcTransferOfferService] [requestId={}] choice-context missing disclosures url={} status={} bodySnippet={}",
+                                requestId, url, status, snippet);
                         String msg = "choice-context missing disclosures";
                         return CompletableFuture.completedFuture(new AcceptOfferResult(
                                 requestId, offerCid, dto.transferInstructionId, actAsParty, false, "REGISTRY_EMPTY", msg,
@@ -313,24 +319,25 @@ public class CbtcTransferOfferService {
                         ));
                     }
 
-                    final String tiToAccept = dto.transferInstructionId;
-                    ValueOuterClass.Record choiceArg = buildChoiceArgument(ctx);
+                // Use interface exercise on the TransferOffer CID (registry endpoint uses OFFER CID).
+                final String tiToAccept = dto.contractId();
+                ValueOuterClass.Record choiceArg = buildChoiceArgument(ctx);
+                ValueOuterClass.Identifier templateId = ValueOuterClass.Identifier.newBuilder()
+                        .setPackageId("#splice-api-token-transfer-instruction-v1")
+                        .setModuleName("Splice.Api.Token.TransferInstructionV1")
+                        .setEntityName("TransferInstruction")
+                        .build();
+                String choiceName = "TransferInstruction_Accept";
 
-                    ValueOuterClass.Identifier interfaceId = ValueOuterClass.Identifier.newBuilder()
-                            .setPackageId("#splice-api-token-transfer-instruction-v1")
-                            .setModuleName("Splice.Api.Token.TransferInstructionV1")
-                            .setEntityName("TransferInstruction")
-                            .build();
-
-                    return ledgerApi.exerciseRaw(
-                                    interfaceId,
-                                    dto.transferInstructionId,
-                                    "TransferInstruction_Accept",
-                                    choiceArg,
-                                    List.of(actAsParty),
-                                    List.of(),
-                                    disclosed
-                            )
+                return ledgerApi.exerciseRaw(
+                                templateId,
+                                tiToAccept,
+                                choiceName,
+                                choiceArg,
+                                List.of(actAsParty),
+                                List.of(),
+                                disclosed
+                        )
                             .thenApply(resp -> {
                                 String updateId = resp.hasTransaction() ? resp.getTransaction().getUpdateId() : null;
                                 LOGGER.info("[CbtcTransferOfferService] [requestId={}] acceptOffer SUCCESS updateId={} tiCid={}",
@@ -625,46 +632,69 @@ public class CbtcTransferOfferService {
         return List.of();
     }
 
-    private ChoiceContextDto fetchChoiceContext(List<RegistryEndpoint> registries, String tiCid, String requestId) {
-        RestTemplate rest = new RestTemplate();
+    private RegistryFetchResult fetchChoiceContextForOffer(List<RegistryEndpoint> registries, String offerCid, String requestId) {
+        RegistryFetchResult lastResult = null;
         for (RegistryEndpoint ep : registries) {
-            String url1 = buildUrl(ep, true, tiCid);
-            String url2 = buildUrl(ep, false, tiCid);
-            try {
-                LOGGER.info("[CbtcTransferOfferService] [requestId={}] registry fetch base={} kind={} cid={}", requestId, abbreviate(ep.baseUri()), ep.kind(), truncateCid(tiCid));
-                ChoiceContextDto ctx = url1 != null ? doRegistryPost(rest, url1, requestId) : null;
-                if (ctx == null || ctx.disclosedContracts == null || ctx.disclosedContracts.isEmpty()) {
-                    ctx = url2 != null ? doRegistryPost(rest, url2, requestId) : null;
+            List<String> urls = buildOfferUrls(ep, offerCid);
+            for (String url : urls) {
+                if (url == null) continue;
+                try {
+                    LOGGER.info("[CbtcTransferOfferService] [requestId={}] registry fetch base={} kind={} offerCid={} encoded={}", requestId, abbreviate(ep.baseUri()), ep.kind(), truncateCid(offerCid), url.contains("%3A") ? "yes" : "no");
+                    RegistryFetchResult ctx = doRegistryPost(url, requestId);
+                    if (ctx != null) {
+                        lastResult = ctx;
+                    }
+                    if (ctx != null && ctx.ctx != null && ctx.ctx.disclosedContracts != null && !ctx.ctx.disclosedContracts.isEmpty()) {
+                        LOGGER.info("[CbtcTransferOfferService] choice-context fetched from base={} kind={} disclosures={}",
+                                abbreviate(ep.baseUri()), ep.kind(), ctx.ctx.disclosedContracts.size());
+                        return ctx;
+                    }
+                } catch (Exception e) {
+                    String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+                    LOGGER.warn("[CbtcTransferOfferService] [requestId={}] choice-context fetch failed base={} kind={} cid={} error={}",
+                            requestId, abbreviate(ep.baseUri()), ep.kind(), truncateCid(offerCid), msg);
                 }
-                if (ctx != null && ctx.disclosedContracts != null && !ctx.disclosedContracts.isEmpty()) {
-                    LOGGER.info("[CbtcTransferOfferService] choice-context fetched from base={} kind={} disclosures={}",
-                            abbreviate(ep.baseUri()), ep.kind(), ctx.disclosedContracts.size());
-                    return ctx;
-                }
-            } catch (Exception e) {
-                String msg = e.getMessage() != null ? e.getMessage() : e.toString();
-                LOGGER.warn("[CbtcTransferOfferService] [requestId={}] choice-context fetch failed base={} kind={} cid={} error={}",
-                        requestId, abbreviate(ep.baseUri()), ep.kind(), truncateCid(tiCid), msg);
             }
         }
-        return null;
+        return lastResult;
     }
 
-    private ChoiceContextDto doRegistryPost(RestTemplate rest, String url, String requestId) {
+    private RegistryFetchResult doRegistryPost(String url, String requestId) {
         try {
-            HttpHeaders headers = buildRegistryHeaders();
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(Map.of("meta", Map.of()), headers);
-            ResponseEntity<String> resp = rest.exchange(url, HttpMethod.POST, entity, String.class);
-            String body = resp.getBody();
-            if (resp.getStatusCode().is2xxSuccessful() && body != null) {
-                return mapper.readValue(body, ChoiceContextDto.class);
+            HttpResponse<String> resp = executeRegistryPost(url);
+            String body = resp.body() != null ? resp.body() : "";
+            ChoiceContextDto parsed = null;
+            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                parsed = parseChoiceContext(body);
             }
-            LOGGER.warn("[CbtcTransferOfferService] [requestId={}] registry POST non-200 status={} url={}", requestId, resp.getStatusCodeValue(), url);
-            return null;
+            int disclosedCount = parsed != null && parsed.disclosedContracts != null ? parsed.disclosedContracts.size() : 0;
+            int contextKeys = parsed != null && parsed.choiceContextData != null && parsed.choiceContextData.values != null
+                    ? parsed.choiceContextData.values.size()
+                    : 0;
+            if (disclosedCount == 0) {
+                LOGGER.warn("[CbtcTransferOfferService] [requestId={}] registry POST status={} url={} disclosed=0 contextKeys={} bodySnippet={}",
+                        requestId, resp.statusCode(), abbreviate(url), contextKeys, snippet(body));
+            } else {
+                LOGGER.info("[CbtcTransferOfferService] [requestId={}] registry POST status={} url={} disclosed={} contextKeys={}",
+                        requestId, resp.statusCode(), abbreviate(url), disclosedCount, contextKeys);
+            }
+            return new RegistryFetchResult(parsed, url, resp.statusCode(), snippet(body));
         } catch (Exception e) {
-            LOGGER.warn("[CbtcTransferOfferService] [requestId={}] registry POST failed url={} error={}", requestId, url, e.getMessage());
-            return null;
+            String msg = e.getMessage() != null ? e.getMessage() : "(no message)";
+            LOGGER.warn("[CbtcTransferOfferService] [requestId={}] registry POST failed url={} error={}", requestId, url, msg);
+            return new RegistryFetchResult(null, url, 0, snippet(msg));
         }
+    }
+
+    private HttpResponse<String> executeRegistryPost(String url) throws Exception {
+        HttpRequest.Builder b = HttpRequest.newBuilder(java.net.URI.create(url))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"meta\":{}}"));
+        if (ledgerConfig.getRegistryAuthHeader() != null && !ledgerConfig.getRegistryAuthHeader().isBlank()
+                && ledgerConfig.getRegistryAuthToken() != null && !ledgerConfig.getRegistryAuthToken().isBlank()) {
+            b.header(ledgerConfig.getRegistryAuthHeader(), ledgerConfig.getRegistryAuthToken());
+        }
+        return httpClient.send(b.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private ValueOuterClass.Record buildChoiceArgument(ChoiceContextDto ctx) {
@@ -673,26 +703,7 @@ public class CbtcTransferOfferService {
             for (var entry : ctx.choiceContextData.values.entrySet()) {
                 String key = entry.getKey();
                 ContextValueDto cv = entry.getValue();
-                ValueOuterClass.Value anyValue = null;
-                if ("AV_Bool".equals(cv.tag)) {
-                    anyValue = ValueOuterClass.Value.newBuilder()
-                            .setVariant(ValueOuterClass.Variant.newBuilder()
-                                    .setConstructor("AV_Bool")
-                                    .setValue(ValueOuterClass.Value.newBuilder()
-                                            .setBool(Boolean.TRUE.equals(cv.value))
-                                            .build())
-                                    .build())
-                            .build();
-                } else if ("AV_ContractId".equals(cv.tag)) {
-                    anyValue = ValueOuterClass.Value.newBuilder()
-                            .setVariant(ValueOuterClass.Variant.newBuilder()
-                                    .setConstructor("AV_ContractId")
-                                    .setValue(ValueOuterClass.Value.newBuilder()
-                                            .setContractId(cv.value != null ? cv.value.toString() : "")
-                                            .build())
-                                    .build())
-                            .build();
-                }
+                ValueOuterClass.Value anyValue = toApplicationValue(cv);
                 if (anyValue != null) {
                     valuesMapBuilder.addEntries(ValueOuterClass.TextMap.Entry.newBuilder()
                             .setKey(key)
@@ -881,15 +892,14 @@ public class CbtcTransferOfferService {
         if (url != null) urls.add(url);
         if (fallbackUrl != null && (fallbackUrl.equals(url) ? false : true)) urls.add(fallbackUrl);
 
-        RestTemplate rest = new RestTemplate();
         for (String u : urls) {
             try {
-                HttpHeaders headers = buildRegistryHeaders();
-                HttpEntity<Map<String, Object>> entity = new HttpEntity<>(Map.of("meta", Map.of()), headers);
-                ResponseEntity<String> resp = rest.exchange(u, HttpMethod.POST, entity, String.class);
-                String body = resp.getBody() != null ? resp.getBody() : "";
-                int status = resp.getStatusCodeValue();
-                Map<String, String> hdrs = safeHeaders(resp.getHeaders());
+                HttpResponse<String> resp = executeRegistryPost(u);
+                String body = resp.body() != null ? resp.body() : "";
+                int status = resp.statusCode();
+                Map<String, String> hdrs = new java.util.LinkedHashMap<>();
+                resp.headers().firstValue("content-type").ifPresent(v -> hdrs.put("content-type", v));
+                resp.headers().firstValue("x-request-id").ifPresent(v -> hdrs.put("request-id", v));
                 RegistryProbeAttempt parsed = parseProbeBody(cid, u, status, hdrs, body);
                 LOGGER.info("[CbtcTransferOfferService] [requestId={}] registry probe url={} status={} disclosed={} contextKeys={}",
                         requestId, abbreviate(u), status, parsed.disclosedCount, parsed.contextKeysCount);
@@ -942,6 +952,117 @@ public class CbtcTransferOfferService {
     private static String snippet(String s) {
         if (s == null) return null;
         return s.length() > 2000 ? s.substring(0, 2000) + "..." : s;
+    }
+
+    private ChoiceContextDto parseChoiceContext(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            JsonNode root = mapper.readTree(body);
+            ChoiceContextDto dto = new ChoiceContextDto();
+            if (root.has("disclosedContracts") && root.get("disclosedContracts").isArray()) {
+                dto.disclosedContracts = new ArrayList<>();
+                for (JsonNode n : root.get("disclosedContracts")) {
+                    DisclosedContractDto dc = new DisclosedContractDto();
+                    dc.templateId = n.path("templateId").asText(null);
+                    dc.contractId = n.path("contractId").asText(null);
+                    dc.createdEventBlob = n.path("createdEventBlob").asText(null);
+                    if (dc.templateId != null && dc.contractId != null && dc.createdEventBlob != null) {
+                        dto.disclosedContracts.add(dc);
+                    }
+                }
+            }
+            JsonNode ctxValues = root.path("choiceContextData").path("values");
+            if (ctxValues.isObject()) {
+                dto.choiceContextData = new ChoiceContextDataDto();
+                dto.choiceContextData.values = new java.util.LinkedHashMap<>();
+                ctxValues.fields().forEachRemaining(entry -> {
+                    String key = entry.getKey();
+                    JsonNode v = entry.getValue();
+                    ContextValueDto cv = new ContextValueDto();
+                    cv.tag = v.path("tag").asText(null);
+                    JsonNode rawVal = v.get("value");
+                    if (rawVal != null && !rawVal.isMissingNode() && !rawVal.isNull()) {
+                        if (rawVal.isBoolean()) {
+                            cv.value = rawVal.booleanValue();
+                        } else if (rawVal.isTextual()) {
+                            cv.value = rawVal.textValue();
+                        } else if (rawVal.isArray()) {
+                            List<String> vals = new ArrayList<>();
+                            rawVal.forEach(node -> vals.add(node.asText()));
+                            cv.value = vals;
+                        } else {
+                            cv.value = rawVal.toString();
+                        }
+                    }
+                    dto.choiceContextData.values.put(key, cv);
+                });
+            }
+            return dto;
+        } catch (Exception e) {
+            LOGGER.warn("Failed to parse choice-context body: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private ValueOuterClass.Value toApplicationValue(ContextValueDto cv) {
+        if (cv == null || cv.tag == null) return null;
+        ValueOuterClass.Value innerVal = null;
+        switch (cv.tag) {
+            case "AV_Bool":
+                boolean b = false;
+                if (cv.value instanceof Boolean boolVal) {
+                    b = boolVal;
+                } else if (cv.value instanceof String s) {
+                    b = Boolean.parseBoolean(s);
+                }
+                innerVal = ValueOuterClass.Value.newBuilder().setBool(b).build();
+                break;
+            case "AV_ContractId":
+                innerVal = ValueOuterClass.Value.newBuilder()
+                        .setContractId(cv.value != null ? cv.value.toString() : "")
+                        .build();
+                break;
+            case "AV_List":
+                ValueOuterClass.List.Builder lb = ValueOuterClass.List.newBuilder();
+                if (cv.value instanceof List<?> listVal) {
+                    for (Object o : listVal) {
+                        lb.addElements(ValueOuterClass.Value.newBuilder()
+                                .setText(o != null ? o.toString() : "")
+                                .build());
+                    }
+                }
+                innerVal = ValueOuterClass.Value.newBuilder().setList(lb.build()).build();
+                break;
+            default:
+                return null;
+        }
+
+        return ValueOuterClass.Value.newBuilder()
+                .setVariant(ValueOuterClass.Variant.newBuilder()
+                        .setConstructor(cv.tag)
+                        .setValue(innerVal != null ? innerVal : ValueOuterClass.Value.getDefaultInstance())
+                        .build())
+                .build();
+    }
+
+    private static List<String> buildOfferUrls(RegistryEndpoint ep, String contractId) {
+        if (ep == null || ep.baseUri() == null || ep.baseUri().isBlank()) return List.of();
+        String base = ep.baseUri();
+        if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+        String encCid = encodePathSegment(contractId);
+        String encAdmin = encodePathSegment(ep.admin());
+
+        List<String> urls = new ArrayList<>();
+        if (ep.kind() == RegistryKind.UTILITIES_TOKEN_STANDARD) {
+            if (ep.admin() == null || ep.admin().isBlank()) return List.of();
+            urls.add(base + "/api/token-standard/v0/registrars/" + encAdmin + "/registry/transfer-instruction/v1/" + encCid + "/choice-contexts/accept");
+        } else if (ep.kind() == RegistryKind.LOOP_TOKEN_STANDARD_V1) {
+            urls.add(base + "/api/v1/token-standard/transfer-instructions/" + encCid + "/choice-contexts/accept");
+        } else {
+            urls.add(base + "/registry/transfer-instruction/v1/" + encCid + "/choice-contexts/accept");
+        }
+        // dedupe
+        return urls.stream().distinct().toList();
     }
 
     private static String buildUrl(RegistryEndpoint ep, boolean withRegistryPrefix, String contractId) {

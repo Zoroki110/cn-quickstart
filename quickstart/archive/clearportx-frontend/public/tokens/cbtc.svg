@@ -1,0 +1,11 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cbtcGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1F8DFF"/>
+      <stop offset="100%" stop-color="#003F7F"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#cbtcGradient)" stroke="#0F2847" stroke-width="4"/>
+  <path d="M47 38h26c12 0 20 8 20 18 0 8-5 14-13 16v1c6 2 10 7 10 14 0 11-9 19-22 19H47V38zm17 29c6 0 10-3 10-8s-3-8-9-8h-7v16h6zm2 30c7 0 11-4 11-10s-4-10-12-10h-7v20h8z" fill="#fff"/>
+</svg>
+

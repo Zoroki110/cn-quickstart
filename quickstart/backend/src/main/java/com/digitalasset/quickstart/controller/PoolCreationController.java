@@ -3,7 +3,22 @@ package com.digitalasset.quickstart.controller;
 import clearportx_amm_drain_credit.amm.pool.Pool;
 import clearportx_amm_drain_credit.token.token.Token;
 import clearportx_amm_drain_credit.lptoken.lptoken.LPToken;
+import com.digitalasset.quickstart.common.DomainError;
+import com.digitalasset.quickstart.common.Result;
+import com.digitalasset.quickstart.common.errors.InputTokenStaleOrNotVisibleError;
+import com.digitalasset.quickstart.common.errors.LedgerVisibilityError;
+import com.digitalasset.quickstart.common.errors.PoolEmptyError;
+import com.digitalasset.quickstart.common.errors.PriceImpactTooHighError;
+import com.digitalasset.quickstart.common.errors.UnexpectedError;
+import com.digitalasset.quickstart.common.errors.ValidationError;
+import com.digitalasset.quickstart.dto.MintTokensRequest;
+import com.digitalasset.quickstart.dto.MintTokensResponse;
+import com.digitalasset.quickstart.service.TokenMintService;
+import com.digitalasset.quickstart.service.AddLiquidityCommandFactory;
+import com.digitalasset.quickstart.service.AddLiquidityService;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 import com.digitalasset.quickstart.dto.AddLiquidityRequest;
+import com.digitalasset.quickstart.dto.AddLiquidityResponse;
 import clearportx_amm_drain_credit.amm.swaprequest.SwapRequest;
 import clearportx_amm_drain_credit.amm.swaprequest.SwapReady;
 import com.digitalasset.quickstart.ledger.StaleAcsRetry;
@@ -15,13 +30,16 @@ import daml_stdlib_da_time_types.da.time.types.RelTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 // import clearportx_amm_production_gv.amm.pool.SwapTrace; // Commented out - not in current GV DAR
 
 /**
@@ -36,6 +54,12 @@ public class PoolCreationController {
 
     @Autowired
     private LedgerApi ledgerApi;
+
+    @Autowired
+    private TokenMintService tokenMintService;
+
+    @Autowired
+    private AddLiquidityService addLiquidityService;
 
     // @Autowired
     // private PartyRegistryService partyRegistry;
@@ -316,87 +340,79 @@ public class PoolCreationController {
         }
     }
 
-    @PostMapping("/mint-tokens")
-    public ResponseEntity<?> mintTokens(@RequestBody MintTokensRequest request) {
-        logger.info("=== MINT TOKENS REQUEST ===");
-        logger.info("Request: {}", request);
+        @PostMapping("/mint-tokens")
+    @WithSpan
+    public CompletableFuture<ResponseEntity<?>> mintTokens(@RequestBody MintTokensRequest request) {
+        Result<TokenMintService.MintTokensCommand, DomainError> commandResult = parseMintRequest(request);
+        if (commandResult.isErr()) {
+            return completedError(commandResult.getErrorUnsafe());
+        }
+        return tokenMintService.mintTokens(commandResult.getValueUnsafe())
+                .thenApply(this::toHttpResponse);
+    }
 
-        Map<String, Object> result = new HashMap<>();
-        List<String> steps = new ArrayList<>();
-
+    private Result<TokenMintService.MintTokensCommand, DomainError> parseMintRequest(final MintTokensRequest request) {
+        if (request.getIssuerParty() == null || request.getIssuerParty().isBlank()) {
+            return Result.err(new ValidationError("issuerParty is required", ValidationError.Type.REQUEST));
+        }
+        if (request.getOwnerParty() == null || request.getOwnerParty().isBlank()) {
+            return Result.err(new ValidationError("ownerParty is required", ValidationError.Type.REQUEST));
+        }
+        if (request.getSymbolA() == null || request.getSymbolA().isBlank() ||
+                request.getSymbolB() == null || request.getSymbolB().isBlank()) {
+            return Result.err(new ValidationError("symbolA and symbolB are required", ValidationError.Type.REQUEST));
+        }
         try {
-            steps.add("Minting tokens for " + request.ownerParty);
-            logger.info("Minting {} {} and {} {} for {}",
-                request.amountA, request.symbolA, request.amountB, request.symbolB, request.ownerParty);
-
-            // Mint Token A
-            Token tokenA = new Token(
-                new Party(request.issuerParty),
-                new Party(request.ownerParty),
-                request.symbolA,
-                new BigDecimal(request.amountA)
-            );
-
-            ContractId<Token> tokenACid = ledgerApi.createAndGetCid(
-                tokenA,
-                List.of(request.issuerParty),
-                Collections.emptyList(),
-                UUID.randomUUID().toString(),
-                clearportx_amm_drain_credit.Identifiers.Token_Token__Token
-            ).join();
-
-            logger.info("  ✓ {} token created: {}", request.symbolA, tokenACid);
-            result.put("tokenACid", tokenACid.toString());
-
-            // Mint Token B
-            Token tokenB = new Token(
-                new Party(request.issuerParty),
-                new Party(request.ownerParty),
-                request.symbolB,
-                new BigDecimal(request.amountB)
-            );
-
-            ContractId<Token> tokenBCid = ledgerApi.createAndGetCid(
-                tokenB,
-                List.of(request.issuerParty),
-                Collections.emptyList(),
-                UUID.randomUUID().toString(),
-                clearportx_amm_drain_credit.Identifiers.Token_Token__Token
-            ).join();
-
-            logger.info("  ✓ {} token created: {}", request.symbolB, tokenBCid);
-            result.put("tokenBCid", tokenBCid.toString());
-
-            result.put("success", true);
-            result.put("steps", steps);
-            result.put("message", "Tokens minted successfully!");
-
-            logger.info("=== TOKENS MINTED SUCCESSFULLY ===");
-
-            return ResponseEntity.ok(result);
-
-        } catch (Exception e) {
-            logger.error("Token minting failed", e);
-            result.put("success", false);
-            result.put("error", e.getMessage());
-            result.put("steps", steps);
-            return ResponseEntity.status(500).body(result);
+            BigDecimal amountA = new BigDecimal(request.getAmountA()).setScale(10, RoundingMode.HALF_UP);
+            BigDecimal amountB = new BigDecimal(request.getAmountB()).setScale(10, RoundingMode.HALF_UP);
+            return Result.ok(new TokenMintService.MintTokensCommand(
+                    request.getIssuerParty(),
+                    request.getOwnerParty(),
+                    request.getSymbolA(),
+                    amountA,
+                    request.getSymbolB(),
+                    amountB
+            ));
+        } catch (Exception ex) {
+            return Result.err(new ValidationError("Amounts must be numeric", ValidationError.Type.REQUEST));
         }
     }
 
-    public static class MintTokensRequest {
-        public String issuerParty;
-        public String ownerParty;
-        public String symbolA;
-        public String amountA;
-        public String symbolB;
-        public String amountB;
-
-        @Override
-        public String toString() {
-            return String.format("MintTokensRequest{issuer=%s, owner=%s, %s: %s, %s: %s}",
-                issuerParty, ownerParty, symbolA, amountA, symbolB, amountB);
+    private ResponseEntity<?> toHttpResponse(Result<?, DomainError> result) {
+        if (result.isOk()) {
+            return ResponseEntity.ok(result.getValueUnsafe());
         }
+        return mapDomainErrorToResponse(result.getErrorUnsafe());
+    }
+
+    private ResponseEntity<?> mapDomainErrorToResponse(DomainError error) {
+        HttpStatus status = mapStatus(error);
+        return ResponseEntity.status(status).body(error);
+    }
+
+    private HttpStatus mapStatus(DomainError error) {
+        if (error instanceof ValidationError) {
+            return HttpStatus.BAD_REQUEST;
+        }
+        if (error instanceof InputTokenStaleOrNotVisibleError || error instanceof PoolEmptyError) {
+            return HttpStatus.CONFLICT;
+        }
+        if (error instanceof PriceImpactTooHighError) {
+            return HttpStatus.UNPROCESSABLE_ENTITY;
+        }
+        if (error instanceof LedgerVisibilityError) {
+            return HttpStatus.CONFLICT;
+        }
+        if (error instanceof UnexpectedError) {
+            HttpStatus derived = HttpStatus.resolve(error.httpStatus());
+            return derived != null ? derived : HttpStatus.INTERNAL_SERVER_ERROR;
+        }
+        HttpStatus derived = HttpStatus.resolve(error.httpStatus());
+        return derived != null ? derived : HttpStatus.INTERNAL_SERVER_ERROR;
+    }
+
+    private CompletableFuture<ResponseEntity<?>> completedError(DomainError error) {
+        return CompletableFuture.completedFuture(mapDomainErrorToResponse(error));
     }
 
     public static class CreatePoolRequest {
@@ -463,80 +479,20 @@ public class PoolCreationController {
             @RequestBody AddLiquidityRequest req,
             @RequestHeader(value = "X-Party", required = false) String xParty
     ) {
-        logger.info("=== ADD LIQUIDITY (DEBUG) REQUEST ===");
-        logger.info("poolId: {}, amountA: {}, amountB: {}, minLP: {}", req.poolId, req.amountA, req.amountB, req.minLPTokens);
-
         String party = xParty != null && !xParty.isBlank()
                 ? xParty
                 : System.getenv().getOrDefault("APP_PROVIDER_PARTY", "");
-
-        var ops = new com.digitalasset.quickstart.util.LedgerOps(ledgerApi);
-        java.util.function.Supplier<java.util.concurrent.CompletableFuture<java.util.Map<String,Object>>> flow = () ->
-            ops.acsForParty(Pool.class, party).thenCompose(pools -> {
-                var poolOpt = com.digitalasset.quickstart.util.Selectors.poolById(pools, req.poolId);
-                if (poolOpt.isEmpty()) {
-                    return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("Pool not found: " + req.poolId));
-                }
-                var pool = poolOpt.get();
-                var p = pool.payload;
-                String poolParty = p.getPoolParty.getParty;
-                String lpIssuer = p.getLpIssuer.getParty;
-
-                return ops.acsForParty(Token.class, party).thenCompose(tokens -> {
-                    var tokA = com.digitalasset.quickstart.util.Selectors.bestToken(tokens, p.getSymbolA, party)
-                            .orElseThrow(() -> new IllegalStateException("Provider tokens not found for symbol: " + p.getSymbolA));
-                    var tokB = com.digitalasset.quickstart.util.Selectors.bestToken(tokens, p.getSymbolB, party)
-                            .orElseThrow(() -> new IllegalStateException("Provider tokens not found for symbol: " + p.getSymbolB));
-
-                    if (tokA.payload.getAmount.compareTo(req.amountA) < 0) {
-                        return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("Insufficient balance for Token A"));
-                    }
-                    if (tokB.payload.getAmount.compareTo(req.amountB) < 0) {
-                        return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("Insufficient balance for Token B"));
-                    }
-
-                    var deadline = java.time.Instant.now().plusSeconds(600);
-                    Pool.AddLiquidity choice = new Pool.AddLiquidity(
-                        new com.digitalasset.transcode.java.Party(party),
-                        new com.digitalasset.transcode.java.ContractId<>(tokA.contractId.getContractId),
-                        new com.digitalasset.transcode.java.ContractId<>(tokB.contractId.getContractId),
-                        req.amountA,
-                        req.amountB,
-                        req.minLPTokens,
-                        deadline
-                    );
-
-                    return ledgerApi.exerciseAndGetResultWithParties(
-                        pool.contractId,
-                        choice,
-                        java.util.UUID.randomUUID().toString(),
-                        java.util.List.of(party, poolParty, lpIssuer),
-                        java.util.List.of(poolParty)
-                    ).thenApply(tuple -> java.util.Map.of("success", true));
-                });
-            });
-
-        return com.digitalasset.quickstart.util.Futures.attempt(() -> com.digitalasset.quickstart.util.Futures.retry(flow, 3, 300))
-            .thenApply(res -> {
-                if (res instanceof com.digitalasset.quickstart.util.Result.Ok<?> ok) {
-                    @SuppressWarnings("unchecked")
-                    java.util.Map<String,Object> body = (java.util.Map<String,Object>) ok.value();
-                    return ResponseEntity.ok(body);
-                } else {
-                    var err = (com.digitalasset.quickstart.util.Result.Err<?>) res;
-                    int status = switch (err.code()) {
-                        case "CONTRACT_NOT_FOUND" -> 409;
-                        case "SLIPPAGE" -> 422;
-                        case "DEADLINE" -> 408;
-                        default -> 500;
-                    };
-                    return ResponseEntity.status(status).body(java.util.Map.of(
-                        "success", false,
-                        "error", err.message()
-                    ));
-                }
-            })
-            .join();
+        Result<AddLiquidityService.AddLiquidityCommand, DomainError> commandResult = AddLiquidityCommandFactory.from(
+                party,
+                req.poolId,
+                req.amountA,
+                req.amountB,
+                req.minLPTokens
+        );
+        if (commandResult.isErr()) {
+            return mapAddLiquidityError(commandResult.getErrorUnsafe(), "/api/debug/add-liquidity");
+        }
+        return respondAddLiquidity(commandResult.getValueUnsafe(), "/api/debug/add-liquidity");
     }
 
     @PostMapping("/party-acs")
@@ -658,60 +614,32 @@ public class PoolCreationController {
             @RequestBody java.util.Map<String, Object> body,
             @RequestHeader(value = "X-Party") String xParty
     ) {
-        String poolCidStr = String.valueOf(body.getOrDefault("poolCid", ""));
-        java.math.BigDecimal amountA = new java.math.BigDecimal(String.valueOf(body.getOrDefault("amountA", "0")));
-        java.math.BigDecimal amountB = new java.math.BigDecimal(String.valueOf(body.getOrDefault("amountB", "0")));
-        java.math.BigDecimal minLP = new java.math.BigDecimal(String.valueOf(body.getOrDefault("minLPTokens", "0")));
-        try {
-            var pools = ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
-            var maybe = pools.stream().filter(p -> p.contractId.getContractId.equals(poolCidStr)).findFirst();
-            if (maybe.isEmpty()) return ResponseEntity.status(404).body(java.util.Map.of("success", false, "error", "Pool not visible for party"));
-            var pool = maybe.get();
-            var pay = pool.payload;
-
-            var tokens = ledgerApi.getActiveContractsForParty(Token.class, xParty).join();
-            var tokA = tokens.stream().filter(t -> t.payload.getSymbol.equals(pay.getSymbolA) && t.payload.getOwner.getParty.equals(xParty))
-                    .max(java.util.Comparator.comparing(t -> t.payload.getAmount)).orElse(null);
-            var tokB = tokens.stream().filter(t -> t.payload.getSymbol.equals(pay.getSymbolB) && t.payload.getOwner.getParty.equals(xParty))
-                    .max(java.util.Comparator.comparing(t -> t.payload.getAmount)).orElse(null);
-            if (tokA == null || tokB == null) return ResponseEntity.status(404).body(java.util.Map.of("success", false, "error", "Provider tokens not found"));
-            if (tokA.payload.getAmount.compareTo(amountA) < 0) return ResponseEntity.status(422).body(java.util.Map.of("success", false, "error", "Insufficient A"));
-            if (tokB.payload.getAmount.compareTo(amountB) < 0) return ResponseEntity.status(422).body(java.util.Map.of("success", false, "error", "Insufficient B"));
-
-            var deadline = java.time.Instant.now().plusSeconds(600);
-            Pool.AddLiquidity choice = new Pool.AddLiquidity(
-                new com.digitalasset.transcode.java.Party(xParty),
-                new com.digitalasset.transcode.java.ContractId<>(tokA.contractId.getContractId),
-                new com.digitalasset.transcode.java.ContractId<>(tokB.contractId.getContractId),
+        String poolId = String.valueOf(body.getOrDefault("poolId", "")).trim();
+        String poolCid = String.valueOf(body.getOrDefault("poolCid", "")).trim();
+        if (poolId.isBlank()) {
+            poolId = resolvePoolIdFromCid(poolCid, xParty);
+            if (poolId == null) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "success", false,
+                        "error", "POOL_IDENTIFIER_REQUIRED",
+                        "message", "Provide poolId or poolCid"
+                ));
+            }
+        }
+        BigDecimal amountA = new BigDecimal(String.valueOf(body.getOrDefault("amountA", "0")));
+        BigDecimal amountB = new BigDecimal(String.valueOf(body.getOrDefault("amountB", "0")));
+        BigDecimal minLP = new BigDecimal(String.valueOf(body.getOrDefault("minLPTokens", "0")));
+        Result<AddLiquidityService.AddLiquidityCommand, DomainError> commandResult = AddLiquidityCommandFactory.from(
+                xParty,
+                poolId,
                 amountA,
                 amountB,
-                minLP,
-                deadline
-            );
-
-            var tuple = ledgerApi.exerciseAndGetResultWithParties(
-                pool.contractId,
-                choice,
-                java.util.UUID.randomUUID().toString(),
-                java.util.List.of(
-                    xParty,
-                    pay.getPoolParty.getParty,
-                    pay.getLpIssuer.getParty,
-                    pay.getIssuerA.getParty,
-                    pay.getIssuerB.getParty
-                ),
-                java.util.List.of(
-                    pay.getPoolParty.getParty,
-                    pay.getLpIssuer.getParty,
-                    pay.getIssuerA.getParty,
-                    pay.getIssuerB.getParty
-                )
-            ).join();
-
-            return ResponseEntity.ok(java.util.Map.of("success", true));
-        } catch (Exception e) {
-            return ResponseEntity.status(500).body(java.util.Map.of("success", false, "error", e.getMessage()));
+                minLP
+        );
+        if (commandResult.isErr()) {
+            return mapAddLiquidityError(commandResult.getErrorUnsafe(), "/api/debug/add-liquidity-by-cid");
         }
+        return respondAddLiquidity(commandResult.getValueUnsafe(), "/api/debug/add-liquidity-by-cid");
     }
 
     @PostMapping("/add-liquidity-for-party")
@@ -719,117 +647,17 @@ public class PoolCreationController {
             @RequestBody AddLiquidityRequest req,
             @RequestHeader(value = "X-Party") String xParty
     ) {
-        Map<String, Object> result = new HashMap<>();
-        List<String> steps = new ArrayList<>();
-        try {
-            steps.add("Locate pool (party-scoped)");
-            var pools = ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
-            Optional<LedgerApi.ActiveContract<Pool>> maybePool = pools.stream()
-                .filter(p -> p.payload.getPoolId.equals(req.poolId))
-                .sorted((p1, p2) -> p2.payload.getReserveA.multiply(p2.payload.getReserveB)
-                        .compareTo(p1.payload.getReserveA.multiply(p1.payload.getReserveB)))
-                .findFirst();
-            if (maybePool.isEmpty()) {
-                return ResponseEntity.status(404).body(Map.of(
-                    "success", false,
-                    "error", "Pool not found for party: " + req.poolId
-                ));
-            }
-            var pool = maybePool.get();
-            var poolPayload = pool.payload;
-
-            steps.add("Exercise AddLiquidity (party-scoped)");
-            var tuple = StaleAcsRetry.run(
-                () -> {
-                    String commandId = java.util.UUID.randomUUID().toString();
-
-                    var poolsLatest = ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
-                    var poolOptLatest = poolsLatest.stream()
-                        .filter(p -> p.payload.getPoolId.equals(req.poolId))
-                        .sorted((p1, p2) -> p2.payload.getReserveA.multiply(p2.payload.getReserveB)
-                            .compareTo(p1.payload.getReserveA.multiply(p1.payload.getReserveB)))
-                        .findFirst();
-                    if (poolOptLatest.isEmpty()) {
-                        return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException(
-                            "Pool not found: " + req.poolId
-                        ));
-                    }
-                    var poolLatest = poolOptLatest.get();
-                    var poolPayloadLatest = poolLatest.payload;
-                    String poolPartyLatest = poolPayloadLatest.getPoolParty.getParty;
-                    String lpIssuerLatest = poolPayloadLatest.getLpIssuer.getParty;
-
-                    // Re-select latest tokens on each attempt to avoid stale ContractIds
-                    var tokensLatest = ledgerApi.getActiveContractsForParty(Token.class, xParty).join();
-                    java.util.Comparator<LedgerApi.ActiveContract<Token>> byAmountDescLatest =
-                        java.util.Comparator.comparing((LedgerApi.ActiveContract<Token> t) -> t.payload.getAmount).reversed();
-
-                    Optional<LedgerApi.ActiveContract<Token>> tokenAOpt = tokensLatest.stream()
-                        .filter(t -> t.payload.getSymbol.equals(poolPayloadLatest.getSymbolA) &&
-                                     t.payload.getOwner.getParty.equals(xParty))
-                        .sorted(byAmountDescLatest)
-                        .findFirst();
-                    Optional<LedgerApi.ActiveContract<Token>> tokenBOpt = tokensLatest.stream()
-                        .filter(t -> t.payload.getSymbol.equals(poolPayloadLatest.getSymbolB) &&
-                                     t.payload.getOwner.getParty.equals(xParty))
-                        .sorted(byAmountDescLatest)
-                        .findFirst();
-                    if (tokenAOpt.isEmpty() || tokenBOpt.isEmpty()) {
-                        return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException(
-                            "Provider tokens not found for symbols: " + poolPayloadLatest.getSymbolA + ", " + poolPayloadLatest.getSymbolB
-                        ));
-                    }
-
-                    var tokenALatest = tokenAOpt.get();
-                    var tokenBLatest = tokenBOpt.get();
-
-                    if (tokenALatest.payload.getAmount.compareTo(req.amountA) < 0) {
-                        return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("Insufficient balance for Token A"));
-                    }
-                    if (tokenBLatest.payload.getAmount.compareTo(req.amountB) < 0) {
-                        return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("Insufficient balance for Token B"));
-                    }
-
-                    var deadlineLatest = java.time.Instant.now().plusSeconds(600);
-                    Pool.AddLiquidity choiceLatest = new Pool.AddLiquidity(
-                        new com.digitalasset.transcode.java.Party(xParty),
-                        new com.digitalasset.transcode.java.ContractId<>(tokenALatest.contractId.getContractId),
-                        new com.digitalasset.transcode.java.ContractId<>(tokenBLatest.contractId.getContractId),
-                        req.amountA,
-                        req.amountB,
-                        req.minLPTokens,
-                        deadlineLatest
-                    );
-
-                    return ledgerApi.exerciseAndGetResultWithParties(
-                        poolLatest.contractId,
-                        choiceLatest,
-                        commandId,
-                        java.util.List.of(xParty, poolPartyLatest, lpIssuerLatest),
-                        java.util.List.of(poolPartyLatest)
-                    );
-                },
-                () -> {
-                    ledgerApi.getActiveContractsForParty(Pool.class, xParty).join();
-                    ledgerApi.getActiveContractsForParty(Token.class, xParty).join();
-                },
-                "AddLiquidityForParty"
-            ).join();
-
-            com.digitalasset.transcode.java.ContractId<LPToken> lpTokenCid = tuple.get_1;
-            com.digitalasset.transcode.java.ContractId<Pool> newPoolCid = tuple.get_2;
-
-            result.put("success", true);
-            result.put("lpTokenCid", lpTokenCid.getContractId);
-            result.put("newPoolCid", newPoolCid.getContractId);
-            result.put("steps", steps);
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            result.put("success", false);
-            result.put("error", e.getMessage());
-            result.put("steps", steps);
-            return ResponseEntity.status(500).body(result);
+        Result<AddLiquidityService.AddLiquidityCommand, DomainError> commandResult = AddLiquidityCommandFactory.from(
+                xParty,
+                req.poolId,
+                req.amountA,
+                req.amountB,
+                req.minLPTokens
+        );
+        if (commandResult.isErr()) {
+            return mapAddLiquidityError(commandResult.getErrorUnsafe(), "/api/debug/add-liquidity-for-party");
         }
+        return respondAddLiquidity(commandResult.getValueUnsafe(), "/api/debug/add-liquidity-for-party");
     }
 
     @PostMapping("/swap-debug")
@@ -1465,4 +1293,43 @@ public class PoolCreationController {
             ));
         }
     }
+
+    private ResponseEntity<?> respondAddLiquidity(AddLiquidityService.AddLiquidityCommand command, String path) {
+        Result<AddLiquidityResponse, DomainError> result = addLiquidityService.addLiquidity(command).join();
+        if (result.isOk()) {
+            AddLiquidityResponse response = result.getValueUnsafe();
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("poolId", command.poolId());
+            payload.put("lpTokenCid", response.lpTokenCid());
+            payload.put("newPoolCid", response.newPoolCid());
+            payload.put("reserveA", response.reserveA());
+            payload.put("reserveB", response.reserveB());
+            return ResponseEntity.ok(payload);
+        }
+        return mapAddLiquidityError(result.getErrorUnsafe(), path);
+    }
+
+    private ResponseEntity<?> mapAddLiquidityError(DomainError error, String path) {
+        HttpStatus status = DomainErrorStatusMapper.map(error);
+        return ResponseEntity.status(status).body(Map.of(
+                "success", false,
+                "error", error.code(),
+                "message", error.message(),
+                "path", path
+        ));
+    }
+
+    private String resolvePoolIdFromCid(String poolCid, String providerParty) {
+        if (poolCid == null || poolCid.isBlank()) {
+            return null;
+        }
+        List<LedgerApi.ActiveContract<Pool>> pools = ledgerApi.getActiveContracts(Pool.class).join();
+        return pools.stream()
+                .filter(p -> p.contractId.getContractId.equals(poolCid))
+                .map(p -> p.payload.getPoolId)
+                .findFirst()
+                .orElse(null);
+    }
+
 }

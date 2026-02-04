@@ -3,199 +3,94 @@
 
 package com.digitalasset.quickstart.config;
 
-import com.digitalasset.quickstart.dto.ErrorResponse;
+import com.digitalasset.quickstart.dto.ApiError;
+import com.digitalasset.quickstart.dto.ApiResponse;
+import com.digitalasset.quickstart.dto.ErrorCode;
+import com.digitalasset.quickstart.dto.ErrorMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletionException;
 
 /**
- * Global exception handler for all REST controllers.
- *
- * Provides standardized error responses across all endpoints:
- * - ResponseStatusException (4xx/5xx errors)
- * - Validation errors (400 Bad Request)
- * - Access denied (403 Forbidden)
- * - Generic exceptions (500 Internal Server Error)
- * - CompletionException unwrapping (async errors)
+ * Global exception handler returning the shared ApiResponse error model.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    /**
-     * Handle ResponseStatusException thrown by controllers.
-     * This is the most common exception type in our codebase.
-     */
-    @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<ErrorResponse> handleResponseStatusException(
-            ResponseStatusException ex,
-            HttpServletRequest request
-    ) {
-        HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
-        String errorCode = getErrorCodeFromStatus(status);
-        String message = ex.getReason() != null ? ex.getReason() : status.getReasonPhrase();
-
-        ErrorResponse errorResponse = new ErrorResponse(
-            errorCode,
-            message,
-            status.value(),
-            request.getRequestURI()
-        );
-
-        // Add request ID if present
-        String requestId = request.getHeader("X-Request-ID");
-        if (requestId != null) {
-            errorResponse.setRequestId(requestId);
-        }
-
-        logger.warn("ResponseStatusException: {} {} - {}",
-            status.value(), request.getRequestURI(), message);
-
-        return ResponseEntity.status(status).body(errorResponse);
-    }
-
-    /**
-     * Handle validation errors (e.g., @Valid annotation failures).
-     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleValidationException(
+    public ResponseEntity<ApiResponse<Void>> handleValidationException(
             MethodArgumentNotValidException ex,
             HttpServletRequest request
     ) {
         Map<String, String> validationErrors = new HashMap<>();
         ex.getBindingResult().getFieldErrors().forEach(error ->
-            validationErrors.put(error.getField(), error.getDefaultMessage())
+                validationErrors.put(error.getField(), error.getDefaultMessage())
         );
 
-        ErrorResponse errorResponse = new ErrorResponse(
-            "VALIDATION_ERROR",
-            "Request validation failed",
-            HttpStatus.BAD_REQUEST.value(),
-            request.getRequestURI()
+        ApiError apiError = new ApiError(
+                ErrorCode.VALIDATION,
+                "Request validation failed",
+                Map.of("fields", validationErrors),
+                false,
+                null,
+                null
         );
-        errorResponse.setDetails(validationErrors);
 
-        logger.warn("Validation error on {}: {}", request.getRequestURI(), validationErrors);
-
-        return ResponseEntity.badRequest().body(errorResponse);
+        String requestId = resolveRequestId(request);
+        logger.warn("[GlobalExceptionHandler] [requestId={}] Validation failed: {}", requestId, validationErrors);
+        return ResponseEntity.status(ErrorMapper.toHttpStatus(apiError.code))
+                .body(ApiResponse.failure(requestId, apiError));
     }
 
     /**
-     * Handle access denied errors (Spring Security).
-     */
-    @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorResponse> handleAccessDeniedException(
-            AccessDeniedException ex,
-            HttpServletRequest request
-    ) {
-        ErrorResponse errorResponse = new ErrorResponse(
-            "ACCESS_DENIED",
-            "You do not have permission to access this resource",
-            HttpStatus.FORBIDDEN.value(),
-            request.getRequestURI()
-        );
-
-        logger.warn("Access denied: {} - {}", request.getRequestURI(), ex.getMessage());
-
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
-    }
-
-    /**
-     * Handle CompletionException (wraps async exceptions from CompletableFuture).
-     * Unwraps and delegates to appropriate handler.
-     */
-    @ExceptionHandler(CompletionException.class)
-    public ResponseEntity<ErrorResponse> handleCompletionException(
-            CompletionException ex,
-            HttpServletRequest request
-    ) {
-        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-
-        // Unwrap and handle the underlying exception
-        if (cause instanceof ResponseStatusException) {
-            return handleResponseStatusException((ResponseStatusException) cause, request);
-        }
-
-        // Fallback to generic error
-        return handleGenericException(cause, request);
-    }
-
-    /**
-     * Handle all other uncaught exceptions.
+     * Catch-all handler for unexpected exceptions.
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleGenericException(
-            Throwable ex,
+    public ResponseEntity<ApiResponse<Void>> handleUnexpectedException(
+            Exception ex,
             HttpServletRequest request
     ) {
-        // Check for specific Canton/DAML errors
-        String message = ex.getMessage();
-        String errorCode = "INTERNAL_SERVER_ERROR";
-        HttpStatus status = HttpStatus.INTERNAL_SERVER_ERROR;
+        Throwable root = ex instanceof CompletionException && ex.getCause() != null ? ex.getCause() : ex;
+        String requestId = resolveRequestId(request);
+        String message = root.getMessage() != null ? root.getMessage() : "Unexpected error";
 
-        if (message != null) {
-            if (message.contains("CONTRACT_NOT_FOUND")) {
-                errorCode = "CONTRACT_NOT_FOUND";
-                status = HttpStatus.CONFLICT;
-                message = "Contract was archived or does not exist. Please refresh and retry.";
-            } else if (message.contains("INSUFFICIENT_FUNDS") || message.contains("insufficient balance")) {
-                errorCode = "INSUFFICIENT_FUNDS";
-                status = HttpStatus.UNPROCESSABLE_ENTITY;
-                message = "Insufficient token balance for this operation";
-            } else if (message.contains("slippage")) {
-                errorCode = "SLIPPAGE_EXCEEDED";
-                status = HttpStatus.UNPROCESSABLE_ENTITY;
-            } else if (message.contains("expired") || message.contains("deadline")) {
-                errorCode = "REQUEST_TIMEOUT";
-                status = HttpStatus.REQUEST_TIMEOUT;
-            }
-        }
-
-        ErrorResponse errorResponse = new ErrorResponse(
-            errorCode,
-            message != null ? message : "An unexpected error occurred",
-            status.value(),
-            request.getRequestURI()
+        ApiError apiError = new ApiError(
+                ErrorCode.INTERNAL,
+                message,
+                null,
+                false,
+                null,
+                null
         );
 
-        // Log the full stack trace for 500 errors
-        if (status == HttpStatus.INTERNAL_SERVER_ERROR) {
-            logger.error("Unhandled exception on {}: {}", request.getRequestURI(), message, ex);
-        } else {
-            logger.warn("Exception on {}: {} - {}", request.getRequestURI(), errorCode, message);
-        }
-
-        return ResponseEntity.status(status).body(errorResponse);
+        logger.error("[GlobalExceptionHandler] [requestId={}] Unhandled exception: {}", requestId, message, root);
+        return ResponseEntity.status(ErrorMapper.toHttpStatus(apiError.code))
+                .body(ApiResponse.failure(requestId, apiError));
     }
 
-    /**
-     * Map HTTP status to error code.
-     */
-    private String getErrorCodeFromStatus(HttpStatus status) {
-        return switch (status) {
-            case BAD_REQUEST -> "BAD_REQUEST";
-            case UNAUTHORIZED -> "UNAUTHORIZED";
-            case FORBIDDEN -> "FORBIDDEN";
-            case NOT_FOUND -> "NOT_FOUND";
-            case CONFLICT -> "CONFLICT";
-            case UNPROCESSABLE_ENTITY -> "UNPROCESSABLE_ENTITY";
-            case TOO_MANY_REQUESTS -> "RATE_LIMIT_EXCEEDED";
-            case REQUEST_TIMEOUT -> "REQUEST_TIMEOUT";
-            case INTERNAL_SERVER_ERROR -> "INTERNAL_SERVER_ERROR";
-            case SERVICE_UNAVAILABLE -> "SERVICE_UNAVAILABLE";
-            default -> status.name();
-        };
+    private String resolveRequestId(HttpServletRequest request) {
+        if (request == null) {
+            return "req-" + UUID.randomUUID().toString().substring(0, 8);
+        }
+        Object attr = request.getAttribute("requestId");
+        if (attr instanceof String s && !s.isBlank()) {
+            return s;
+        }
+        String header = request.getHeader("X-Request-Id");
+        if (header != null && !header.isBlank()) {
+            return header;
+        }
+        return "req-" + UUID.randomUUID().toString().substring(0, 8);
     }
 }

@@ -164,7 +164,7 @@ export class BackendApiService {
     return !!token && token !== 'devnet-mock-token';
   }
 
-  private async requestWithFallback<T>(
+  private async requestWithFallback<T = any>(
     pathAgnostic: string,
     pathDevnet: string,
     config: AxiosRequestConfig

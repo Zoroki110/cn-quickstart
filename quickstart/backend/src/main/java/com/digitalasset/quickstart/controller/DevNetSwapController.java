@@ -300,13 +300,17 @@ public class DevNetSwapController {
     }
 
     private <T> ResponseEntity<ApiResponse<T>> respond(String requestId, Result<T, ApiError> result) {
+        ResponseEntity<ApiResponse<T>> response;
         if (result.isOk()) {
-            return ResponseEntity.ok(ApiResponse.success(requestId, result.getValueUnsafe()));
+            response = ResponseEntity.ok(ApiResponse.success(requestId, result.getValueUnsafe()));
+        } else {
+            ApiError error = result.getErrorUnsafe();
+            logger.error("[DevNetSwap] requestId={} failed code={} message={} details={}",
+                    requestId, error.code, error.message, error.details);
+            response = ResponseEntity.status(ErrorMapper.toHttpStatus(error.code))
+                    .body(ApiResponse.failure(requestId, error));
         }
-        ApiError error = result.getErrorUnsafe();
-        logger.error("[DevNetSwap] requestId={} failed code={} message={} details={}", requestId, error.code, error.message, error.details);
-        return ResponseEntity.status(ErrorMapper.toHttpStatus(error.code))
-                .body(ApiResponse.failure(requestId, error));
+        return ApiSurfaceHeaders.withSurface(response, ApiSurfaceHeaders.DEVNET);
     }
 
     private ApiError validationError(String message, String field) {

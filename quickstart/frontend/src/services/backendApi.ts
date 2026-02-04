@@ -1,6 +1,6 @@
 // ClearportX Backend API Service
 // Connects to Spring Boot backend at http://localhost:8080
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError, AxiosRequestConfig } from 'axios';
 import { TokenInfo, PoolInfo, SwapQuote, TransactionHistoryEntry, LpTokenInfo, LpPositionInfo } from '../types/canton';
 import { getAccessToken, getPartyId } from './auth';
 import { BUILD_INFO } from '../config/build-info';
@@ -162,6 +162,22 @@ export class BackendApiService {
     }
     const token = getAccessToken();
     return !!token && token !== 'devnet-mock-token';
+  }
+
+  private async requestWithFallback<T>(
+    pathAgnostic: string,
+    pathDevnet: string,
+    config: AxiosRequestConfig
+  ) {
+    try {
+      return await this.client.request<T>({ ...config, url: pathAgnostic });
+    } catch (error: any) {
+      const status = (error as AxiosError)?.response?.status;
+      if (status === 404) {
+        return await this.client.request<T>({ ...config, url: pathDevnet });
+      }
+      throw error;
+    }
   }
 
   // Resolve a fresh pool CID for a given poolId by choosing a pool whose canonical token CIDs are alive for poolParty
@@ -1164,7 +1180,10 @@ export class BackendApiService {
 
       console.log("[BackendApi] Selecting holding with params:", body);
 
-      const res = await this.client.post('/api/devnet/holdings/select', body);
+      const res = await this.requestWithFallback('/api/holdings/select', '/api/devnet/holdings/select', {
+        method: 'post',
+        data: body,
+      });
       const data = res.data;
 
       console.log("[BackendApi] Holding selection result:", data);
@@ -1216,7 +1235,8 @@ export class BackendApiService {
   }>> {
     try {
       console.log("[BackendApi] Fetching CBTC offers for receiver:", receiverParty);
-      const res = await this.client.get('/api/devnet/cbtc/offers', {
+      const res = await this.requestWithFallback('/api/cbtc/offers', '/api/devnet/cbtc/offers', {
+        method: 'get',
         params: { receiverParty },
       });
       const offers = Array.isArray(res.data) ? res.data : [];
@@ -1255,8 +1275,9 @@ export class BackendApiService {
     ledgerUpdateId?: string | null;
   }> {
     try {
-      const res = await this.client.post(`/api/devnet/cbtc/offers/${offerCid}/accept`, {
-        actAsParty,
+      const res = await this.requestWithFallback(`/api/cbtc/offers/${offerCid}/accept`, `/api/devnet/cbtc/offers/${offerCid}/accept`, {
+        method: 'post',
+        data: { actAsParty },
       });
       return res.data;
     } catch (error: any) {
@@ -1318,7 +1339,10 @@ export class BackendApiService {
     }
   ): Promise<any> {
     try {
-      const res = await this.client.post(`/api/devnet/payout/${instrument}`, payload);
+      const res = await this.requestWithFallback(`/api/payout/${instrument}`, `/api/devnet/payout/${instrument}`, {
+        method: 'post',
+        data: payload,
+      });
       return res.data;
     } catch (error: any) {
       const data = error?.response?.data;
@@ -1347,7 +1371,8 @@ export class BackendApiService {
     instrumentId: string;
   }): Promise<any> {
     try {
-      const res = await this.client.get('/api/devnet/transfer-instructions/outgoing', {
+      const res = await this.requestWithFallback('/api/transfer-instructions/outgoing', '/api/devnet/transfer-instructions/outgoing', {
+        method: 'get',
         params,
       });
       return res.data;
@@ -1363,7 +1388,10 @@ export class BackendApiService {
     maxAgeSeconds?: number;
   }): Promise<any> {
     try {
-      const res = await this.client.post('/api/devnet/swap/consume', payload);
+      const res = await this.requestWithFallback('/api/swap/consume', '/api/devnet/swap/consume', {
+        method: 'post',
+        data: payload,
+      });
       return res.data;
     } catch (error: any) {
       const data = error?.response?.data;
@@ -1378,11 +1406,11 @@ export class BackendApiService {
     maxAgeSeconds?: number;
   }): Promise<any> {
     try {
-      const res = await this.client.post(
-        '/api/devnet/liquidity/consume',
-        payload,
-        { timeout: 90000 }
-      );
+      const res = await this.requestWithFallback('/api/liquidity/add/consume', '/api/devnet/liquidity/consume', {
+        method: 'post',
+        data: payload,
+        timeout: 90000,
+      });
       return res.data;
     } catch (error: any) {
       const data = error?.response?.data;
@@ -1402,7 +1430,10 @@ export class BackendApiService {
     deadlineIso?: string;
   }): Promise<any> {
     try {
-      const res = await this.client.post('/api/devnet/liquidity/remove/consume', payload);
+      const res = await this.requestWithFallback('/api/liquidity/remove/consume', '/api/devnet/liquidity/remove/consume', {
+        method: 'post',
+        data: payload,
+      });
       return res.data;
     } catch (error: any) {
       const data = error?.response?.data;
@@ -1419,7 +1450,10 @@ export class BackendApiService {
     lpBurnAmount?: string;
   }): Promise<any> {
     try {
-      const res = await this.client.get('/api/devnet/liquidity/remove/inspect', { params });
+      const res = await this.requestWithFallback('/api/liquidity/remove/inspect', '/api/devnet/liquidity/remove/inspect', {
+        method: 'get',
+        params,
+      });
       return res.data;
     } catch (error: any) {
       const data = error?.response?.data;
@@ -1430,7 +1464,8 @@ export class BackendApiService {
 
   async inspectDevnetLiquidity(requestId: string, poolCid?: string): Promise<any> {
     try {
-      const res = await this.client.get('/api/devnet/liquidity/inspect', {
+      const res = await this.requestWithFallback('/api/liquidity/add/inspect', '/api/devnet/liquidity/inspect', {
+        method: 'get',
         params: poolCid ? { requestId, poolCid } : { requestId },
       });
       return res.data;
@@ -1469,7 +1504,8 @@ export class BackendApiService {
 
   async inspectDevnetSwap(requestId: string): Promise<any> {
     try {
-      const res = await this.client.get('/api/devnet/swap/inspect', {
+      const res = await this.requestWithFallback('/api/swap/inspect', '/api/devnet/swap/inspect', {
+        method: 'get',
         params: { requestId },
       });
       return res.data;

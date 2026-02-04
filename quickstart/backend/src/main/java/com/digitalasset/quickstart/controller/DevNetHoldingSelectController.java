@@ -89,9 +89,10 @@ public class DevNetHoldingSelectController {
 
         // Validation
         if (request.ownerParty() == null || request.ownerParty().isBlank()) {
-            return CompletableFuture.completedFuture(ResponseEntity.badRequest().body(
+            ResponseEntity<HoldingSelectResponse> response = ResponseEntity.badRequest().body(
                     HoldingSelectResponse.notFound(0, 0, 0, 0, "ownerParty is required")
-            ));
+            );
+            return CompletableFuture.completedFuture(ApiSurfaceHeaders.withSurface(response, ApiSurfaceHeaders.DEVNET));
         }
 
         // Use polling if timeout > 0, otherwise single attempt
@@ -106,17 +107,18 @@ public class DevNetHoldingSelectController {
             if (response.found()) {
                 LOGGER.info("[DevNetHoldingSelect] SUCCESS - found holding cid={}, amount={}",
                         truncateCid(response.holdingCid()), response.amount());
-                return ResponseEntity.ok(response);
+                return ApiSurfaceHeaders.withSurface(ResponseEntity.ok(response), ApiSurfaceHeaders.DEVNET);
             } else {
                 LOGGER.warn("[DevNetHoldingSelect] NOT FOUND - {} after {} attempts ({}ms)",
                         response.error(), response.attempts(), response.elapsedMs());
-                return ResponseEntity.ok(response); // Return 200 with found=false
+                return ApiSurfaceHeaders.withSurface(ResponseEntity.ok(response), ApiSurfaceHeaders.DEVNET); // Return 200 with found=false
             }
         }).exceptionally(ex -> {
             LOGGER.error("[DevNetHoldingSelect] Exception: {}", ex.getMessage(), ex);
-            return ResponseEntity.internalServerError().body(
+            ResponseEntity<HoldingSelectResponse> response = ResponseEntity.internalServerError().body(
                     HoldingSelectResponse.notFound(0, 0, 0, 0, "Internal error: " + ex.getMessage())
             );
+            return ApiSurfaceHeaders.withSurface(response, ApiSurfaceHeaders.DEVNET);
         });
     }
 

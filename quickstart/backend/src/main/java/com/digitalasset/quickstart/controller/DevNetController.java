@@ -267,17 +267,19 @@ public class DevNetController {
 
         if (receiverParty == null || receiverParty.isBlank()) {
             logger.warn("[DevNetController] [requestId={}] receiverParty is required", requestId);
-            return CompletableFuture.completedFuture(ResponseEntity.badRequest().build());
+            return CompletableFuture.completedFuture(
+                    ApiSurfaceHeaders.withSurface(ResponseEntity.badRequest().build(), ApiSurfaceHeaders.DEVNET)
+            );
         }
 
         return cbtcTransferOfferService.getIncomingOffers(receiverParty, requestId)
                 .thenApply(offers -> {
                     logger.info("[DevNetController] [requestId={}] Returning {} CBTC offers for receiver", requestId, offers.size());
-                    return ResponseEntity.ok(offers);
+                    return ApiSurfaceHeaders.withSurface(ResponseEntity.ok(offers), ApiSurfaceHeaders.DEVNET);
                 })
                 .exceptionally(ex -> {
                     logger.error("[DevNetController] [requestId={}] Error fetching CBTC offers: {}", requestId, ex.getMessage(), ex);
-                    return ResponseEntity.status(500).build();
+                    return ApiSurfaceHeaders.withSurface(ResponseEntity.status(500).build(), ApiSurfaceHeaders.DEVNET);
                 });
     }
 
@@ -331,10 +333,10 @@ public class DevNetController {
         logger.info("[DevNetController] [requestId={}]   actAsParty: {}", requestId, actAs);
 
         return cbtcTransferOfferService.acceptOffer(offerCid, actAs, requestId)
-                .thenApply(ResponseEntity::ok)
+                .thenApply(result -> ApiSurfaceHeaders.withSurface(ResponseEntity.ok(result), ApiSurfaceHeaders.DEVNET))
                 .exceptionally(ex -> {
                     logger.error("[DevNetController] [requestId={}] accept failed: {}", requestId, ex.getMessage(), ex);
-                    return ResponseEntity.status(500).build();
+                    return ApiSurfaceHeaders.withSurface(ResponseEntity.status(500).build(), ApiSurfaceHeaders.DEVNET);
                 });
     }
 
@@ -766,13 +768,16 @@ public class DevNetController {
     }
 
     private <T> ResponseEntity<ApiResponse<T>> respond(String requestId, String operation, Result<T, ApiError> result) {
+        ResponseEntity<ApiResponse<T>> response;
         if (result.isOk()) {
-            return ResponseEntity.ok(ApiResponse.success(requestId, result.getValueUnsafe()));
+            response = ResponseEntity.ok(ApiResponse.success(requestId, result.getValueUnsafe()));
+        } else {
+            ApiError error = result.getErrorUnsafe();
+            logFailure(requestId, operation, error);
+            response = ResponseEntity.status(ErrorMapper.toHttpStatus(error.code))
+                    .body(ApiResponse.failure(requestId, error));
         }
-        ApiError error = result.getErrorUnsafe();
-        logFailure(requestId, operation, error);
-        return ResponseEntity.status(ErrorMapper.toHttpStatus(error.code))
-                .body(ApiResponse.failure(requestId, error));
+        return ApiSurfaceHeaders.withSurface(response, ApiSurfaceHeaders.DEVNET);
     }
 
     private void logFailure(String requestId, String operation, ApiError error) {

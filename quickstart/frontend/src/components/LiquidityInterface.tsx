@@ -1591,8 +1591,8 @@ async function prepareLoopTransfer(
   return prepareTransfer.call(connection, authToken, payload);
 }
 
-const LOOP_RATE_LIMIT_RETRY_DELAYS_MS = [2000, 4000, 7000, 12000];
-const LOOP_MIN_GAP_MS = 4000;
+const LOOP_RATE_LIMIT_RETRY_DELAYS_MS = [2000, 5000, 9000, 14000, 20000];
+const LOOP_MIN_GAP_MS = 6000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

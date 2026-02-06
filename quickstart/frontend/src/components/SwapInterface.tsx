@@ -156,6 +156,8 @@ const SwapInterface: React.FC = () => {
       ? 'Payout completed on ledger (no Loop accept required).'
       : payoutStatus === 'CREATED'
       ? 'Payout TransferInstruction created. Accept in Loop wallet.'
+         + 'Do not refuse or reject payouts offer in Loop wallet during V1.'
+         + 'The payout will be completed automatically in V1.'
       : null;
 
   useEffect(() => {

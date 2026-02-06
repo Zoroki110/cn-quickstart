@@ -20,6 +20,11 @@ const OPERATOR_PARTY =
   process.env.REACT_APP_OPERATOR_PARTY ||
   process.env.REACT_APP_OPERATOR_PARTY_ID ||
   'ClearportX-DEX-1::122081f2b8e29cbe57d1037a18e6f70e57530773b3a4d1bea6bab981b7a76e943b37';
+const SWAP_DEADLINE_MINUTES_RAW = Number(process.env.REACT_APP_SWAP_DEADLINE_MINUTES ?? 30);
+const SWAP_DEADLINE_MINUTES =
+  Number.isFinite(SWAP_DEADLINE_MINUTES_RAW) && SWAP_DEADLINE_MINUTES_RAW > 0
+    ? SWAP_DEADLINE_MINUTES_RAW
+    : 30;
 
 const SwapInterface: React.FC = () => {
   const { selectedTokens, setSelectedTokens, swapTokens: swapSelectedTokens, slippage } = useAppStore();
@@ -384,7 +389,7 @@ const SwapInterface: React.FC = () => {
         return;
       }
 
-      const deadline = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      const deadline = new Date(Date.now() + SWAP_DEADLINE_MINUTES * 60 * 1000).toISOString();
       const requestId = `swap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const memoPayload = {
         v: 1,

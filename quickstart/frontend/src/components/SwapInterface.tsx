@@ -68,7 +68,7 @@ const SwapInterface: React.FC = () => {
         (symbolA === toSymbol && symbolB === fromSymbol)
       );
     });
-    return match?.contractId ?? null;
+    return match?.poolId ?? null;
   }, [pools, selectedTokens.from, selectedTokens.to]);
 
   const activePool = useMemo(() => {
@@ -342,8 +342,32 @@ const SwapInterface: React.FC = () => {
 
       const minOutput = quote.outputAmount * (1 - slippage / 100);
       const minOutputStr = minOutput.toFixed(10);
-      const poolCid = activePool?.contractId || resolvedPoolId;
-      const direction = resolveSwapDirection(activePool, selectedTokens.from.symbol, selectedTokens.to.symbol);
+
+      let freshPools: PoolInfo[] | null = null;
+      try {
+        freshPools = await backendApi.getPools();
+        if (freshPools.length > 0) {
+          setPools(freshPools);
+        }
+      } catch (error) {
+        console.warn('Failed to refresh pools before swap', error);
+      }
+
+      const latestPool =
+        (freshPools && freshPools.find(pool => pool.poolId === resolvedPoolId)) ||
+        activePool;
+      if (!latestPool) {
+        toast.error('No liquidity pool available for this pair');
+        return;
+      }
+
+      const poolCid = latestPool.contractId;
+      if (!poolCid) {
+        toast.error('Unable to resolve latest pool contract for this pair');
+        return;
+      }
+
+      const direction = resolveSwapDirection(latestPool, selectedTokens.from.symbol, selectedTokens.to.symbol);
       if (!direction) {
         toast.error('Token selection does not match active pool');
         return;

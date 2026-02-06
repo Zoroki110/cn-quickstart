@@ -395,14 +395,8 @@ public class SwapTiProcessorService {
         }
 
         if (!invalidMemoCids.isEmpty()) {
-            return Result.err(new ApiError(
-                    ErrorCode.VALIDATION,
-                    "memo JSON is invalid or missing",
-                    Map.of("contractIds", invalidMemoCids),
-                    false,
-                    null,
-                    null
-            ));
+            LOG.warn("[SwapConsume] Ignoring {} inbound TIs with invalid/missing memo (requestId={})",
+                    invalidMemoCids.size(), requestId);
         }
 
         return Result.err(preconditionError(

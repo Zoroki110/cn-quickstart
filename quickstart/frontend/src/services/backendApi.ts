@@ -1387,17 +1387,49 @@ export class BackendApiService {
     requestId: string;
     maxAgeSeconds?: number;
   }): Promise<any> {
-    try {
-      const res = await this.requestWithFallback('/api/swap/consume', '/api/devnet/swap/consume', {
-        method: 'post',
-        data: payload,
-      });
-      return res.data;
-    } catch (error: any) {
-      const data = error?.response?.data;
-      const message = data?.error?.message || error?.message || String(error);
-      return data || { ok: false, error: { message } };
+    const maxAttempts = 3;
+    let lastResponse: any = null;
+
+    const shouldRetry = (data: any) => {
+      const error = data?.error;
+      if (!error) return false;
+      const code = error.code;
+      const message = String(error.message || '');
+      const field = error.details?.field;
+      const memoIssue = /memo/i.test(message) || field === 'memo';
+      const missingInbound = /inbound.*transferinstruction|no inbound ti|requestId/i.test(message);
+      return (
+        (code === 'NOT_FOUND' && missingInbound) ||
+        (code === 'PRECONDITION_FAILED' && missingInbound) ||
+        (code === 'VALIDATION' && memoIssue)
+      );
+    };
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const res = await this.requestWithFallback('/api/swap/consume', '/api/devnet/swap/consume', {
+          method: 'post',
+          data: payload,
+        });
+        if (!shouldRetry(res.data)) {
+          return res.data;
+        }
+        lastResponse = res.data;
+      } catch (error: any) {
+        const data = error?.response?.data;
+        if (!shouldRetry(data)) {
+          const message = data?.error?.message || error?.message || String(error);
+          return data || { ok: false, error: { message } };
+        }
+        lastResponse = data;
+      }
+
+      if (attempt < maxAttempts) {
+        await this.sleep(1200 * attempt);
+      }
     }
+
+    return lastResponse || { ok: false, error: { message: 'Swap consume retry exhausted' } };
   }
 
   async consumeDevnetLiquidity(payload: {

@@ -166,14 +166,8 @@ const SwapInterface: React.FC = () => {
   const consumePayload = swapResult?.consume?.result;
   const payoutStatus = consumePayload?.payoutStatus;
   const payoutCid = consumePayload?.payoutCid;
-  const payoutMessage =
-    payoutStatus === 'COMPLETED'
-      ? 'Payout completed on ledger (no Loop accept required).'
-      : payoutStatus === 'CREATED'
-      ? 'Payout TransferInstruction created. Accept in Loop wallet.'
-         + 'Do not refuse or reject payouts offer in Loop wallet during V1.'
-         + 'The payout will be completed automatically in V1.'
-      : null;
+  const payoutStatusLabel = payoutStatus ? String(payoutStatus).toUpperCase() : 'CREATED';
+  const showPayoutCreatedHeader = payoutStatusLabel === 'CREATED';
 
   useEffect(() => {
     const previous = lastConnectedParty.current;
@@ -768,19 +762,29 @@ const SwapInterface: React.FC = () => {
               <div className="font-semibold text-gray-900 dark:text-gray-100">{swapStatus}</div>
             )}
             {consumePayload && (
-              <div className="mt-2 rounded-lg border border-gray-200 dark:border-dark-700 bg-white/70 dark:bg-dark-900/40 p-3">
-                <div className="text-xs font-semibold text-gray-800 dark:text-gray-200">Payout</div>
-                <div className="mt-1 text-xs text-gray-700 dark:text-gray-300 space-y-1">
-                  <div>Status: {payoutStatus || 'UNKNOWN'}</div>
-                  {payoutMessage && <div>{payoutMessage}</div>}
-                  <div>Amount out: {consumePayload?.amountOut ?? '-'}</div>
-                  <div>Execute before: {consumePayload?.payoutExecuteBefore ?? '-'}</div>
-                  <div className="flex items-start gap-2">
-                    <span className="shrink-0">Payout CID:</span>
-                    <span className="truncate min-w-0">{formatContractId(payoutCid)}</span>
+              <>
+                {showPayoutCreatedHeader && (
+                  <div className="mt-2">
+                    <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                      Payout created.
+                    </div>
+                    <div className="mt-1 text-sm font-bold text-warning-500">
+                      Accept in Loop wallet. Do not refuse or reject payouts offer in Loop during V1.
+                    </div>
+                  </div>
+                )}
+                <div className="mt-2 rounded-lg border border-gray-200 dark:border-dark-700 bg-white/70 dark:bg-dark-900/40 p-3">
+                  <div className="text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                    <div>Status: {payoutStatusLabel}</div>
+                    <div>Amount out: {consumePayload?.amountOut ?? '-'}</div>
+                    <div>Execute before: {consumePayload?.payoutExecuteBefore ?? '-'}</div>
+                    <div className="flex items-start gap-2">
+                      <span className="shrink-0">Payout CID:</span>
+                      <span className="truncate min-w-0">{formatContractId(payoutCid)}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         )}
